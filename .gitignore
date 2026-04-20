@@ -1,0 +1,18 @@
+# ignored folders
+.claude
+.remember
+
+
+# ignored files
+*.env
+*.venv
+*.pytest_cache
+*.ruff_cache
+*.vscode
+*.idea
+*.pytest_cache
+*.ruff_cache
+*.vscode
+*.idea
+autonomous-agent-world-design.md
+SPRINTS.md

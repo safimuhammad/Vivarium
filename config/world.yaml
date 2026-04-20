@@ -1,0 +1,73 @@
+regions:
+  - name: "nirvana"
+    description: "a heavenly landscape, abundant resources"
+    connections: ["warm_springs", "nirvana_east","nirvana_west"]
+    energy_rate: 0.9
+    materials_rate: 0.9
+    current_energy: 222
+    current_materials: 222
+    max_energy: 500
+    max_materials: 500
+
+  - name: "nirvana_east"
+    description: "Struggling shit hole"
+    connections: ["warm_springs","nirvana"]
+    energy_rate: 0.3
+    materials_rate: 0.5
+    current_energy: 50
+    current_materials: 22
+    max_energy: 500
+    max_materials: 500
+
+  - name: "warm_springs"
+    description: "Hot spring lakes, ideal recovery spot"
+    connections: ["nirvana_west", "nirvana_east", "nirvana"]
+    energy_rate: 1.3
+    materials_rate: 0.5
+    current_energy: 500
+    current_materials: 500
+    max_energy: 500
+    max_materials: 500
+
+  - name: "nirvana_west"
+    description: "nuclear wasteland"
+    connections: ["warm_springs","nirvana"]
+    energy_rate: 50
+    materials_rate: 0.0
+    current_energy: 5000
+    current_materials: 0.0
+    max_energy: 5000
+    max_materials: 50
+    
+agents:
+  - id: "wanderer_001"
+    name: "Joe wanderer"
+    persona: "Explorer, risk taker"
+    current_position: "nirvana_east"
+    current_energy: 100
+    current_materials: 5
+    status: "alive"
+
+  - id: "wanderer_002"
+    name: "Dick wanderer"
+    persona: "Explorer, risk taker"
+    current_position: "nirvana"
+    current_energy: 100
+    current_materials: 5
+    status: "alive"
+
+  - id: "wanderer_003"
+    name: "Allen wanderer"
+    persona: "Explorer, risk taker"
+    current_position: "nirvana_west"
+    current_energy: 100
+    current_materials: 5
+    status: "alive"
+
+  - id: "wanderer_004"
+    name: "Jack wanderer"
+    persona: "Explorer, risk taker"
+    current_position: "warm_springs"
+    current_energy: 100
+    current_materials: 5
+    status: "alive"
