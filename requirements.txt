@@ -2,3 +2,4 @@ requests
 ollama
 rich
 pyyaml
+faker

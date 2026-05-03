@@ -1,5 +1,9 @@
 from dataclasses import dataclass
+from enum import Enum
 
+class ResourceTypes(Enum):
+    ENERGY = "energy"
+    MATERIALS = "materials"
 
 @dataclass
 class Region:

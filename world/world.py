@@ -1,5 +1,6 @@
-from .regions import Region
+from .regions import Region, ResourceTypes
 from .agents import AgentState, AgentStatus
+import time
 
 
 class WorldState:
@@ -8,12 +9,14 @@ class WorldState:
         agents = agents or []
         self.regions: dict = {region.name: region for region in regions}
         self.agents: dict = {agent.id: agent for agent in agents}
+        self.pending_proposals: dict[tuple[str, str], dict] = {}
+        self.pending_proposal_targets: dict[str, list] = {}
 
     # ---- get methods ----
     def get_all_regions(self) -> list[Region]:
         return list(self.regions.values())
-    
-    def get_all_agents(self) -> list[AgentStatus]:
+
+    def get_all_agents(self) -> list[AgentState]:
         return list(self.agents.values())
 
     def get_region(self, name: str) -> Region:
@@ -61,14 +64,54 @@ class WorldState:
     def modify_agent_energy(self, agent_id: str, amount: float) -> bool:
         if agent_id in self.agents:
             self.agents[agent_id].current_energy += amount
-            self.agents[agent_id].current_energy = max(self.agents[agent_id].current_energy, 0.0)
+            self.agents[agent_id].current_energy = max(
+                self.agents[agent_id].current_energy, 0.0
+            )
+            if self.agents[agent_id].current_energy == 0.0:
+                self.agents[agent_id].status = AgentStatus.PARALYZED
             return True
         return False
 
     def modify_agent_materials(self, agent_id: str, amount: float) -> bool:
         if agent_id in self.agents:
             self.agents[agent_id].current_materials += amount
-            self.agents[agent_id].current_materials = max(self.agents[agent_id].current_materials, 0.0)
+            self.agents[agent_id].current_materials = max(
+                self.agents[agent_id].current_materials, 0.0
+            )
+            return True
+        return False
+
+    # ---- Mating proposal methods ----
+
+    def get_agent_proposals(self, agent_id: str, target: str) -> dict:
+        if (agent_id, target) in self.pending_proposals:
+            return self.pending_proposals.get((agent_id, target), {})
+        return {}
+
+    def get_proposed_targets(self, agent_id: str) -> list:
+        if agent_id in self.pending_proposal_targets:
+            return self.pending_proposal_targets.get(agent_id, [])
+        return []
+
+    def add_proposal(
+        self, agent_id: str, target: str, resources: dict[ResourceTypes, float]
+    ) -> bool:
+        if agent_id in self.agents and target in self.agents:
+            self.pending_proposals[(agent_id, target)] = {
+                "target": target,
+                "timestamp": time.time(),
+                "resources": resources,
+            }
+            if agent_id not in self.pending_proposal_targets:
+                self.pending_proposal_targets[agent_id] = []
+            self.pending_proposal_targets[agent_id].append(target)
+            return True
+        return False
+
+    def remove_proposal(self, agent_id: str, target: str) -> bool:
+        if (agent_id, target) in self.pending_proposals:
+            del self.pending_proposals[(agent_id, target)]
+            self.pending_proposal_targets[agent_id].remove(target)
             return True
         return False
 
@@ -83,21 +126,27 @@ class WorldState:
     def modify_region_energy(self, region_name: str, amount: float) -> bool:
         if region_name in self.regions:
             self.regions[region_name].current_energy += amount
-            self.regions[region_name].current_energy = max(self.regions[region_name].current_energy, 0.0)
+            self.regions[region_name].current_energy = max(
+                self.regions[region_name].current_energy, 0.0
+            )
             return True
         return False
 
     def modify_region_materials(self, region_name: str, amount: float) -> bool:
         if region_name in self.regions:
             self.regions[region_name].current_materials += amount
-            self.regions[region_name].current_materials = max(self.regions[region_name].current_materials, 0.0)
+            self.regions[region_name].current_materials = max(
+                self.regions[region_name].current_materials, 0.0
+            )
             return True
         return False
 
     def regenerate_resources(self):
         for region in self.regions.values():
             region.current_energy += region.energy_rate
-            region.current_energy = min(region.current_energy,region.max_energy)
+            region.current_energy = min(region.current_energy, region.max_energy)
 
             region.current_materials += region.materials_rate
-            region.current_materials = min(region.current_materials, region.max_materials)
+            region.current_materials = min(
+                region.current_materials, region.max_materials
+            )

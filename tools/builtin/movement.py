@@ -1,7 +1,5 @@
-from multiprocessing import connection
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from tests.breathing_test import agent
 from world.world import WorldState
 
 
