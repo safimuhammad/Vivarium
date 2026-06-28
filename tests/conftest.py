@@ -15,20 +15,22 @@ Determinism rules for the suite (see ``CLAUDE.md`` Section 5):
 * No unit test calls a live LLM/Ollama -- use :func:`mock_decider`.
 
 .. note::
-   Phase 2 will extend :func:`world` once :class:`~world.world.WorldState` gains
-   ``rng`` / ``clock`` constructor parameters; see the ``TODO`` there.
+   The :func:`world` fixture builds a :class:`~world.world.WorldState` with the
+   shared :func:`fake_clock` fixture, so ``world.clock`` is the same controllable
+   handle a test can advance (e.g. for proposal-timeout tests).
 """
 
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
+from agents.decider import Decision, ToolCall
 from bus.event_bus import EventBus
 from core.rng import SimContext, make_rng
+from tools.builtin import register_builtins
 from tools.registry import ToolRegistry
 from world.agents import AgentState, AgentStatus
 from world.regions import Region
@@ -86,52 +88,44 @@ class FakeClock:
         self._now = when
 
 
-@dataclass
-class ToolCall:
-    """A single canned decision: which tool to call with which params."""
-
-    name: str
-    params: dict[str, Any] = field(default_factory=dict)
-
-
 class MockDecider:
-    """A stand-in for the LLM "decider" returning scripted tool calls.
+    """A deterministic stand-in for the LLM decider, returning scripted decisions.
 
-    Returns canned :class:`ToolCall` objects in order, cycling once the script is
-    exhausted, and records every call it produced. No network / Ollama access.
-    Placeholder for Phase 4's breathing-loop integration test, which will drive
-    ``perceive -> decide -> execute`` against a real world with this mock.
+    Satisfies the :class:`agents.decider.Decider` protocol's
+    ``async def decide(messages, tools) -> Decision``. Returns canned
+    :class:`~agents.decider.Decision` objects in order, cycling once the script is
+    exhausted, and records every decision it produced. No network / Ollama
+    access. Used by the breathing-loop tests (Phase 3) to drive
+    ``perceive -> decide -> execute`` against a real world.
     """
 
-    def __init__(self, scripted: list[ToolCall] | None = None) -> None:
+    def __init__(self, scripted: list[Decision] | None = None) -> None:
         """Initialise the decider.
 
         Args:
-            scripted: Ordered tool calls to return. Defaults to a single
-                no-op ``wait`` call when omitted.
+            scripted: Ordered decisions to return. Defaults to a single empty
+                (plain-text, no tool call) :class:`~agents.decider.Decision`.
         """
-        self._scripted: list[ToolCall] = list(scripted) if scripted else [ToolCall("wait")]
+        self._scripted: list[Decision] = list(scripted) if scripted else [Decision()]
         self._index: int = 0
-        self.history: list[ToolCall] = []
+        self.history: list[Decision] = []
 
-    def decide(self, *_args: Any, **_kwargs: Any) -> ToolCall:
-        """Return the next scripted tool call (cycling) and record it.
+    async def decide(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> Decision:
+        """Return the next scripted decision (cycling) and record it.
 
         Args:
-            *_args: Ignored; accepts any positional context a caller passes.
-            **_kwargs: Ignored; accepts any keyword context a caller passes.
+            messages: Chat history; ignored (accepted for protocol conformance).
+            tools: Tool schemas; ignored (accepted for protocol conformance).
 
         Returns:
-            The next :class:`ToolCall` in the script.
+            The next :class:`~agents.decider.Decision` in the script.
         """
-        call = self._scripted[self._index % len(self._scripted)]
+        decision = self._scripted[self._index % len(self._scripted)]
         self._index += 1
-        self.history.append(call)
-        return call
-
-    def __call__(self, *args: Any, **kwargs: Any) -> ToolCall:
-        """Alias for :meth:`decide` so the mock is usable as a plain callable."""
-        return self.decide(*args, **kwargs)
+        self.history.append(decision)
+        return decision
 
 
 @pytest.fixture
@@ -213,14 +207,17 @@ def agents() -> list[AgentState]:
 
 
 @pytest.fixture
-def world(regions: list[Region], agents: list[AgentState]) -> WorldState:
+def world(
+    regions: list[Region], agents: list[AgentState], fake_clock: FakeClock
+) -> WorldState:
     """Return a fresh, deterministic :class:`~world.world.WorldState`.
 
-    Built with a *seeded* RNG and a *frozen* :class:`FakeClock` so every
-    world-using test is reproducible by construction: all randomness routes
-    through ``world.rng`` and all time reads through ``world.now()``.
+    Built with a *seeded* RNG and the shared *frozen* :func:`fake_clock` fixture
+    so every world-using test is reproducible by construction: all randomness
+    routes through ``world.rng`` and all time reads through ``world.now()`` --
+    and a test can advance ``fake_clock`` to move the same clock the world reads.
     """
-    return WorldState(regions, agents, rng=make_rng(SEED), clock=FakeClock())
+    return WorldState(regions, agents, rng=make_rng(SEED), clock=fake_clock)
 
 
 @pytest.fixture
@@ -239,11 +236,22 @@ def registry(world: WorldState, event_bus: EventBus) -> ToolRegistry:
 
 
 @pytest.fixture
+def populated_registry(registry: ToolRegistry) -> ToolRegistry:
+    """Return a :class:`~tools.registry.ToolRegistry` with all built-ins registered.
+
+    The same wired :func:`registry`, after :func:`tools.builtin.register_builtins`
+    so the breathing-loop tests can actually invoke every canonical tool.
+    """
+    register_builtins(registry)
+    return registry
+
+
+@pytest.fixture
 def mock_decider() -> MockDecider:
-    """Return a :class:`MockDecider` with a small canned script."""
+    """Return a :class:`MockDecider` scripting two single-tool decisions."""
     return MockDecider(
         [
-            ToolCall("look_around"),
-            ToolCall("wait"),
+            Decision(tool_calls=[ToolCall("look_around")]),
+            Decision(tool_calls=[ToolCall("wait")]),
         ]
     )

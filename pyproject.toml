@@ -33,7 +33,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["world*", "bus*", "tools*", "config*", "core*", "agents*"]
+include = ["world*", "bus*", "tools*", "config*", "core*", "agents*", "observability*"]
 exclude = ["tests*"]
 
 # ---------------------------------------------------------------------------

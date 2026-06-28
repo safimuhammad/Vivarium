@@ -1,0 +1,254 @@
+"""Hand-authored Ollama function schemas for the built-in tools (design DD3).
+
+Each built-in tool (see :data:`tools.builtin.BUILTIN_TOOLS`) has a corresponding
+entry in :data:`TOOL_SCHEMAS` describing its callable signature in the Ollama /
+OpenAI function-calling format. The schema *bodies* (parameter names, types, and
+which are required) are authored by hand, but the schema *set* must stay in
+lock-step with the built-in tool set: a parity test asserts
+``set(TOOL_SCHEMAS) == set(tools.builtin.BUILTIN_TOOLS)``.
+
+Resource-type parameters are constrained to the
+:class:`world.regions.ResourceTypes` string values so the model can only request
+known resources.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+from typing import Any
+
+from world.regions import ResourceTypes
+
+RESOURCE_ENUM: list[str] = [resource.value for resource in ResourceTypes]
+"""Allowed string values for any resource-type parameter (from ResourceTypes)."""
+
+
+TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    "look_around": {
+        "type": "function",
+        "function": {
+            "name": "look_around",
+            "description": (
+                "Observe your current region: your own energy and materials, the "
+                "region's resource pools and connections, and who else is present."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    "wait": {
+        "type": "function",
+        "function": {
+            "name": "wait",
+            "description": "Let a moment pass without acting.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    "move": {
+        "type": "function",
+        "function": {
+            "name": "move",
+            "description": "Travel to a directly connected region.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination": {
+                        "type": "string",
+                        "description": "Name of an adjacent region to travel to.",
+                    },
+                },
+                "required": ["destination"],
+            },
+        },
+    },
+    "speak": {
+        "type": "function",
+        "function": {
+            "name": "speak",
+            "description": (
+                "Say something. With no target, everyone in your region hears it; "
+                "with a target, only that one being hears it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The words to say.",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Optional id of a single listener to whisper to.",
+                    },
+                },
+                "required": ["message"],
+            },
+        },
+    },
+    "attack": {
+        "type": "function",
+        "function": {
+            "name": "attack",
+            "description": (
+                "Strike another being in your region, draining their energy and yours."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Id of the co-located being to strike.",
+                    },
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    "harvest_resources": {
+        "type": "function",
+        "function": {
+            "name": "harvest_resources",
+            "description": "Gather a resource from your current region into your own stores.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "resource_type": {
+                        "type": "string",
+                        "enum": RESOURCE_ENUM,
+                        "description": "Which resource to gather.",
+                    },
+                    "amount": {
+                        "type": "number",
+                        "description": "How much of the resource to gather.",
+                    },
+                },
+                "required": ["resource_type", "amount"],
+            },
+        },
+    },
+    "transfer_resource": {
+        "type": "function",
+        "function": {
+            "name": "transfer_resource",
+            "description": "Give some of a resource to another being in your region.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Id of the co-located recipient.",
+                    },
+                    "resource_type": {
+                        "type": "string",
+                        "enum": RESOURCE_ENUM,
+                        "description": "Which resource to give.",
+                    },
+                    "amount": {
+                        "type": "number",
+                        "description": "How much of the resource to give.",
+                    },
+                },
+                "required": ["target", "resource_type", "amount"],
+            },
+        },
+    },
+    "initiate_mating": {
+        "type": "function",
+        "function": {
+            "name": "initiate_mating",
+            "description": (
+                "Propose mating to another being, committing resources now that are "
+                "returned if the proposal is rejected or times out."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Id of the being to propose to.",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "A message to send with the proposal.",
+                    },
+                    "resources": {
+                        "type": "object",
+                        "description": "Resources to commit, keyed by resource type.",
+                        "properties": {
+                            value: {
+                                "type": "number",
+                                "description": f"Amount of {value} to commit.",
+                            }
+                            for value in RESOURCE_ENUM
+                        },
+                    },
+                },
+                "required": ["target", "message", "resources"],
+            },
+        },
+    },
+    "reject_mating": {
+        "type": "function",
+        "function": {
+            "name": "reject_mating",
+            "description": (
+                "Reject a pending mating proposal, returning the proposer's resources."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Id of the being whose proposal you are rejecting.",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "A message to send with the rejection.",
+                    },
+                },
+                "required": ["target", "message"],
+            },
+        },
+    },
+    "accept_mating": {
+        "type": "function",
+        "function": {
+            "name": "accept_mating",
+            "description": (
+                "Accept a pending mating proposal, matching the committed resources to "
+                "bring a new being into the world."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "Id of the being whose proposal you are accepting.",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "A message to send with the acceptance.",
+                    },
+                },
+                "required": ["target", "message"],
+            },
+        },
+    },
+}
+"""Tool name -> Ollama function schema; its key set mirrors ``BUILTIN_TOOLS``."""
+
+
+def schemas_for(names: Iterable[str]) -> list[dict[str, Any]]:
+    """Return the schemas for the named tools, in iteration order.
+
+    Args:
+        names: Tool names to look up (e.g. the names a registry exposes).
+
+    Returns:
+        The matching schema objects from :data:`TOOL_SCHEMAS`, in the order of
+        ``names``.
+
+    Raises:
+        KeyError: If any name has no schema (a programming error given the parity
+            invariant; surfaced loudly rather than silently dropping a tool).
+    """
+    return [TOOL_SCHEMAS[name] for name in names]
