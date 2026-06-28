@@ -617,7 +617,13 @@ async def test_remember_falls_back_to_medium_on_bad_importance(
         event_bus,
         populated_registry,
         MockDecider(
-            [Decision(tool_calls=[ToolCall("remember", {"content": "a thing", "importance": "urgent"})])]
+            [
+                Decision(
+                    tool_calls=[
+                        ToolCall("remember", {"content": "a thing", "importance": "urgent"})
+                    ]
+                )
+            ]
         ),
         memory=memory_store,
     )
