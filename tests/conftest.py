@@ -23,6 +23,7 @@ Determinism rules for the suite (see ``CLAUDE.md`` Section 5):
 from __future__ import annotations
 
 import random
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -30,6 +31,9 @@ import pytest
 from agents.decider import Decision, ToolCall
 from bus.event_bus import EventBus
 from core.rng import SimContext, make_rng
+from memory.embedding import FakeEmbeddingFunction
+from memory.store import FileMemoryStore
+from memory.vector_store import FakeVectorStore
 from tools.builtin import register_builtins
 from tools.registry import ToolRegistry
 from world.agents import AgentState, AgentStatus
@@ -250,4 +254,36 @@ def mock_decider() -> MockDecider:
             Decision(tool_calls=[ToolCall("look_around")]),
             Decision(tool_calls=[ToolCall("wait")]),
         ]
+    )
+
+
+@pytest.fixture
+def fake_embedder() -> FakeEmbeddingFunction:
+    """Return a deterministic, model-free embedding function for memory tests."""
+    return FakeEmbeddingFunction()
+
+
+@pytest.fixture
+def fake_vector_store(fake_embedder: FakeEmbeddingFunction) -> FakeVectorStore:
+    """Return an in-memory cosine vector store over the fake embedder (no chromadb)."""
+    return FakeVectorStore(fake_embedder)
+
+
+@pytest.fixture
+def memory_store(
+    tmp_path: Path, fake_vector_store: FakeVectorStore, fake_clock: FakeClock
+) -> FileMemoryStore:
+    """Return a FileMemoryStore for ``wanderer_001`` rooted in a temp dir.
+
+    Uses the fake vector store and the frozen clock so memory tests are
+    deterministic and never load a model. The seed persona differs from the
+    ``agents`` fixture's persona so tests can tell which source the system prompt
+    drew from (memory identity takes precedence over ``AgentState.persona``).
+    """
+    return FileMemoryStore(
+        "wanderer_001",
+        tmp_path,
+        persona="I am Ada, a careful wanderer.",
+        vector_store=fake_vector_store,
+        clock=fake_clock,
     )

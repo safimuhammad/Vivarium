@@ -34,12 +34,20 @@ from typing import Any
 
 from agents.decider import Decider, Decision, ToolCall
 from agents.prompt import build_system_prompt
+from agents.reflection import REFLECTION_TOOL_SCHEMAS, build_reflection_messages, render_recap
 from agents.tool_schemas import schemas_for
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from core.constants import DECIDE_BACKOFF_SECONDS
+from core.constants import (
+    DECIDE_BACKOFF_SECONDS,
+    REFLECT_EVERY_N_BREATHS,
+    REFLECT_RECAP_TURNS,
+    RETRIEVAL_K,
+)
 from core.exceptions import EventBusError, ToolError
 from core.logging import get_logger
+from memory.models import Importance, MemoryItem
+from memory.store import NULL_MEMORY, MemoryStore
 from tools.registry import ToolRegistry
 from world.agents import AgentState, AgentStatus
 from world.regions import ResourceTypes
@@ -81,6 +89,7 @@ class Agent:
         tool_registry: ToolRegistry,
         decider: Decider,
         pace: float = 0.0,
+        memory: MemoryStore | None = None,
     ) -> None:
         """Initialise the agent and seed its system prompt.
 
@@ -95,6 +104,9 @@ class Agent:
             tool_registry: The tool registry decisions are executed through.
             decider: The injected decider (mock in tests, Ollama in production).
             pace: Inter-breath sleep in seconds for :meth:`run`; defaults to 0.0.
+            memory: The injected memory store (Sprint 5). Defaults to the inert
+                :data:`~memory.store.NULL_MEMORY`, so an agent runs identically
+                with or without durable memory.
         """
         self.agent_id: str = agent_id
         self.world: WorldState = world
@@ -102,6 +114,7 @@ class Agent:
         self.tool_registry: ToolRegistry = tool_registry
         self.decider: Decider = decider
         self.pace: float = pace
+        self.memory: MemoryStore = memory if memory is not None else NULL_MEMORY
 
         # Renamed from "chat_history": these are the turns of a living being.
         self.lifecycle_history: list[dict[str, Any]] = []
@@ -141,13 +154,28 @@ class Agent:
         """Seed :attr:`lifecycle_history` with the agent's system prompt.
 
         The prompt is persona + tool affordances only (design DD9); no goals,
-        strategy, or simulation language. A missing agent yields an empty persona
-        (graceful degradation) rather than crashing construction.
+        strategy, or simulation language. See :meth:`_system_prompt` for how the
+        persona is sourced.
+        """
+        self.lifecycle_history.append({"role": "system", "content": self._system_prompt()})
+
+    def _system_prompt(self) -> str:
+        """Compose the system prompt from the agent's identity + tool affordances.
+
+        The persona is the agent's self-authored identity
+        (:meth:`~memory.store.MemoryStore.load_identity`) when present, falling
+        back to its static :attr:`~world.agents.AgentState.persona`, and finally to
+        an empty string if the agent no longer exists (graceful degradation).
+        Recomputed whenever the identity changes (after ``revise_self``); otherwise
+        byte-stable across breaths to keep the model's KV cache warm.
+
+        Returns:
+            The assembled system-prompt string.
         """
         agent_state = self.world.get_agent(self.agent_id)
-        persona = agent_state.persona if agent_state is not None else ""
-        prompt = build_system_prompt(persona, self._tool_names())
-        self.lifecycle_history.append({"role": "system", "content": prompt})
+        identity = self.memory.load_identity()
+        persona = identity or (agent_state.persona if agent_state is not None else "")
+        return build_system_prompt(persona, self._tool_names())
 
     # ---- the four steps of a breath --------------------------------------
 
@@ -159,13 +187,21 @@ class Agent:
         events as plain narrative ordered by timestamp. Appends a single ``user``
         message to :attr:`lifecycle_history`. No meta/simulation language is used.
 
+        Salient memories (scored by recency x importance x relevance against the
+        perception) are folded into the SAME ``user`` turn -- never a second
+        consecutive ``user`` turn, and always appended at the tail so the model's
+        KV cache stays warm (design spec Section 9).
+
         Returns:
-            None. (Async for the breathing-loop interface and future perception
-            I/O, e.g. Sprint-5 memory retrieval.)
+            None.
         """
         events = self.event_bus.get_events(self.agent_id)
         events.sort(key=lambda event: event.timestamp)
-        self.lifecycle_history.append({"role": "user", "content": self._render_perception(events)})
+        perception = self._render_perception(events)
+        memories = self.memory.retrieve(perception, self.breath_count, RETRIEVAL_K)
+        if memories:
+            perception = f"{perception}\n\n{self._render_memories(memories)}"
+        self.lifecycle_history.append({"role": "user", "content": perception})
 
     async def decide(self) -> Decision | None:
         """Ask the decider for a decision and append the ``assistant`` turn.
@@ -254,6 +290,87 @@ class Agent:
         elif current_status is AgentStatus.DEAD:
             self._stopped = True
 
+    # ---- reflection (the memory write path) ------------------------------
+
+    async def reflect(self) -> None:
+        """Run one isolated reflection step: author memories / revise identity.
+
+        Builds a two-turn context (current identity + a recent-life recap) offering
+        ONLY the reflection tools, asks the decider, and applies any ``remember`` /
+        ``revise_self`` calls to the memory store. A reflection that authors nothing
+        is normal (the spike's Probe-A path) -- it is skipped, never raised. A
+        failing decider is likewise swallowed so reflection can never crash a breath.
+
+        Side effects:
+            May append a memory (``remember``) and/or rewrite the identity and
+            rebuild the system turn (``revise_self``) via :attr:`memory`.
+
+        Returns:
+            None.
+        """
+        messages = build_reflection_messages(
+            self.memory.load_identity(),
+            render_recap(self.lifecycle_history, REFLECT_RECAP_TURNS),
+        )
+        try:
+            decision = await self.decider.decide(messages, REFLECTION_TOOL_SCHEMAS)
+        except Exception:
+            logger.exception("Reflection decider failed for agent %r", self.agent_id)
+            return
+        for call in decision.tool_calls:
+            match call.name:
+                case "remember":
+                    self._apply_remember(call.params)
+                case "revise_self":
+                    self._apply_revise_self(call.params)
+                case _:
+                    logger.debug(
+                        "Ignoring unexpected reflection tool %r for agent %r",
+                        call.name,
+                        self.agent_id,
+                    )
+
+    def _apply_remember(self, params: dict[str, Any]) -> None:
+        """Persist a ``remember`` call's memory; ignore an empty/blank one.
+
+        Args:
+            params: The tool-call params (``content`` and ``importance``); an
+                unknown ``importance`` falls back to ``MEDIUM``.
+        """
+        content = params.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return
+        try:
+            importance = Importance.from_str(str(params.get("importance", "medium")))
+        except ValueError:
+            importance = Importance.MEDIUM
+        self.memory.append_memory(content.strip(), importance, self.breath_count)
+
+    def _apply_revise_self(self, params: dict[str, Any]) -> None:
+        """Rewrite identity from a ``revise_self`` call and rebuild the system turn.
+
+        Args:
+            params: The tool-call params (``identity``); a blank value is ignored.
+        """
+        identity = params.get("identity")
+        if not isinstance(identity, str) or not identity.strip():
+            return
+        self.memory.write_identity(identity.strip())
+        self.lifecycle_history[0] = {"role": "system", "content": self._system_prompt()}
+
+    def _render_memories(self, memories: list[MemoryItem]) -> str:
+        """Render surfaced memories as an in-world 'what you carry' block.
+
+        Args:
+            memories: The memories to render (already salience-ordered).
+
+        Returns:
+            A multi-line block naming what the agent carries (no meta language).
+        """
+        lines = ["Surfacing from your memory, things you carry:"]
+        lines.extend(f"- {memory.content}" for memory in memories)
+        return "\n".join(lines)
+
     # ---- the breath & the loop -------------------------------------------
 
     async def breathe(self) -> None:
@@ -277,6 +394,11 @@ class Agent:
                     self._last_decide_failed = True
                 else:
                     await self.execute(decision.tool_calls)
+                    # breath_count is incremented in the finally below, so during
+                    # the k-th (1-indexed) breath it still holds k-1; +1 makes the
+                    # reflection fire on breaths N, 2N, ... and never on the first.
+                    if (self.breath_count + 1) % REFLECT_EVERY_N_BREATHS == 0:
+                        await self.reflect()
             await self.refresh_status(previous_status)
         finally:
             self.breath_count += 1

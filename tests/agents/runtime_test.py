@@ -16,6 +16,8 @@ import pytest
 from agents.decider import Decision, ToolCall
 from agents.runtime import DECIDE_BACKOFF_SECONDS, Agent
 from bus.event_bus import EventBus
+from memory.models import Importance
+from memory.store import FileMemoryStore
 from observability.event_log import InMemoryEventLog
 from tests.conftest import MockDecider
 from tools.builtin import register_builtins
@@ -382,3 +384,180 @@ async def test_paralyzed_agent_breathe_perceives_but_does_not_act(
     assert decider.history == []  # decide was never called
     assert agent.breath_count == 1
     assert "paralyzed" in agent.lifecycle_history[-1]["content"]
+
+
+# ---- Sprint 5: memory + reflection integration --------------------------------
+
+
+class ReflectAwareDecider:
+    """Returns one decision for action turns, another when reflection tools appear.
+
+    Lets a single decider serve both the action ``decide`` and the reflection call
+    in the breathing loop without brittle script-position counting: it branches on
+    whether the offered tools include ``remember`` (the reflection toolset).
+    """
+
+    def __init__(self, action: Decision, reflection: Decision) -> None:
+        self._action = action
+        self._reflection = reflection
+        self.history: list[Decision] = []
+
+    async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
+        names = {tool["function"]["name"] for tool in tools}
+        decision = self._reflection if "remember" in names else self._action
+        self.history.append(decision)
+        return decision
+
+
+async def test_surfaced_memories_appear_in_perception(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    memory_store.append_memory("Kai betrayed me in the meadow.", Importance.HIGH, breath=0)
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider([Decision(tool_calls=[ToolCall("wait")])]),
+        memory=memory_store,
+    )
+
+    await agent.perceive()
+
+    perception = agent.lifecycle_history[-1]
+    assert perception["role"] == "user"
+    assert "Kai betrayed me" in perception["content"]
+    roles = [m["role"] for m in agent.lifecycle_history]
+    assert not any(roles[i] == roles[i + 1] == "user" for i in range(len(roles) - 1))
+
+
+async def test_memories_appended_at_tail_not_mid_history(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    memory_store.append_memory("a durable memory", Importance.HIGH, breath=0)
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider([Decision(tool_calls=[ToolCall("wait")])]),
+        memory=memory_store,
+    )
+    snapshot = list(agent.lifecycle_history)  # system turn only
+
+    await agent.perceive()
+
+    assert agent.lifecycle_history[: len(snapshot)] == snapshot  # prefix unchanged
+    assert agent.lifecycle_history[-1]["role"] == "user"
+
+
+async def test_reflection_fires_on_nth_breath_and_persists(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import agents.runtime as runtime_module
+
+    monkeypatch.setattr(runtime_module, "REFLECT_EVERY_N_BREATHS", 2)
+    decider = ReflectAwareDecider(
+        action=Decision(tool_calls=[ToolCall("wait")]),
+        reflection=Decision(
+            tool_calls=[ToolCall("remember", {"content": "I trust no one.", "importance": "high"})]
+        ),
+    )
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, memory=memory_store)
+
+    await agent.breathe()  # breath 1: (0+1)%2 != 0 -> no reflection
+    assert memory_store.retrieve("trust", current_breath=1, k=5) == []
+
+    await agent.breathe()  # breath 2: (1+1)%2 == 0 -> reflection fires
+    surfaced = memory_store.retrieve("trust", current_breath=2, k=5)
+    assert any("trust no one" in m.content.lower() for m in surfaced)
+
+
+async def test_reflection_does_not_fire_before_nth_breath(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    # Default cadence is 12; a single breath must not reflect.
+    decider = ReflectAwareDecider(
+        action=Decision(tool_calls=[ToolCall("wait")]),
+        reflection=Decision(
+            tool_calls=[ToolCall("remember", {"content": "premature", "importance": "low"})]
+        ),
+    )
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, memory=memory_store)
+
+    await agent.breathe()
+
+    assert memory_store.retrieve("premature", current_breath=1, k=5) == []
+
+
+async def test_revise_self_rebuilds_system_turn(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider(
+            [Decision(tool_calls=[ToolCall("revise_self", {"identity": "I am reborn, wary."})])]
+        ),
+        memory=memory_store,
+    )
+
+    await agent.reflect()
+
+    assert "reborn, wary" in agent.lifecycle_history[0]["content"]
+    assert "reborn, wary" in memory_store.load_identity()
+
+
+async def test_reflection_with_no_tool_calls_does_not_crash(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    agent = Agent(
+        ADA, world, event_bus, populated_registry, MockDecider([Decision()]), memory=memory_store
+    )
+
+    await agent.reflect()  # Probe-A path: model authors nothing -> no raise, no write
+
+    assert memory_store.retrieve("anything", current_breath=1, k=5) == []
+
+
+async def test_system_turn_byte_stable_across_breaths_without_revise(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider([Decision(tool_calls=[ToolCall("wait")])]),
+        memory=memory_store,
+    )
+    before = agent.lifecycle_history[0]["content"]
+
+    await agent.breathe()
+    await agent.breathe()
+
+    assert agent.lifecycle_history[0]["content"] == before  # KV-cache discipline guard

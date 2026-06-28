@@ -1,4 +1,4 @@
-"""Tests for :mod:`memory.scoring` -- the pure recency×importance×relevance scorer.
+"""Tests for :mod:`memory.scoring` -- the pure recency x importance x relevance scorer.
 
 Each test isolates one term (zeroing the other two weights) to prove that term
 drives the ranking, which is how the salience design is validated: importance can
