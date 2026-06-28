@@ -45,6 +45,14 @@ def test_values_from_design_doc() -> None:
     assert constants.HOARDING_MATERIALS_THRESHOLD == 300.0
 
 
+def test_mating_proposal_timeout_is_present_and_distinct() -> None:
+    """The proposal-timeout constant exists, is a float, and differs from cooldown."""
+    assert isinstance(constants.MATING_PROPOSAL_TIMEOUT_SECONDS, float)
+    assert constants.MATING_PROPOSAL_TIMEOUT_SECONDS > 0.0
+    # Distinct concept from the between-matings cooldown (DD5 / spec Section 4.7).
+    assert constants.MATING_PROPOSAL_TIMEOUT_SECONDS != constants.MATING_COOLDOWN_SECONDS
+
+
 def test_child_share_and_multiplier_are_consistent() -> None:
     """The code multiplier equals the doc share applied to two equal parents."""
     assert constants.MATING_OFFSPRING_MULTIPLIER == constants.MATING_CHILD_SHARE * 2

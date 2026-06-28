@@ -21,6 +21,7 @@ from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.exceptions import EventBusError
 from core.rng import make_rng
+from observability.event_log import InMemoryEventLog
 from world.agents import AgentState, AgentStatus
 from world.regions import Region
 from world.world import WorldState
@@ -267,3 +268,59 @@ async def test_unknown_scope_raises(bus: EventBus) -> None:
     event = Event(type="x", source="a1", payload={}, scope=cast(ScopeType, "weird"))
     with pytest.raises(EventBusError):
         await bus.publish(event)
+
+
+# ---- Event-log sink -------------------------------------------------------
+
+
+async def test_publish_records_every_event_to_the_log_in_order(bus_world: WorldState) -> None:
+    """With an event log attached, every published event is recorded in order."""
+    log = InMemoryEventLog()
+    event_bus = EventBus(bus_world, event_log=log)
+    for agent in bus_world.get_all_agents():
+        event_bus.subscribe(agent.id)
+
+    first = Event(type="e0", source="a1", payload={}, scope=ScopeType.GLOBAL)
+    second = Event(type="e1", source="a1", payload={}, scope=ScopeType.LOCAL, region="alpha")
+    third = Event(type="e2", source="a1", payload={}, scope=ScopeType.TARGETED, target="b1")
+    await event_bus.publish(first)
+    await event_bus.publish(second)
+    await event_bus.publish(third)
+
+    assert log.events == [first, second, third]
+
+
+async def test_publish_records_even_deliver_to_nobody_events(bus_world: WorldState) -> None:
+    """A validly-scoped event delivered to nobody is still recorded (it was emitted)."""
+    log = InMemoryEventLog()
+    event_bus = EventBus(bus_world, event_log=log)  # no subscribers
+    event = Event(type="lonely", source="a1", payload={}, scope=ScopeType.TARGETED, target="ghost")
+    await event_bus.publish(event)
+    assert log.events == [event]
+
+
+async def test_publish_without_event_log_is_backward_compatible(bus: EventBus) -> None:
+    """A bus built without an event log still publishes normally (default None)."""
+    event = Event(type="x", source="a1", payload={}, scope=ScopeType.GLOBAL)
+    await bus.publish(event)  # must not raise
+    assert bus.get_events("a1") == [event]
+
+
+# ---- unsubscribe ----------------------------------------------------------
+
+
+async def test_unsubscribe_removes_inbox_and_stops_delivery(bus: EventBus) -> None:
+    """``unsubscribe`` removes the inbox so later publishes do not target it."""
+    assert bus.unsubscribe("a1") is True
+    assert "a1" not in bus.agent_queues
+
+    event = Event(type="x", source="a2", payload={}, scope=ScopeType.GLOBAL)
+    await bus.publish(event)
+    # a1 has no inbox now; a2 (still subscribed) receives it.
+    assert bus.get_events("a1") == []
+    assert bus.get_events("a2") == [event]
+
+
+def test_unsubscribe_unknown_agent_returns_false(bus: EventBus) -> None:
+    """Unsubscribing an agent with no inbox returns ``False`` (nothing to remove)."""
+    assert bus.unsubscribe("never_subscribed") is False

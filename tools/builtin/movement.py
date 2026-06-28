@@ -4,16 +4,18 @@ Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
 natural-language result string for the acting agent's LLM.
 
-Note: ``move`` charges **no** energy. The design doc specifies
-:data:`~core.constants.MOVE_ENERGY_COST`, but the current gameplay behavior is
-free movement; this divergence is preserved deliberately (centralized in
-``core.constants`` for a later phase to reconcile, not enforced here).
+Note: ``move`` charges :data:`~core.constants.MOVE_ENERGY_COST` energy on a
+successful relocation. It validates existence, adjacency and sufficient energy
+*before* any mutation, and only deducts the cost once
+:meth:`~world.world.WorldState.move_agent` has succeeded -- a failed move neither
+relocates the agent nor charges it.
 """
 
 from __future__ import annotations
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
+from core.constants import MOVE_ENERGY_COST
 from world.world import WorldState
 
 
@@ -23,7 +25,10 @@ async def move(world: WorldState, event_bus: EventBus, agent_id: str, destinatio
     Mutates world state:
         * On success, updates the agent's ``current_position`` to ``destination``
           (delegated to :meth:`~world.world.WorldState.move_agent`, which enforces
-          region adjacency). Charges no energy (see module note).
+          region adjacency) and deducts
+          :data:`~core.constants.MOVE_ENERGY_COST` from the agent's energy. All
+          preconditions (existence, sufficient energy, adjacency) are checked
+          before any mutation; on failure nothing is moved or charged.
 
     Emits events:
         * On success, two :attr:`~bus.events.ScopeType.LOCAL` events stamped with
@@ -39,7 +44,8 @@ async def move(world: WorldState, event_bus: EventBus, agent_id: str, destinatio
     Returns:
         A success sentence on a completed move; an ``"Error: "`` string if the
         agent or destination region is unknown; an ``"Invalid: "`` string if the
-        destination is not reachable from the agent's current region.
+        agent lacks the energy for the move cost or the destination is not
+        reachable from the agent's current region.
     """
     agent_state = world.get_agent(agent_id)
     destination_region = world.get_region(destination)
@@ -47,11 +53,19 @@ async def move(world: WorldState, event_bus: EventBus, agent_id: str, destinatio
         return "Error: Cannot move, the agent or destination region does not exist."
     current_pos = agent_state.current_position
 
+    if agent_state.current_energy < MOVE_ENERGY_COST:
+        return (
+            f"Invalid: Cannot move to {destination_region.name}, energy "
+            f"{agent_state.current_energy} is below the move cost of {MOVE_ENERGY_COST}."
+        )
+
     if not world.move_agent(agent_id, destination_region.name):
         return (
             f"Invalid: Cannot move to {destination_region.name}, "
             f"it is not reachable from {current_pos}."
         )
+
+    world.modify_agent_energy(agent_id, -MOVE_ENERGY_COST)
 
     left_event = Event(
         type="agent_left_region",

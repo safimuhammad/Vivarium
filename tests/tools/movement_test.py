@@ -2,15 +2,17 @@
 
 ``move`` relocates an agent along a region edge and emits a ``agent_left_region``
 event (to the origin) and an ``agent_entered_region`` event (to the destination).
-It charges **no** energy -- a deliberately preserved divergence from the design
-doc's ``MOVE_ENERGY_COST`` (flagged, not fixed). ``look_around`` is a read-only
-dashboard that emits no event.
+It charges :data:`~core.constants.MOVE_ENERGY_COST` energy on a successful move,
+validating existence, adjacency and sufficient energy *before* mutating, and only
+deducting once the relocation succeeds. ``look_around`` is a read-only dashboard
+that emits no event.
 """
 
 from __future__ import annotations
 
 from bus.event_bus import EventBus
 from bus.events import ScopeType
+from core.constants import MOVE_ENERGY_COST
 from tools.builtin.movement import look_around, move
 from world.agents import AgentState, AgentStatus
 from world.regions import Region
@@ -26,7 +28,7 @@ async def test_move_relocates_agent_and_emits_both_region_events(
     mover = world.get_agent("wanderer_001")
     assert mover is not None
     assert mover.current_position == "beta"
-    assert mover.current_energy == 100.0  # DIVERGENCE preserved: move charges no energy
+    assert mover.current_energy == 100.0 - MOVE_ENERGY_COST  # charged on success
 
     # After the move, the origin (alpha) holds wanderer_002; beta holds the mover.
     left_inbox = event_bus.get_events("wanderer_002")  # still in alpha
@@ -48,6 +50,7 @@ async def test_move_to_unknown_destination_returns_error(
     result = await move(world, event_bus, "wanderer_001", destination="nowhere")
     mover = world.get_agent("wanderer_001")
     assert mover is not None and mover.current_position == "alpha"
+    assert mover.current_energy == 100.0  # not charged on an Error
     assert result.startswith("Error:")
     assert event_bus.get_events("wanderer_001") == []
     assert event_bus.get_events("wanderer_002") == []
@@ -74,8 +77,27 @@ async def test_move_to_non_adjacent_region_is_invalid(
 
     mover = world.get_agent("wanderer_001")
     assert mover is not None and mover.current_position == "alpha"  # did not move
+    assert mover.current_energy == 100.0  # not charged on a failed move
     assert result.startswith("Invalid:")
     assert "gamma" in result
+    assert event_bus.get_events("wanderer_001") == []
+    assert event_bus.get_events("wanderer_002") == []
+
+
+async def test_move_with_insufficient_energy_is_invalid_and_uncharged(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Too little energy to pay the move cost is a rule violation with no effect."""
+    # Drop wanderer_001 below the move cost (5.0): 100 - 97 = 3.0.
+    world.modify_agent_energy("wanderer_001", -97.0)
+
+    result = await move(world, event_bus, "wanderer_001", destination="beta")
+
+    mover = world.get_agent("wanderer_001")
+    assert mover is not None
+    assert mover.current_position == "alpha"  # did not move
+    assert mover.current_energy == 3.0  # not charged further
+    assert result.startswith("Invalid:")
     assert event_bus.get_events("wanderer_001") == []
     assert event_bus.get_events("wanderer_002") == []
 

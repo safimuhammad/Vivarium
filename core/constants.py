@@ -14,14 +14,13 @@ Provenance is noted on every constant:
   but is **not yet enforced in code**. It is recorded here for the phase that
   implements the rule; flagged inline where the current code diverges.
 
-DIVERGENCES flagged below (recorded, intentionally NOT fixed in Phase 1 -- this
-module only centralizes values; Phase 2/3 reconcile code with these constants):
+DIVERGENCES (history; items 1 and 2 were reconciled in Sprint 4 Phase 2):
 
-1. Move energy cost: the design doc charges 5.0 energy per move, but
-   ``tools/builtin/movement.py`` currently deducts **no** energy on ``move``.
-2. Paralysis threshold: the doc paralyses at <= 5.0 energy, but
-   ``WorldState.modify_agent_energy`` only sets ``PARALYZED`` at exactly 0.0
-   energy, and there is no death (kill-threshold) logic at all.
+1. Move energy cost: RECONCILED (S4 P2) -- ``tools/builtin/movement.py`` now
+   deducts 5.0 energy on a successful ``move``.
+2. Paralysis threshold: RECONCILED (S4 P2) -- ``WorldState.modify_agent_energy``
+   now paralyses at ``energy <= 5.0`` (inclusive) and revives above it. Death
+   (the kill-threshold) is still deferred to Sprint 6.
 3. Mating minimums / cooldown / max-offspring: doc-specified but unenforced in
    the current mating tool.
 4. Mating child share: the doc says "child receives 80% of combined
@@ -48,7 +47,8 @@ GENERIC_ACTION_ENERGY_COST: Final[float] = 1.0
 MOVE_ENERGY_COST: Final[float] = 5.0
 """Energy cost to move between regions. [doc].
 
-DIVERGENCE: ``movement.py`` currently deducts no energy on ``move``.
+Enforced as of Sprint 4 Phase 2: ``movement.py`` deducts this on a successful
+``move`` (after validating existence, adjacency and sufficient energy).
 """
 
 SPEAK_ENERGY_COST: Final[float] = 0.5
@@ -76,7 +76,9 @@ DIVERGENCE: no death logic exists in the current code.
 PARALYSIS_ENERGY_THRESHOLD: Final[float] = 5.0
 """At or below this energy an agent is paralysed. [doc].
 
-DIVERGENCE: ``WorldState.modify_agent_energy`` only paralyses at exactly 0.0.
+Enforced as of Sprint 4 Phase 2: ``WorldState.modify_agent_energy`` paralyses an
+ALIVE agent at ``energy <= 5.0`` (inclusive, including 0.0) and revives a
+PARALYZED agent only when ``energy > 5.0``; a DEAD agent is left untouched.
 """
 
 # ---------------------------------------------------------------------------
@@ -94,6 +96,17 @@ MATING_MIN_MATERIALS_CONTRIBUTION: Final[float] = 30.0
 MATING_COOLDOWN_SECONDS: Final[float] = 300.0
 """Cooldown between matings for an agent, in seconds (5 minutes). [doc]
 (not yet enforced in code)."""
+
+MATING_PROPOSAL_TIMEOUT_SECONDS: Final[float] = 60.0
+"""How long a mating proposal's escrow may sit unanswered before the world-tick
+refunds the initiator and removes it, in seconds. [design -- Sprint 4 Phase 2].
+
+DISTINCT from :data:`MATING_COOLDOWN_SECONDS` (the gap *between* matings): this is
+the lifetime of a single outstanding proposal. Not part of the design doc's
+"World Rules" table; introduced for the proposal-timeout sweep on the Revisit List
+(see the Sprint-4 design spec Section 4.7). Chosen shorter than the cooldown so
+escrowed resources are returned promptly rather than locked indefinitely.
+"""
 
 MATING_MAX_OFFSPRING: Final[int] = 5
 """Maximum offspring a single agent may produce. [doc]

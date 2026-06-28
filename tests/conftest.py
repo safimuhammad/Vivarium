@@ -110,9 +110,7 @@ class MockDecider:
         self._index: int = 0
         self.history: list[Decision] = []
 
-    async def decide(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> Decision:
+    async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
         """Return the next scripted decision (cycling) and record it.
 
         Args:
@@ -207,9 +205,7 @@ def agents() -> list[AgentState]:
 
 
 @pytest.fixture
-def world(
-    regions: list[Region], agents: list[AgentState], fake_clock: FakeClock
-) -> WorldState:
+def world(regions: list[Region], agents: list[AgentState], fake_clock: FakeClock) -> WorldState:
     """Return a fresh, deterministic :class:`~world.world.WorldState`.
 
     Built with a *seeded* RNG and the shared *frozen* :func:`fake_clock` fixture

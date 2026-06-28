@@ -28,6 +28,7 @@ import asyncio
 
 from core.exceptions import EventBusError
 from core.logging import get_logger
+from observability.event_log import EventLog
 from world.world import WorldState
 
 from .events import Event, ScopeType
@@ -41,17 +42,23 @@ class EventBus:
     Attributes:
         world_state: The live world, used to resolve regions and validate agents.
         agent_queues: Map of subscribed agent id -> its inbox queue.
+        event_log: Optional append-only sink; every successfully-routed event is
+            recorded here (the replay record). ``None`` disables logging.
     """
 
-    def __init__(self, world_state: WorldState) -> None:
+    def __init__(self, world_state: WorldState, event_log: EventLog | None = None) -> None:
         """Initialise the bus.
 
         Args:
             world_state: The live :class:`~world.world.WorldState`; consulted to
                 resolve a source agent's region and to validate subscriptions.
+            event_log: Optional :class:`~observability.event_log.EventLog` sink.
+                When provided, :meth:`publish` records every successfully-routed
+                event to it. Defaults to ``None`` (backward compatible -- no log).
         """
         self.world_state: WorldState = world_state
         self.agent_queues: dict[str, asyncio.Queue[Event]] = {}
+        self.event_log: EventLog | None = event_log
 
     def subscribe(self, agent_id: str) -> bool:
         """Create an inbox for an agent so it can receive events.
@@ -72,6 +79,26 @@ class EventBus:
         logger.debug("Refused to subscribe unknown agent %r", agent_id)
         return False
 
+    def unsubscribe(self, agent_id: str) -> bool:
+        """Remove an agent's inbox so it stops receiving events.
+
+        Mutates :attr:`agent_queues` by deleting the agent's queue (used for clean
+        agent shutdown). Any events still queued in the dropped inbox are
+        discarded. Subsequent publishes will no longer target this agent until it
+        re-subscribes.
+
+        Args:
+            agent_id: Id of the agent to unsubscribe.
+
+        Returns:
+            ``True`` if the agent had an inbox that was removed; ``False`` if the
+            agent was not subscribed (nothing to remove).
+        """
+        if agent_id in self.agent_queues:
+            del self.agent_queues[agent_id]
+            return True
+        return False
+
     async def publish(self, event: Event) -> None:
         """Route an event into the inboxes of its recipients.
 
@@ -79,6 +106,11 @@ class EventBus:
         ``event``. Routing is by :attr:`~bus.events.Event.scope`; see the module
         docstring. Delivery to an agent only happens if that agent is subscribed
         (has an inbox); unsubscribed recipients are skipped silently.
+
+        If an :attr:`event_log` sink is attached, the event is recorded there at a
+        single capture point *after* routing succeeds (so a validly-scoped event
+        delivered to nobody is still logged as emitted, while an event that fails
+        to route -- raising below -- is not).
 
         Args:
             event: The event to route.
@@ -123,6 +155,10 @@ class EventBus:
                 message = f"Cannot route event {event.type!r}: unknown scope {event.scope!r}."
                 logger.error(message)
                 raise EventBusError(message)
+
+        # Single capture point: record only events that routed without raising.
+        if self.event_log is not None:
+            self.event_log.record(event)
 
     async def _deliver_to_region(self, region_name: str, event: Event) -> None:
         """Enqueue ``event`` for every subscribed agent in a region.

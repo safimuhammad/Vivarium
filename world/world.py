@@ -25,6 +25,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
+from core.constants import PARALYSIS_ENERGY_THRESHOLD
 from core.logging import get_logger
 from core.rng import Clock, SimContext, default_clock, make_rng
 
@@ -224,26 +225,45 @@ class WorldState:
         return False
 
     def modify_agent_energy(self, agent_id: str, amount: float) -> bool:
-        """Add ``amount`` to an agent's energy, flooring at 0.0.
+        """Add ``amount`` to an agent's energy and reconcile its lifecycle status.
 
-        Mutates the agent's :attr:`~world.agents.AgentState.current_energy` and,
-        if energy reaches exactly 0.0, sets its status to
-        :attr:`~world.agents.AgentStatus.PARALYZED`.
+        This is the **sole** writer of the ``ALIVE <-> PARALYZED`` transition
+        (design DD4). After applying the delta (floored at 0.0, never capped --
+        agents have no max, see :meth:`modify_region_energy` for the region rule):
+
+        * If energy ``<= PARALYSIS_ENERGY_THRESHOLD`` (inclusive, **including
+          0.0**) and the agent is ``ALIVE``, it becomes ``PARALYZED``.
+        * If energy ``> PARALYSIS_ENERGY_THRESHOLD`` and the agent is
+          ``PARALYZED``, it revives to ``ALIVE``.
+
+        A ``DEAD`` agent is terminal: the call early-returns without touching
+        energy or status (guarding the Sprint-6 death writer against accidental
+        resurrection). No events are emitted -- ``WorldState`` has no bus -- and
+        ``DEAD`` is never set here (death is Sprint 6).
 
         Args:
             agent_id: Id of the agent to modify.
             amount: Signed delta to apply (negative to drain).
 
         Returns:
-            ``True`` if the agent exists and was modified; ``False`` otherwise.
+            ``True`` if the agent exists (including the ``DEAD`` terminal no-op);
+            ``False`` only if no such agent exists.
         """
-        if agent_id in self.agents:
-            agent = self.agents[agent_id]
-            agent.current_energy = max(agent.current_energy + amount, 0.0)
-            if agent.current_energy == 0.0:
-                agent.status = AgentStatus.PARALYZED
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return False
+        if agent.status is AgentStatus.DEAD:
+            # Death is terminal: never change a dead agent's energy or status.
             return True
-        return False
+        agent.current_energy = max(agent.current_energy + amount, 0.0)
+        if agent.current_energy <= PARALYSIS_ENERGY_THRESHOLD and agent.status is AgentStatus.ALIVE:
+            agent.status = AgentStatus.PARALYZED
+        elif (
+            agent.current_energy > PARALYSIS_ENERGY_THRESHOLD
+            and agent.status is AgentStatus.PARALYZED
+        ):
+            agent.status = AgentStatus.ALIVE
+        return True
 
     def modify_agent_materials(self, agent_id: str, amount: float) -> bool:
         """Add ``amount`` to an agent's materials, flooring at 0.0.
@@ -355,11 +375,12 @@ class WorldState:
         return False
 
     def modify_region_energy(self, region_name: str, amount: float) -> bool:
-        """Add ``amount`` to a region's energy, flooring at 0.0.
+        """Add ``amount`` to a region's energy, clamped to ``[0.0, max_energy]``.
 
-        Mutates the region's :attr:`~world.regions.Region.current_energy`. Note
-        this does NOT cap at ``max_energy`` (only :meth:`regenerate_resources`
-        enforces the cap).
+        Mutates the region's :attr:`~world.regions.Region.current_energy`. Regions
+        are bounded above (design DD8): the result is floored at 0.0 and capped at
+        the region's ``max_energy`` (agents, by contrast, are floor-only because
+        capping them would clip mating-escrow refunds).
 
         Args:
             region_name: Name of the region to modify.
@@ -370,16 +391,16 @@ class WorldState:
         """
         if region_name in self.regions:
             region = self.regions[region_name]
-            region.current_energy = max(region.current_energy + amount, 0.0)
+            region.current_energy = min(max(region.current_energy + amount, 0.0), region.max_energy)
             return True
         return False
 
     def modify_region_materials(self, region_name: str, amount: float) -> bool:
-        """Add ``amount`` to a region's materials, flooring at 0.0.
+        """Add ``amount`` to a region's materials, clamped to ``[0.0, max_materials]``.
 
         Mutates the region's :attr:`~world.regions.Region.current_materials`.
-        Note this does NOT cap at ``max_materials`` (only
-        :meth:`regenerate_resources` enforces the cap).
+        Regions are bounded above (design DD8): the result is floored at 0.0 and
+        capped at the region's ``max_materials``.
 
         Args:
             region_name: Name of the region to modify.
@@ -390,7 +411,9 @@ class WorldState:
         """
         if region_name in self.regions:
             region = self.regions[region_name]
-            region.current_materials = max(region.current_materials + amount, 0.0)
+            region.current_materials = min(
+                max(region.current_materials + amount, 0.0), region.max_materials
+            )
             return True
         return False
 

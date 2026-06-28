@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import random
 
+import pytest
+
 from core.rng import make_rng
 from tests.conftest import FakeClock
 from world.agents import AgentState, AgentStatus
@@ -220,31 +222,100 @@ def test_modify_agent_energy_add_and_subtract(world: WorldState) -> None:
     assert agent.current_energy == 75.0
 
 
-def test_modify_agent_energy_floors_at_zero_and_paralyzes(world: WorldState) -> None:
-    """Energy floors at 0.0 and reaching exactly 0.0 sets PARALYZED."""
+def test_modify_agent_energy_drain_to_zero_paralyzes_never_dead(world: WorldState) -> None:
+    """Energy floors at 0.0 and reaching exactly 0.0 sets PARALYZED (never DEAD)."""
     assert world.modify_agent_energy("wanderer_001", -500.0) is True
     agent = world.get_agent("wanderer_001")
     assert agent is not None
     assert agent.current_energy == 0.0
+    assert agent.status is not AgentStatus.DEAD  # death is Sprint 6, never here
     assert agent.status is AgentStatus.PARALYZED
 
 
-def test_modify_agent_energy_above_zero_stays_alive(world: WorldState) -> None:
-    """Characterization: dropping to 5.0 (>0) does NOT paralyze.
+def test_modify_agent_energy_paralyzes_on_or_below_threshold(world: WorldState) -> None:
+    """At or below ``PARALYSIS_ENERGY_THRESHOLD`` (5.0) an ALIVE agent paralyses.
 
-    DIVERGENCE: the design doc paralyses at <= 5.0 energy, but the current code
-    only paralyses at exactly 0.0. This pins the *current* behavior.
+    The boundary is inclusive: exactly 5.0 paralyses, and anything below (3.0)
+    paralyses too. ``modify_agent_energy`` is the sole ALIVE<->PARALYZED writer.
     """
+    # 100.0 - 95.0 = 5.0 (exactly the threshold) -> PARALYZED.
     assert world.modify_agent_energy("wanderer_001", -95.0) is True
+    at_threshold = world.get_agent("wanderer_001")
+    assert at_threshold is not None
+    assert at_threshold.current_energy == 5.0
+    assert at_threshold.status is AgentStatus.PARALYZED
+
+    # A fresh agent dropped to 3.0 (below the threshold) -> PARALYZED.
+    assert world.modify_agent_energy("wanderer_002", -97.0) is True
+    below_threshold = world.get_agent("wanderer_002")
+    assert below_threshold is not None
+    assert below_threshold.current_energy == 3.0
+    assert below_threshold.status is AgentStatus.PARALYZED
+
+
+def test_modify_agent_energy_just_above_threshold_stays_alive(world: WorldState) -> None:
+    """Energy just above the threshold (5.01) leaves the agent ALIVE."""
+    assert world.modify_agent_energy("wanderer_001", -94.99) is True
     agent = world.get_agent("wanderer_001")
     assert agent is not None
-    assert agent.current_energy == 5.0
+    assert agent.current_energy == pytest.approx(5.01)  # > 5.0 threshold
     assert agent.status is AgentStatus.ALIVE
+
+
+def test_modify_agent_energy_revives_only_above_threshold(world: WorldState) -> None:
+    """A PARALYZED agent revives to ALIVE only when fed strictly above threshold."""
+    # Drain to 0.0 -> PARALYZED. (Re-fetch after each mutation so the status read
+    # reflects the post-mutation state, not a narrowed earlier assertion.)
+    assert world.modify_agent_energy("wanderer_001", -100.0) is True
+    drained = world.get_agent("wanderer_001")
+    assert drained is not None
+    assert drained.status is AgentStatus.PARALYZED
+
+    # Feed back up to exactly the threshold (5.0): NOT enough to revive.
+    assert world.modify_agent_energy("wanderer_001", 5.0) is True
+    at_threshold = world.get_agent("wanderer_001")
+    assert at_threshold is not None
+    assert at_threshold.current_energy == 5.0
+    assert at_threshold.status is AgentStatus.PARALYZED
+
+    # One more sip past the threshold revives the agent.
+    assert world.modify_agent_energy("wanderer_001", 0.5) is True
+    revived = world.get_agent("wanderer_001")
+    assert revived is not None
+    assert revived.current_energy == 5.5
+    assert revived.status is AgentStatus.ALIVE
+
+
+def test_modify_agent_energy_dead_is_terminal_no_resurrection(world: WorldState) -> None:
+    """A DEAD agent is terminal: energy is never changed and status never flips.
+
+    Guards the Sprint-6 death writer against accidental resurrection by the
+    energy mutator.
+    """
+    assert world.update_agent_status("wanderer_001", AgentStatus.DEAD) is True
+    agent = world.get_agent("wanderer_001")
+    assert agent is not None
+    energy_before = agent.current_energy
+    # The agent exists, so the call is "handled" (True), but it is a no-op.
+    assert world.modify_agent_energy("wanderer_001", 1000.0) is True
+    assert agent.current_energy == energy_before  # unchanged
+    assert agent.status is AgentStatus.DEAD  # never resurrected
 
 
 def test_modify_agent_energy_missing_agent(world: WorldState) -> None:
     """Modifying a missing agent's energy fails."""
     assert world.modify_agent_energy("ghost", 10.0) is False
+
+
+def test_modify_agent_energy_is_not_capped(world: WorldState) -> None:
+    """Agents have no max energy: a large credit is NOT capped (DD8).
+
+    Capping agent energy would clip mating-escrow refunds; only regions cap.
+    """
+    assert world.modify_agent_energy("wanderer_001", 10_000.0) is True
+    agent = world.get_agent("wanderer_001")
+    assert agent is not None
+    assert agent.current_energy == 10_100.0
 
 
 # ---------------------------------------------------------------------------
@@ -349,18 +420,17 @@ def test_modify_region_energy_add_and_floor(world: WorldState) -> None:
     assert region.current_energy == 0.0
 
 
-def test_modify_region_energy_does_not_cap_at_max(world: WorldState) -> None:
-    """Characterization: ``modify_region_energy`` does NOT cap at ``max_energy``.
+def test_modify_region_energy_caps_at_max(world: WorldState) -> None:
+    """``modify_region_energy`` caps at ``max_energy`` (DD8).
 
-    DIVERGENCE: ``regenerate_resources`` caps at ``max_energy``, but the direct
-    ``modify_region_energy`` mutator only floors at 0.0 and lets energy exceed
-    ``max_energy``. This pins the *current* (uncapped) behavior.
+    Regions are bounded above; a credit that would exceed ``max_energy`` is
+    clamped to it (unlike agents, which are floor-only).
     """
     assert world.modify_region_energy("alpha", 1000.0) is True
     region = world.get_region("alpha")
     assert region is not None
     assert region.max_energy == 500.0
-    assert region.current_energy == 1100.0
+    assert region.current_energy == 500.0  # capped, not 1100.0
 
 
 def test_modify_region_energy_missing(world: WorldState) -> None:
@@ -376,6 +446,15 @@ def test_modify_region_materials_add_and_floor(world: WorldState) -> None:
     assert region.current_materials == 125.0
     assert world.modify_region_materials("alpha", -1000.0) is True
     assert region.current_materials == 0.0
+
+
+def test_modify_region_materials_caps_at_max(world: WorldState) -> None:
+    """``modify_region_materials`` caps at ``max_materials`` (DD8)."""
+    assert world.modify_region_materials("alpha", 1000.0) is True
+    region = world.get_region("alpha")
+    assert region is not None
+    assert region.max_materials == 500.0
+    assert region.current_materials == 500.0  # capped, not 1100.0
 
 
 def test_modify_region_materials_missing(world: WorldState) -> None:
