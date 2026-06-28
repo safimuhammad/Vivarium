@@ -8,3 +8,7 @@ injectable seam so unit tests stay deterministic and network-free.
 """
 
 from __future__ import annotations
+
+from memory.models import Importance, MemoryItem
+
+__all__ = ["Importance", "MemoryItem"]
