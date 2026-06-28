@@ -16,6 +16,8 @@ dependencies = [
     "pyyaml",
     "faker",
     "pydantic>=2",
+    # Embedded vector store (PersistentClient + all-MiniLM-L6-v2) for memory RAG.
+    "chromadb",
 ]
 
 [project.optional-dependencies]
@@ -33,7 +35,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["world*", "bus*", "tools*", "config*", "core*", "agents*", "observability*"]
+include = ["world*", "bus*", "tools*", "config*", "core*", "agents*", "observability*", "memory*"]
 exclude = ["tests*"]
 
 # ---------------------------------------------------------------------------
@@ -95,6 +97,7 @@ module = [
     "faker.*",
     "yaml.*",
     "requests.*",
+    "chromadb.*",
 ]
 ignore_missing_imports = true
 
@@ -115,7 +118,7 @@ markers = [
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
 branch = true
-source = ["world", "bus", "tools", "config", "core", "agents", "observability"]
+source = ["world", "bus", "tools", "config", "core", "agents", "observability", "memory"]
 omit = ["tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]

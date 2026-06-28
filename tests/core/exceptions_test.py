@@ -7,12 +7,13 @@ import pytest
 from core.exceptions import (
     ConfigError,
     EventBusError,
+    MemoryStoreError,
     ToolError,
     VivariumError,
     WorldStateError,
 )
 
-_SUBCLASSES = [WorldStateError, EventBusError, ToolError, ConfigError]
+_SUBCLASSES = [WorldStateError, EventBusError, ToolError, ConfigError, MemoryStoreError]
 
 
 @pytest.mark.parametrize("exc_type", _SUBCLASSES)

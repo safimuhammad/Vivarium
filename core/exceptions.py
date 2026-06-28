@@ -65,3 +65,16 @@ class ConfigError(VivariumError):
     fails schema validation, so a bad config fails loudly with a useful message
     instead of producing a half-built world.
     """
+
+
+class MemoryStoreError(VivariumError):
+    """Raised for infrastructure failures in the agent memory subsystem.
+
+    Examples: a memory directory that cannot be created, a corrupt or
+    unopenable vector store, or a failed atomic write of an identity/memory
+    file. Named to avoid shadowing the Python builtin ``MemoryError``.
+
+    Agent-facing reflection outcomes (the model authoring nothing this cycle)
+    are NOT this -- they are simply skipped, never raised (see ``CLAUDE.md``
+    Section 4's two-layer error model).
+    """
