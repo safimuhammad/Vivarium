@@ -561,3 +561,109 @@ async def test_system_turn_byte_stable_across_breaths_without_revise(
     await agent.breathe()
 
     assert agent.lifecycle_history[0]["content"] == before  # KV-cache discipline guard
+
+
+async def test_reflection_swallows_decider_failure(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        ScriptedDecider([RuntimeError("model down")]),
+        memory=memory_store,
+    )
+
+    await agent.reflect()  # a failing decider must not crash reflection
+
+    assert memory_store.retrieve("anything", current_breath=1, k=5) == []
+
+
+async def test_remember_ignores_blank_content(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider(
+            [Decision(tool_calls=[ToolCall("remember", {"content": "   ", "importance": "high"})])]
+        ),
+        memory=memory_store,
+    )
+
+    await agent.reflect()
+
+    assert memory_store.retrieve("anything", current_breath=1, k=5) == []
+
+
+async def test_remember_falls_back_to_medium_on_bad_importance(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider(
+            [Decision(tool_calls=[ToolCall("remember", {"content": "a thing", "importance": "urgent"})])]
+        ),
+        memory=memory_store,
+    )
+
+    await agent.reflect()
+
+    surfaced = memory_store.retrieve("a thing", current_breath=1, k=5)
+    assert surfaced and surfaced[0].importance is Importance.MEDIUM
+
+
+async def test_revise_self_ignores_blank_identity(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider([Decision(tool_calls=[ToolCall("revise_self", {"identity": "  "})])]),
+        memory=memory_store,
+    )
+    before = agent.lifecycle_history[0]["content"]
+
+    await agent.reflect()
+
+    assert agent.lifecycle_history[0]["content"] == before
+
+
+async def test_reflection_ignores_unexpected_tool(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider([Decision(tool_calls=[ToolCall("look_around")])]),
+        memory=memory_store,
+    )
+
+    await agent.reflect()  # unexpected tool offered nowhere -> ignored, no crash
+
+    assert memory_store.retrieve("anything", current_breath=1, k=5) == []
