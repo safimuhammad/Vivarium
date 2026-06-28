@@ -214,14 +214,13 @@ def agents() -> list[AgentState]:
 
 @pytest.fixture
 def world(regions: list[Region], agents: list[AgentState]) -> WorldState:
-    """Return a fresh :class:`~world.world.WorldState` for the in-test setup.
+    """Return a fresh, deterministic :class:`~world.world.WorldState`.
 
-    TODO(Phase 2): once ``WorldState`` accepts ``rng`` and ``clock`` parameters,
-    build it here with the seeded RNG and the fake clock (e.g.
-    ``WorldState(regions, agents, rng=make_rng(SEED), clock=FakeClock())``) so
-    every world-using test is deterministic by construction.
+    Built with a *seeded* RNG and a *frozen* :class:`FakeClock` so every
+    world-using test is reproducible by construction: all randomness routes
+    through ``world.rng`` and all time reads through ``world.now()``.
     """
-    return WorldState(regions, agents)
+    return WorldState(regions, agents, rng=make_rng(SEED), clock=FakeClock())
 
 
 @pytest.fixture

@@ -78,14 +78,12 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 show_error_codes = true
 
-# Phase 1 TEMPORARY overrides: core/ and tests/ are held to the production
-# (strict) bar now. The not-yet-refactored packages below are relaxed so this
-# phase's gate (`mypy core tests`) is clean. Phase 2 (world) and Phase 3
-# (bus/tools/config) MUST delete each module from this list as they bring it up
-# to strict typing.
+# TEMPORARY overrides: core/, world/ and tests/ are held to the production
+# (strict) bar now. The not-yet-refactored packages below are relaxed so the
+# current gate is clean. Phase 3 (bus/tools/config) MUST delete each module from
+# this list as they bring it up to strict typing. (Phase 2 removed `world.*`.)
 [[tool.mypy.overrides]]
 module = [
-    "world.*",
     "bus.*",
     "tools.*",
     "config.*",
