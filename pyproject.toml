@@ -78,14 +78,11 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 show_error_codes = true
 
-# TEMPORARY overrides: core/, world/ and tests/ are held to the production
-# (strict) bar now. The not-yet-refactored packages below are relaxed so the
-# current gate is clean. Phase 3 (bus/tools/config) MUST delete each module from
-# this list as they bring it up to strict typing. (Phase 2 removed `world.*`.)
+# All first-party packages are now held to the strict bar. Only the relocated
+# live-Ollama integration prototypes/smoke remain relaxed (legacy script style,
+# excluded from the default run).
 [[tool.mypy.overrides]]
 module = [
-    # agents/runtime.py is an unbuilt Sprint-4 skeleton (out of foundation scope).
-    "agents.*",
     "tests.integration.*",
 ]
 ignore_errors = true
@@ -118,7 +115,7 @@ markers = [
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
 branch = true
-source = ["world", "bus", "tools", "config", "core"]
+source = ["world", "bus", "tools", "config", "core", "agents", "observability"]
 omit = ["tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]

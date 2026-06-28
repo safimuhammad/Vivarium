@@ -36,11 +36,12 @@ jobs:
         run: ruff format --check .
 
       - name: Mypy (strict)
-        run: mypy core tests world bus tools config
+        run: mypy core tests world bus tools config agents observability
 
       - name: Pytest with coverage (integration excluded)
         run: >-
           pytest
           --cov=world --cov=bus --cov=tools --cov=config --cov=core
+          --cov=agents --cov=observability
           --cov-report=term-missing
           --cov-fail-under=90

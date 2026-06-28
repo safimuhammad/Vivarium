@@ -35,7 +35,7 @@ def test_toolcall_default_params_are_independent() -> None:
 def test_toolcall_uses_slots() -> None:
     call = ToolCall("wait")
     with pytest.raises(AttributeError):
-        call.unexpected = "boom"
+        call.unexpected = "boom"  # type: ignore[attr-defined]  # slots: no ad-hoc attrs
 
 
 def test_decision_defaults() -> None:
