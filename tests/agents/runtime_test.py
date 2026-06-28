@@ -182,6 +182,31 @@ async def test_decide_that_raises_rolls_back_perception(
     assert agent.alive
 
 
+async def test_decide_with_unschemad_tool_rolls_back_perception(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A registered tool lacking a TOOL_SCHEMAS entry must not break atomicity.
+
+    ``schemas_for()`` raising (e.g. KeyError for a dynamically-registered tool with
+    no schema) must be caught inside ``decide`` like any decide failure: roll back
+    the perception turn and end the breath gracefully, never leaving two
+    consecutive ``user`` turns that degrade the model.
+    """
+
+    async def rogue(world: WorldState, event_bus: EventBus, agent_id: str) -> str:
+        return "ok"  # pragma: no cover - schemas_for fails before this is invoked
+
+    populated_registry.register("rogue_tool_without_schema", rogue)
+    decider = ScriptedDecider([Decision(tool_calls=[ToolCall("wait")])])
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
+
+    await agent.breathe()  # must not raise despite the missing schema
+
+    assert [m["role"] for m in agent.lifecycle_history] == ["system"]
+    assert agent.breath_count == 1
+    assert agent.alive
+
+
 async def test_no_two_consecutive_user_turns_across_mixed_breaths(
     world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
 ) -> None:

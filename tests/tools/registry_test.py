@@ -95,12 +95,30 @@ async def test_invoke_tool_raising_is_wrapped_and_chained(registry: ToolRegistry
     assert isinstance(excinfo.value.__cause__, RuntimeError)
 
 
-async def test_invoke_bad_params_raise_toolerror(registry: ToolRegistry) -> None:
-    """Wrong/missing params (a ``TypeError``) surface as a chained ``ToolError``."""
+async def test_invoke_missing_required_param_returns_error_string(
+    registry: ToolRegistry,
+) -> None:
+    """A missing required param is the agent's mistake -> clean perception string.
+
+    A small local model routinely omits required params; this must not crash the
+    tool (raw ``TypeError`` -> ``ToolError``) but feed the model a correctable
+    ``"Error: ..."`` naming the missing param (CLAUDE.md §3).
+    """
     registry.register("attack", attack)
-    with pytest.raises(ToolError) as excinfo:
-        await registry.invoke("attack", "wanderer_001", {})  # missing 'target'
-    assert isinstance(excinfo.value.__cause__, TypeError)
+    result = await registry.invoke("attack", "wanderer_001", {})  # missing 'target'
+    assert result.startswith("Error:")
+    assert "target" in result
+
+
+async def test_invoke_drops_unknown_kwargs(registry: ToolRegistry) -> None:
+    """Hallucinated extra kwargs are dropped so the tool still runs (the seed bug).
+
+    The model emitting ``look_around(region=...)`` (a param the tool doesn't accept)
+    must not crash it; the noise is dropped and the action executes normally.
+    """
+    register_builtins(registry)
+    result = await registry.invoke("look_around", "wanderer_001", {"region": "alpha"})
+    assert "alpha" in result  # ran successfully, returned perception (no raise)
 
 
 async def test_invoke_tool_raising_toolerror_propagates_unwrapped(

@@ -184,8 +184,8 @@ class Agent:
             The :class:`~agents.decider.Decision`, or ``None`` if the decider
             failed (the failure is logged).
         """
-        tools = schemas_for(self._tool_names())
         try:
+            tools = schemas_for(self._tool_names())
             decision = await self.decider.decide(self.lifecycle_history, tools)
         except Exception:
             logger.exception("Decider failed for agent %r; ending breath gracefully", self.agent_id)
