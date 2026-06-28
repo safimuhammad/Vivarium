@@ -84,7 +84,7 @@ show_error_codes = true
 # this list as they bring it up to strict typing. (Phase 2 removed `world.*`.)
 [[tool.mypy.overrides]]
 module = [
-    "tools.*",
+    # agents/runtime.py is an unbuilt Sprint-4 skeleton (out of foundation scope).
     "agents.*",
     "tests.integration.*",
 ]

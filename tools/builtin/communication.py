@@ -1,7 +1,28 @@
+"""Communication tools: ``speak`` (broadcast/whisper) and ``wait`` (rest).
+
+Tool functions follow the uniform Vivarium closure signature
+``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
+natural-language result string for the acting agent's LLM. All randomness routes
+through ``world.rng`` so runs are reproducible from a seed.
+"""
+
+from __future__ import annotations
+
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
+from core.constants import SPEAK_ENERGY_COST
 from world.world import WorldState
-import random
+
+WAIT_PHRASES: tuple[str, ...] = (
+    "Resting",
+    "Rejuvinating",
+    "Looksmaxing",
+    "Observing a peaceful world",
+    "The world is chaotic take a break",
+    "Contemplating",
+    "Lost in thoughts",
+)
+"""Flavour phrases for :func:`wait`; one is chosen via ``world.rng`` per call."""
 
 
 async def speak(
@@ -9,36 +30,68 @@ async def speak(
     event_bus: EventBus,
     agent_id: str,
     message: str,
-    target: str = None,
-):
+    target: str | None = None,
+) -> str:
+    """Utter a message, either broadcast to the region or whispered to one agent.
+
+    Mutates world state:
+        * Subtracts :data:`~core.constants.SPEAK_ENERGY_COST` from the speaker's
+          energy.
+
+    Emits events:
+        * One ``"speak"`` event stamped with ``world.now()``. Scope is
+          :attr:`~bus.events.ScopeType.TARGETED` (to ``target``) when a target is
+          given, otherwise :attr:`~bus.events.ScopeType.LOCAL` (to the speaker's
+          region).
+
+    Args:
+        world: The live world state.
+        event_bus: The bus the resulting event is published to.
+        agent_id: Id of the speaking agent.
+        message: The message text carried in the event payload.
+        target: Optional id of a single recipient; ``None`` broadcasts locally.
+
+    Returns:
+        A confirmation sentence naming the destination, or an ``"Error: "`` string
+        if the speaker is unknown.
+    """
     agent_state = world.get_agent(agent_id)
     if not agent_state:
-        return "Error speaking, Agent does not exist"
+        return "Error: Cannot speak, agent does not exist."
+
     event = Event(
         type="speak",
         source=agent_state.id,
         payload={"message": message},
         scope=ScopeType.TARGETED if target else ScopeType.LOCAL,
         target=target,
+        timestamp=world.now(),
     )
-    if world.modify_agent_energy(agent_id, -0.5):
-        await event_bus.publish(event)
-        destination = target if target else f"Region|{agent_state.current_position}"
-        return f"Your message was sent to {destination}"
+    world.modify_agent_energy(agent_id, -SPEAK_ENERGY_COST)
+    await event_bus.publish(event)
+    destination = target if target else f"Region|{agent_state.current_position}"
+    return f"Your message was sent to {destination}"
 
 
-async def wait(world: WorldState, event_bus: EventBus, agent_id: str):
-    wait_phrase = [
-        "Resting",
-        "Rejuvinating",
-        "Looksmaxing",
-        "Observing a peaceful world",
-        "The world is chaotic take a break",
-        "Contemplating",
-        "Lost in thoughts",
-    ]
-    wait_mesage = (
-        f"{random.choice(wait_phrase)}\n"
-        f"As Time passes by slowly, use `look_around` for stats and nearby information"
+async def wait(world: WorldState, event_bus: EventBus, agent_id: str) -> str:
+    """Pass time without acting, returning a randomized rest phrase.
+
+    Mutates world state:
+        * Nothing.
+
+    Emits events:
+        * Nothing.
+
+    Args:
+        world: The live world state (used only for its seeded ``rng``).
+        event_bus: Unused; present for the uniform tool signature.
+        agent_id: Id of the resting agent; unused beyond the uniform signature.
+
+    Returns:
+        A flavour phrase (selected via ``world.rng`` for reproducibility) plus a
+        hint to use ``look_around``.
+    """
+    return (
+        f"{world.rng.choice(WAIT_PHRASES)}\n"
+        "As Time passes by slowly, use `look_around` for stats and nearby information"
     )
-    return wait_mesage

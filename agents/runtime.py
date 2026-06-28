@@ -1,7 +1,7 @@
-from world.world import WorldState
 from bus.event_bus import EventBus
-from world.agents import AgentState, AgentStatus
 from tools.registry import ToolRegistry
+from world.agents import AgentState, AgentStatus
+from world.world import WorldState
 
 
 class Agent:
@@ -14,9 +14,9 @@ class Agent:
         model: str,
         pace: float,
     ) -> None:
-        self.lifecycle_history: list[dict] = (
-            []
-        )  # renamed from chat_history more suited for living breathing agents
+        self.lifecycle_history: list[
+            dict
+        ] = []  # renamed from chat_history more suited for living breathing agents
         self.world = world
         self.event_bus = event_bus
         self.tool_registry = tool_registry
