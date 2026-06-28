@@ -7,18 +7,23 @@ tests can use the fast fake with confidence.
 
 from __future__ import annotations
 
+import itertools
 import math
 
 import pytest
 
 from memory.embedding import FakeEmbeddingFunction
-from memory.vector_store import ChromaVectorStore, FakeVectorStore
+from memory.vector_store import ChromaVectorStore, FakeVectorStore, VectorStore
+
+# chromadb's EphemeralClient shares one in-memory backend per process, so each
+# test must use a UNIQUE collection name to stay isolated.
+_collection_counter = itertools.count()
 
 
-def _store(kind: str):
+def _store(kind: str) -> VectorStore:
     ef = FakeEmbeddingFunction(dim=16)
     if kind == "chroma":
-        return ChromaVectorStore("test", ef)  # EphemeralClient, in-memory
+        return ChromaVectorStore(f"test-{next(_collection_counter)}", ef)  # in-memory, isolated
     return FakeVectorStore(ef)
 
 
@@ -54,3 +59,14 @@ def test_empty_ids_returns_empty(kind: str) -> None:
     store = _store(kind)
     store.upsert("a", "hello")
     assert store.distances("hello", []) == {}
+
+
+@pytest.mark.parametrize("kind", ["fake", "chroma"])
+def test_count_reflects_upserts(kind: str) -> None:
+    store = _store(kind)
+    assert store.count() == 0
+    store.upsert("a", "x")
+    store.upsert("b", "y")
+    assert store.count() == 2
+    store.upsert("a", "x updated")  # same id -> idempotent, still 2
+    assert store.count() == 2

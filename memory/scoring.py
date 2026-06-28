@@ -44,15 +44,107 @@ def score_memories(
     """
     if not items:
         return []
-    recency = {m.id: recency_decay ** max(0, current_breath - m.created_breath) for m in items}
-    importance = {m.id: importance_weights[m.importance] for m in items}
-    relevance = {m.id: _distance_to_relevance(distances.get(m.id)) for m in items}
-
-    scored = _combined_scores(
-        items, recency, importance, relevance, w_recency, w_importance, w_relevance
+    scored = _score_map(
+        items,
+        distances,
+        current_breath,
+        w_recency=w_recency,
+        w_importance=w_importance,
+        w_relevance=w_relevance,
+        recency_decay=recency_decay,
+        importance_weights=importance_weights,
     )
     ranked = sorted(items, key=lambda m: scored[m.id], reverse=True)
     return ranked[:k]
+
+
+def select_memories(
+    items: list[MemoryItem],
+    distances: dict[str, float],
+    current_breath: int,
+    k: int,
+    *,
+    reserved: int,
+    w_recency: float,
+    w_importance: float,
+    w_relevance: float,
+    recency_decay: float,
+    importance_weights: dict[Importance, float],
+) -> list[MemoryItem]:
+    """Select up to ``k`` memories, reserving ``reserved`` slots for the most important.
+
+    The reserved slots guarantee that the most biographically important memories
+    surface even when many recent + similar memories would otherwise crowd them out
+    of a pure top-k (the benchmark's "grudge" failure). The remaining slots are
+    filled by the full combined score; the final list is presented in descending
+    combined-score order.
+
+    Args:
+        items: Candidate memories.
+        distances: ``{item.id: vector distance}`` (lower = more relevant).
+        current_breath: The agent's current subjective time.
+        k: Maximum number of memories to return.
+        reserved: How many slots (clamped to ``[0, k]``) to reserve for the
+            highest-importance memories (tie-broken by recency, then score).
+        w_recency: Weight on the recency term.
+        w_importance: Weight on the importance term.
+        w_relevance: Weight on the relevance term.
+        recency_decay: Per-breath exponential decay base for recency.
+        importance_weights: Numeric weight per :class:`Importance`.
+
+    Returns:
+        Up to ``k`` items ordered by descending combined score.
+    """
+    if not items or k <= 0:
+        return []
+    scored = _score_map(
+        items,
+        distances,
+        current_breath,
+        w_recency=w_recency,
+        w_importance=w_importance,
+        w_relevance=w_relevance,
+        recency_decay=recency_decay,
+        importance_weights=importance_weights,
+    )
+    by_score = sorted(items, key=lambda m: scored[m.id], reverse=True)
+    reserved = max(0, min(reserved, k))
+    if reserved == 0:
+        return by_score[:k]
+
+    by_importance = sorted(
+        items,
+        key=lambda m: (importance_weights[m.importance], m.created_breath, scored[m.id]),
+        reverse=True,
+    )
+    chosen: dict[str, MemoryItem] = {}
+    for memory in by_importance[:reserved]:
+        chosen[memory.id] = memory
+    for memory in by_score:
+        if len(chosen) >= k:
+            break
+        chosen.setdefault(memory.id, memory)
+    return sorted(chosen.values(), key=lambda m: scored[m.id], reverse=True)
+
+
+def _score_map(
+    items: list[MemoryItem],
+    distances: dict[str, float],
+    current_breath: int,
+    *,
+    w_recency: float,
+    w_importance: float,
+    w_relevance: float,
+    recency_decay: float,
+    importance_weights: dict[Importance, float],
+) -> dict[str, float]:
+    """Return ``{id: combined salience score}`` for every item (shared by both rankers)."""
+    recency = {m.id: recency_decay ** max(0, current_breath - m.created_breath) for m in items}
+    importance = {m.id: importance_weights[m.importance] for m in items}
+    relevance = {m.id: _distance_to_relevance(distances.get(m.id)) for m in items}
+    return _combined_scores(
+        items, recency, importance, relevance, w_recency, w_importance, w_relevance
+    )
 
 
 def _distance_to_relevance(distance: float | None) -> float:

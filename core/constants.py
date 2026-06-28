@@ -195,6 +195,15 @@ REFLECT_RECAP_TURNS: Final[int] = 6
 RETRIEVAL_K: Final[int] = 5
 """Number of memories surfaced into the perception turn per breath. [design]."""
 
+RETRIEVAL_RESERVED_SLOTS: Final[int] = 1
+"""Slots (of RETRIEVAL_K) reserved for the most-important memories. [tuned: T13].
+
+Guarantees a biographically salient memory (a grudge, a bond) surfaces even when
+many recent + semantically-similar memories would otherwise crowd it out of the
+top-k. Benchmark (2026-06-28) showed equal-weight scoring buried such a memory; a
+reserved slot fixes it robustly, independent of how many distractors exist.
+"""
+
 RECENCY_DECAY: Final[float] = 0.97
 """Per-breath exponential decay base for the recency term (subjective time). [design].
 

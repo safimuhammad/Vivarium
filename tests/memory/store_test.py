@@ -99,6 +99,59 @@ def test_init_raises_memory_store_error_when_dir_unmakeable(tmp_path: Path) -> N
         )
 
 
+class _CountingVectorStore:
+    """Wraps a FakeVectorStore and counts upserts, to prove reopen skips re-embedding."""
+
+    def __init__(self, inner: FakeVectorStore) -> None:
+        self._inner = inner
+        self.upserts = 0
+
+    def upsert(self, id: str, text: str) -> None:
+        self.upserts += 1
+        self._inner.upsert(id, text)
+
+    def distances(self, query: str, ids: list[str]) -> dict[str, float]:
+        return self._inner.distances(query, ids)
+
+    def count(self) -> int:
+        return self._inner.count()
+
+
+def test_reopen_skips_reembedding_when_vectors_present(tmp_path: Path) -> None:
+    vector_store = _CountingVectorStore(FakeVectorStore(FakeEmbeddingFunction()))
+    first = FileMemoryStore(
+        "wanderer_001", tmp_path, persona=PERSONA, vector_store=vector_store, clock=lambda: 0.0
+    )
+    first.append_memory("one", Importance.LOW, 1)
+    first.append_memory("two", Importance.LOW, 2)
+    upserts_after_appends = vector_store.upserts  # 2
+
+    # Reopen over the SAME (persistent-like) vector store that already holds vectors.
+    second = FileMemoryStore(
+        "wanderer_001", tmp_path, persona=PERSONA, vector_store=vector_store, clock=lambda: 0.0
+    )
+
+    assert vector_store.upserts == upserts_after_appends  # no re-embedding on reopen
+    assert len(second.retrieve("one", current_breath=3, k=5)) >= 1
+
+
+def test_reopen_rebuilds_when_vectors_missing(tmp_path: Path) -> None:
+    # First store persists to jsonl with one vector store...
+    seeding = FileMemoryStore(
+        "wanderer_001", tmp_path, persona=PERSONA,
+        vector_store=FakeVectorStore(FakeEmbeddingFunction()), clock=lambda: 0.0,
+    )
+    seeding.append_memory("durable", Importance.HIGH, 1)
+
+    # ...reopened with a FRESH (empty) vector store -> count < len -> rebuild.
+    rebuilt = _CountingVectorStore(FakeVectorStore(FakeEmbeddingFunction()))
+    reopened = FileMemoryStore(
+        "wanderer_001", tmp_path, persona=PERSONA, vector_store=rebuilt, clock=lambda: 0.0
+    )
+    assert rebuilt.upserts == 1  # the loaded item was re-embedded (self-heal)
+    assert reopened.retrieve("durable", current_breath=2, k=5)
+
+
 def test_null_store_is_inert() -> None:
     null = NullMemoryStore()
     assert null.load_identity() == ""

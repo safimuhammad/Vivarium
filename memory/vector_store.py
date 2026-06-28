@@ -32,6 +32,10 @@ class VectorStore(Protocol):
         """Return ``{id: distance}`` for every id in ``ids`` (missing → ``inf``)."""
         ...
 
+    def count(self) -> int:
+        """Return how many vectors are currently stored."""
+        ...
+
 
 class ChromaVectorStore:
     """:class:`VectorStore` backed by a ChromaDB collection (cosine space).
@@ -107,6 +111,17 @@ class ChromaVectorStore:
         got = dict(zip(result["ids"][0], result["distances"][0], strict=True))
         return {identifier: float(got.get(identifier, math.inf)) for identifier in ids}
 
+    def count(self) -> int:
+        """Return the number of vectors in the collection.
+
+        Raises:
+            MemoryStoreError: If the underlying Chroma count fails.
+        """
+        try:
+            return int(self._collection.count())
+        except Exception as exc:
+            raise MemoryStoreError("vector count failed") from exc
+
 
 class FakeVectorStore:
     """In-memory cosine vector store for deterministic tests (no chromadb import)."""
@@ -128,6 +143,10 @@ class FakeVectorStore:
             vector = self._vectors.get(identifier)
             out[identifier] = math.inf if vector is None else 1.0 - _cosine(query_vector, vector)
         return out
+
+    def count(self) -> int:
+        """Return the number of stored vectors."""
+        return len(self._vectors)
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

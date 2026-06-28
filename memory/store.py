@@ -22,7 +22,7 @@ from core import constants
 from core.exceptions import MemoryStoreError
 from core.logging import get_logger
 from memory.models import Importance, MemoryItem
-from memory.scoring import score_memories
+from memory.scoring import select_memories
 from memory.vector_store import VectorStore
 
 logger = get_logger(__name__)
@@ -85,10 +85,14 @@ class FileMemoryStore:
         if not self._seed_path.exists():
             self._seed_path.write_text(persona, encoding="utf-8")
         self._items: list[MemoryItem] = self._load_items()
-        # Idempotent: ensures every persisted memory has a vector after a restart
-        # (the jsonl is the source of truth; the vector store is a rebuildable index).
-        for item in self._items:
-            self._vector_store.upsert(item.id, item.content)
+        # The jsonl is the source of truth; the vector store is a rebuildable index.
+        # Re-embedding every item on open is the dominant restart cost (benchmark
+        # T13: ~45s at N=1000), so skip it when the (persistent) store already holds
+        # every vector. A short store (fresh ephemeral, or a crash between the jsonl
+        # append and the upsert) triggers an idempotent full rebuild -- self-healing.
+        if self._vector_store.count() < len(self._items):
+            for item in self._items:
+                self._vector_store.upsert(item.id, item.content)
 
     def load_identity(self) -> str:
         """Return ``seed`` plus the self-narrative (if any), separated by a blank line."""
@@ -148,11 +152,12 @@ class FileMemoryStore:
         if not self._items:
             return []
         distances = self._vector_store.distances(query, [item.id for item in self._items])
-        return score_memories(
+        return select_memories(
             self._items,
             distances,
             current_breath,
             k,
+            reserved=constants.RETRIEVAL_RESERVED_SLOTS,
             w_recency=constants.W_RECENCY,
             w_importance=constants.W_IMPORTANCE,
             w_relevance=constants.W_RELEVANCE,

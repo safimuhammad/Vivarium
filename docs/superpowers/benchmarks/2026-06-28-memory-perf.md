@@ -33,6 +33,55 @@ Hardware: the dev Apple-Silicon Mac. Each run is appended below with its dials.
 
 ---
 
+## Optimization log (Task 13)
+
+Two benchmark-driven optimizations, each measured before -> after on the real
+(MiniLM + Chroma) backend. (The three `## Run` blocks below are baseline, then
+post-quality-fix, then final-with-restart, in order.)
+
+### 1. Quality -- a salient memory must not be buried (reserved salience slot)
+
+The equal-weight scorer let one HIGH-importance grudge (old, dissimilar) be crowded
+out of the top-5 by recent + similar low-importance chatter. Fix: reserve
+`RETRIEVAL_RESERVED_SLOTS=1` of `RETRIEVAL_K` for the highest-importance memory and
+fill the rest by full score (`memory.scoring.select_memories`). Robust to any number
+of distractors -- it does not depend on out-weighing them.
+
+| grudge in top-k? | before | after |
+|--|--|--|
+| full scorer | **no** | **yes** |
+| relevance-only (pure RAG) | no | no |
+
+The full scorer now surfaces what pure RAG cannot -- the salience thesis, on real
+embeddings.
+
+### 2. Restart cost -- skip re-embedding on reopen
+
+`FileMemoryStore.__init__` re-embedded every memory on open. Fix: a `VectorStore.count()`
+check skips the rebuild when the (persistent) store already holds the vectors; a
+short store self-heals with a full idempotent rebuild.
+
+| N | reopen before (~re-embed all) | reopen after (warm) |
+|--:|--:|--:|
+| 1000 | ~45,300 ms | **4.4 ms** |
+
+~10,000x faster restart -- decisive for the "run forever / crash recovery" goal.
+
+### Targets: met
+
+| Metric | Target | Result |
+|---|---|---|
+| scorer @ N=1k | < 2 ms | 0.5 ms |
+| retrieve per breath | << LLM decode | ~50 ms (embedding-bound) vs decode in seconds |
+| jsonl footprint | < ~200 B/mem | 174 B/mem |
+| warm restart | fast | 4.4 ms @ N=1k |
+| quality | full beats pure RAG | full=yes, RAG=no |
+
+The only remaining cost is the MiniLM embed (~45 ms/op), which is model-inherent and
+negligible against an LLM breath; no further iteration is worthwhile.
+
+---
+
 ## Run -- backend=`chroma`, scales=[100, 1000] (68.5s total)
 
 Dials: RETRIEVAL_K=5, RECENCY_DECAY=0.97, REFLECT_EVERY_N_BREATHS=12, weights=(r=1.0, i=1.0, v=1.0)
@@ -62,3 +111,69 @@ Dials: RETRIEVAL_K=5, RECENCY_DECAY=0.97, REFLECT_EVERY_N_BREATHS=12, weights=(r
 | full (recency x importance x relevance) | no |
 | relevance-only (pure RAG) | no |
 | recency-only | no |
+
+## Run -- backend=`chroma`, scales=[100, 1000] (66.2s total)
+
+Dials: RETRIEVAL_K=5, RECENCY_DECAY=0.97, REFLECT_EVERY_N_BREATHS=12, weights=(r=1.0, i=1.0, v=1.0)
+
+### Latency & footprint -- backend=`chroma`
+| N | append ms (median/p95) | retrieve ms (median/p95) | jsonl B/mem | chroma dir KiB | RSS MiB |
+|--:|--:|--:|--:|--:|--:|
+| 100 | 46.70 / 52.29 | 45.71 / 47.57 | 172 | 568 | 312 |
+| 1000 | 50.41 / 57.11 | 55.55 / 58.85 | 174 | 4029 | 335 |
+
+### Scorer pure cost (no I/O)
+| N | score_memories us (median) |
+|--:|--:|
+| 100 | 48 |
+| 1000 | 530 |
+
+### Embedding latency -- backend=`chroma`
+| batch | ms total | ms/item |
+|--:|--:|--:|
+| 1 | 49.16 | 49.16 |
+| 8 | 126.37 | 15.80 |
+| 32 | 431.39 | 13.48 |
+
+### Retrieval quality -- the grudge case -- backend=`chroma`
+| ranker | grudge in top-k? |
+|--|--|
+| full (recency x importance x relevance) | yes |
+| relevance-only (pure RAG) | no |
+| recency-only | no |
+
+## Run -- backend=`chroma`, scales=[100, 1000] (118.1s total)
+
+Dials: RETRIEVAL_K=5, RECENCY_DECAY=0.97, REFLECT_EVERY_N_BREATHS=12, weights=(r=1.0, i=1.0, v=1.0)
+
+### Latency & footprint -- backend=`chroma`
+| N | append ms (median/p95) | retrieve ms (median/p95) | jsonl B/mem | chroma dir KiB | RSS MiB |
+|--:|--:|--:|--:|--:|--:|
+| 100 | 46.00 / 49.21 | 46.30 / 52.50 | 172 | 568 | 309 |
+| 1000 | 49.68 / 53.93 | 49.72 / 54.98 | 174 | 4029 | 349 |
+
+### Scorer pure cost (no I/O)
+| N | score_memories us (median) |
+|--:|--:|
+| 100 | 55 |
+| 1000 | 528 |
+
+### Embedding latency -- backend=`chroma`
+| batch | ms total | ms/item |
+|--:|--:|--:|
+| 1 | 44.99 | 44.99 |
+| 8 | 122.84 | 15.35 |
+| 32 | 375.77 | 11.74 |
+
+### Retrieval quality -- the grudge case -- backend=`chroma`
+| ranker | grudge in top-k? |
+|--|--|
+| full (recency x importance x relevance) | yes |
+| relevance-only (pure RAG) | no |
+| recency-only | no |
+
+### Restart cost (backend=`chroma`): warm reopen skips re-embedding
+| N | warm reopen ms | re-embed avoided ms (~N x single-embed) |
+|--:|--:|--:|
+| 100 | 2.1 | 4530 |
+| 1000 | 4.4 | 45304 |

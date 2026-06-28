@@ -8,7 +8,7 @@ beat similarity (the grudge case), recency can beat both, etc.
 from __future__ import annotations
 
 from memory.models import Importance, MemoryItem
-from memory.scoring import score_memories
+from memory.scoring import score_memories, select_memories
 
 WEIGHTS = {Importance.LOW: 0.3, Importance.MEDIUM: 0.6, Importance.HIGH: 1.0}
 
@@ -86,3 +86,55 @@ def test_missing_distance_is_treated_as_least_relevant() -> None:
 
 def test_empty_items_returns_empty() -> None:
     assert _score([], {}, breath=0, k=5) == []
+
+
+def test_select_memories_reserves_importance_slot() -> None:
+    # One old, dissimilar, HIGH-importance grudge vs many recent, similar, LOW ones.
+    grudge = _item("grudge", 0, Importance.HIGH)
+    chitchat = [_item(f"c{i}", 5 + i, Importance.LOW) for i in range(6)]
+    items = [grudge, *chitchat]
+    distances = {"grudge": 0.9, **{f"c{i}": 0.05 for i in range(6)}}
+
+    # Pure top-k buries the grudge (the benchmark failure).
+    pure = score_memories(
+        items, distances, 12, 3,
+        w_recency=1.0, w_importance=1.0, w_relevance=1.0,
+        recency_decay=0.97, importance_weights=WEIGHTS,
+    )
+    assert "grudge" not in [m.id for m in pure]
+
+    # A reserved slot guarantees the salient memory surfaces.
+    reserved = select_memories(
+        items, distances, 12, 3, reserved=1,
+        w_recency=1.0, w_importance=1.0, w_relevance=1.0,
+        recency_decay=0.97, importance_weights=WEIGHTS,
+    )
+    assert "grudge" in [m.id for m in reserved]
+    assert len(reserved) == 3
+
+
+def test_select_memories_zero_reserved_matches_pure_topk() -> None:
+    items = [_item(str(i), i, Importance.MEDIUM) for i in range(5)]
+    distances = {str(i): (i % 3) / 3.0 for i in range(5)}
+    pure = score_memories(
+        items, distances, 4, 3,
+        w_recency=1.0, w_importance=1.0, w_relevance=1.0,
+        recency_decay=0.97, importance_weights=WEIGHTS,
+    )
+    reserved0 = select_memories(
+        items, distances, 4, 3, reserved=0,
+        w_recency=1.0, w_importance=1.0, w_relevance=1.0,
+        recency_decay=0.97, importance_weights=WEIGHTS,
+    )
+    assert [m.id for m in reserved0] == [m.id for m in pure]
+
+
+def test_select_memories_empty_returns_empty() -> None:
+    assert (
+        select_memories(
+            [], {}, 0, 5, reserved=1,
+            w_recency=1.0, w_importance=1.0, w_relevance=1.0,
+            recency_decay=0.97, importance_weights=WEIGHTS,
+        )
+        == []
+    )

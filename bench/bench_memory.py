@@ -28,6 +28,7 @@ import statistics
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from resource import RUSAGE_SELF, getrusage
@@ -181,6 +182,52 @@ def bench_embedding(backend: str) -> Section:
     return section
 
 
+def bench_restart(scales: tuple[int, ...]) -> Section:
+    """Measure warm-reopen time (vectors already persisted) vs the re-embed it avoids.
+
+    The "run forever / crash recovery" path: reopening a populated persistent store
+    must not re-embed every memory. We time the reopen and contrast it with the
+    embedding work it skips (~N single embeds).
+    """
+    section = Section("Restart cost (backend=`chroma`): warm reopen skips re-embedding")
+    section.lines.append("| N | warm reopen ms | re-embed avoided ms (~N x single-embed) |")
+    section.lines.append("|--:|--:|--:|")
+    single_embed = _single_embed_ms()
+    for n in scales:
+        root = Path(tempfile.mkdtemp(prefix="vivbench_restart_"))
+        try:
+            store = _make_store("chroma", root)
+            for i in range(n):
+                store.append_memory(_content(i), Importance.MEDIUM, i)
+            start = time.perf_counter()
+            _make_store("chroma", root)  # reopen same path -> vectors present -> skip
+            warm = _ms(time.perf_counter() - start)
+            section.lines.append(f"| {n} | {warm:.1f} | {n * single_embed:.0f} |")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+    return section
+
+
+def _single_embed_ms() -> float:
+    """Median ms for one real single-text embed (used to estimate avoided work)."""
+    root = Path(tempfile.mkdtemp(prefix="vivbench_se_"))
+    try:
+        _, embedder = _make_backend("chroma", root)
+        embedder(["warmup"])
+        timings = [
+            _ms(_timed(lambda: embedder(["a sentence about the road and trust"]))) for _ in range(5)
+        ]
+        return statistics.median(timings)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _timed(fn: Callable[[], object]) -> float:
+    start = time.perf_counter()
+    fn()
+    return time.perf_counter() - start
+
+
 def bench_quality(backend: str) -> Section:
     """Compare the full scorer vs relevance-only vs recency-only on the grudge case.
 
@@ -263,12 +310,15 @@ def _p(values: list[float]) -> str:
 
 def run(backend: str, scales: tuple[int, ...]) -> list[Section]:
     """Run every benchmark section and return them in report order."""
-    return [
+    sections = [
         bench_latency_and_footprint(backend, scales),
         bench_scorer_pure(scales),
         bench_embedding(backend),
         bench_quality(backend),
     ]
+    if backend == "chroma":  # restart cost is only meaningful for the persistent store
+        sections.append(bench_restart(scales))
+    return sections
 
 
 def render(sections: list[Section], backend: str, scales: tuple[int, ...], elapsed: float) -> str:
