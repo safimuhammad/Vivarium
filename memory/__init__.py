@@ -10,5 +10,13 @@ injectable seam so unit tests stay deterministic and network-free.
 from __future__ import annotations
 
 from memory.models import Importance, MemoryItem
+from memory.store import NULL_MEMORY, FileMemoryStore, MemoryStore, NullMemoryStore
 
-__all__ = ["Importance", "MemoryItem"]
+__all__ = [
+    "NULL_MEMORY",
+    "FileMemoryStore",
+    "Importance",
+    "MemoryItem",
+    "MemoryStore",
+    "NullMemoryStore",
+]
