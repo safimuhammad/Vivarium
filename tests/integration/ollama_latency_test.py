@@ -11,6 +11,13 @@ import statistics
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import pytest
+
+# Live-Ollama prototype: excluded from the default/CI run. The heavy work runs
+# only under the ``__main__`` guard, so pytest can collect this module without a
+# running Ollama instance.
+pytestmark = pytest.mark.integration
+
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "dolphin3"
 NUM_AGENTS = 5

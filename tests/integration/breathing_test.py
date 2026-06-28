@@ -10,6 +10,13 @@ from rich.rule import Rule
 from rich.box import ROUNDED
 from rich.live import Live
 
+import pytest
+
+# Live-Ollama prototype: excluded from the default/CI run. The heavy work runs
+# only under the ``__main__`` guard, so pytest can collect this module without a
+# running Ollama instance.
+pytestmark = pytest.mark.integration
+
 console = Console()
 
 
