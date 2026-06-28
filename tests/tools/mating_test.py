@@ -125,6 +125,83 @@ async def test_initiate_over_commit_materials_returns_error(
     assert result.startswith("Error:")
 
 
+async def test_initiate_non_dict_resources_returns_error_no_effect(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A non-dict ``resources`` (model sent a string/list) is a clean Error, no crash."""
+    result = await initiate_mating(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        message="be mine",
+        resources="energy:50",  # type: ignore[arg-type]  # malformed model output
+    )
+    assert result.startswith("Error:")
+    initiator = world.get_agent("wanderer_001")
+    assert initiator is not None and initiator.current_energy == 100.0  # untouched
+    assert world.get_agent_proposals("wanderer_001", "wanderer_002") == {}
+
+
+async def test_initiate_negative_amount_returns_invalid_no_free_energy(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A negative commitment must not become free energy for the initiator."""
+    result = await initiate_mating(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        message="be mine",
+        resources={ResourceTypes.ENERGY: -50.0},
+    )
+    assert result.startswith("Invalid:")
+    initiator = world.get_agent("wanderer_001")
+    assert initiator is not None and initiator.current_energy == 100.0  # no free energy
+    assert world.get_agent_proposals("wanderer_001", "wanderer_002") == {}
+
+
+async def test_initiate_duplicate_proposal_returns_invalid_no_double_deduct(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A second proposal to the same target must not double-deduct or ghost a target."""
+    committed = {ResourceTypes.ENERGY: 20.0}
+    first = await initiate_mating(
+        world, event_bus, "wanderer_001", target="wanderer_002", message="1", resources=committed
+    )
+    assert first.startswith("Successfully")
+    second = await initiate_mating(
+        world, event_bus, "wanderer_001", target="wanderer_002", message="2", resources=committed
+    )
+    assert second.startswith("Invalid:")
+    initiator = world.get_agent("wanderer_001")
+    assert initiator is not None and initiator.current_energy == 80.0  # deducted once, not twice
+    assert world.get_proposed_targets("wanderer_001") == ["wanderer_002"]  # no phantom entry
+
+
+async def test_accept_single_resource_proposal_spawns_without_crash(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A proposal committing only ONE resource type must not crash on accept."""
+    await initiate_mating(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        message="be mine",
+        resources={ResourceTypes.ENERGY: 20.0},  # energy only, no materials
+    )
+    event_bus.get_events("wanderer_002")
+
+    result = await accept_mating(
+        world, event_bus, "wanderer_002", target="wanderer_001", message="yes!"
+    )
+    assert result.startswith("Successfully accepted mating")
+    offspring = _spawned_offspring(world, {"wanderer_001", "wanderer_002"})
+    assert offspring.current_energy == 20.0 * MATING_OFFSPRING_MULTIPLIER
+    assert offspring.current_materials == 0.0  # missing type defaults to zero, not a crash
+
+
 # ---- reject_mating --------------------------------------------------------
 
 

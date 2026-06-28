@@ -66,6 +66,33 @@ async def test_speak_missing_agent_returns_error(world: WorldState, event_bus: E
     assert event_bus.get_events("wanderer_002") == []
 
 
+async def test_speak_empty_message_is_rejected(world: WorldState, event_bus: EventBus) -> None:
+    """An empty or whitespace-only message is rejected: no charge, no event."""
+    for blank in ("", "   ", "\n\t"):
+        result = await speak(world, event_bus, "wanderer_001", message=blank)
+        assert result.startswith("Invalid:")
+
+    speaker = world.get_agent("wanderer_001")
+    assert speaker is not None
+    assert speaker.current_energy == 100.0  # untouched across every rejection
+    assert event_bus.get_events("wanderer_001") == []
+    assert event_bus.get_events("wanderer_002") == []
+
+
+async def test_speak_whisper_to_nonexistent_target_returns_error(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Whispering to an unknown target errors out: no charge, no dropped event."""
+    result = await speak(world, event_bus, "wanderer_001", message="psst", target="ghost")
+    assert result.startswith("Error:")
+
+    speaker = world.get_agent("wanderer_001")
+    assert speaker is not None
+    assert speaker.current_energy == 100.0  # not charged for an undeliverable whisper
+    assert event_bus.get_events("wanderer_001") == []
+    assert event_bus.get_events("wanderer_002") == []
+
+
 async def test_wait_returns_phrase_and_emits_no_event(
     world: WorldState, event_bus: EventBus
 ) -> None:

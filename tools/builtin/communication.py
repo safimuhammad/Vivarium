@@ -52,12 +52,24 @@ async def speak(
         target: Optional id of a single recipient; ``None`` broadcasts locally.
 
     Returns:
-        A confirmation sentence naming the destination, or an ``"Error: "`` string
-        if the speaker is unknown.
+        A confirmation sentence naming the destination, or a rejection string:
+        ``"Error: "`` if the speaker is unknown or a whisper ``target`` does not
+        exist, or ``"Invalid: "`` if the message is empty/blank. On any rejection
+        path no energy is deducted and no event is published.
     """
     agent_state = world.get_agent(agent_id)
     if not agent_state:
         return "Error: Cannot speak, agent does not exist."
+
+    # Validate before mutating: an empty/blank message would broadcast a
+    # semantically empty perception to every regional agent at full energy cost.
+    if not isinstance(message, str) or not message.strip():
+        return "Invalid: Cannot speak — message must be a non-empty string."
+
+    # A whisper to an absent target would be silently dropped by the bus's
+    # TARGETED routing, charging the speaker for an undelivered message.
+    if target is not None and world.get_agent(target) is None:
+        return f"Error: Cannot whisper — agent {target!r} does not exist."
 
     event = Event(
         type="speak",

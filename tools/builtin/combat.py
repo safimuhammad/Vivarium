@@ -12,6 +12,7 @@ from __future__ import annotations
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import ATTACK_DAMAGE, ATTACK_ENERGY_COST
+from world.agents import AgentStatus
 from world.world import WorldState
 
 
@@ -38,13 +39,18 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
 
     Returns:
         A success sentence on a landed attack; an ``"Error: "`` string if either
-        agent is unknown; an ``"Invalid: "`` string if the target is in another
-        region or the attacker lacks the energy to attack.
+        agent is unknown; an ``"Invalid: "`` string if the attacker targets
+        itself, the target is already dead, the target is in another region, or
+        the attacker lacks the energy to attack.
     """
     attacker_agent = world.get_agent(agent_id)
     target_agent = world.get_agent(target)
     if not attacker_agent or not target_agent:
         return "Error: Can't find Agent in the world."
+    if attacker_agent.id == target_agent.id:
+        return "Invalid: You cannot attack yourself."
+    if target_agent.status is AgentStatus.DEAD:
+        return f"Invalid: {target_agent.name} is already dead — there is nothing to attack."
     if attacker_agent.current_position != target_agent.current_position:
         return f"Invalid: Can't attack outside the region {attacker_agent.current_position}"
     if attacker_agent.current_energy < ATTACK_ENERGY_COST:

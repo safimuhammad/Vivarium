@@ -23,6 +23,7 @@ phase, not fixed.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from faker import Faker
@@ -33,6 +34,39 @@ from core.constants import AGENT_ID_CATEGORIES, MATING_OFFSPRING_MULTIPLIER
 from world.agents import AgentState, AgentStatus
 from world.regions import ResourceTypes
 from world.world import WorldState
+
+
+def _clean_committed_resources(resources: object) -> dict[ResourceTypes, float] | str:
+    """Validate and coerce a model-supplied resource commitment.
+
+    The decider is a messy local LLM, so ``resources`` may arrive as a non-dict, with
+    string keys (e.g. ``{"energy": 50}``), unknown resource types, or non-positive
+    amounts -- each of which would otherwise crash or silently corrupt the escrow.
+
+    Args:
+        resources: The raw, model-supplied commitment mapping.
+
+    Returns:
+        A clean ``{ResourceTypes: positive float}`` dict on success, or an
+        agent-facing ``"Error: "`` / ``"Invalid: "`` string describing the rejection.
+    """
+    if not isinstance(resources, dict) or not resources:
+        return "Error: 'resources' must be a non-empty mapping of resource type to amount."
+    cleaned: dict[ResourceTypes, float] = {}
+    for key, value in resources.items():
+        try:
+            resource_type = ResourceTypes(key)
+        except ValueError:
+            valid = ", ".join(r.value for r in ResourceTypes)
+            return f"Error: Unknown resource type {key!r}; valid resources are {valid}."
+        try:
+            amount = float(value)  # untrusted model input; the try/except is the guard
+        except (TypeError, ValueError):
+            return f"Error: Amount for {resource_type.value} must be a number, but got {value!r}."
+        if not math.isfinite(amount) or amount <= 0:
+            return f"Invalid: Amount for {resource_type.value} must be positive, but got {value!r}."
+        cleaned[resource_type] = amount
+    return cleaned
 
 
 async def initiate_mating(
@@ -73,19 +107,30 @@ async def initiate_mating(
     if not agent_init or not agent_target:
         return "Error: Agent not found in the world."
 
-    for resource_type, quantity in resources.items():
+    committed = _clean_committed_resources(resources)
+    if isinstance(committed, str):
+        return committed
+
+    if world.get_agent_proposals(agent_id, target):
+        return (
+            f"Invalid: You already have a pending mating proposal to "
+            f"Agent ID:{agent_target.id}|Agent Name:{agent_target.name}; "
+            f"wait for a response or let it expire before sending another."
+        )
+
+    for resource_type, quantity in committed.items():
         if resource_type == ResourceTypes.ENERGY and agent_init.current_energy < quantity:
             return f"Error: Committed {resource_type} more than currently available."
         if resource_type == ResourceTypes.MATERIALS and agent_init.current_materials < quantity:
             return f"Error: Committed {resource_type} more than currently available."
 
-    for resource_type, quantity in resources.items():
+    for resource_type, quantity in committed.items():
         if resource_type == ResourceTypes.ENERGY:
             world.modify_agent_energy(agent_init.id, -quantity)
         elif resource_type == ResourceTypes.MATERIALS:
             world.modify_agent_materials(agent_init.id, -quantity)
 
-    world.add_proposal(agent_init.id, target, resources)
+    world.add_proposal(agent_init.id, target, committed)
     event_message = Event(
         "mating_initiated",
         agent_init.id,
@@ -221,14 +266,11 @@ async def accept_mating(
                 f" Commit at least {quantity} {resource_type}"
             )
 
-    for resource_type, quantity in resources.items():
-        if resource_type == ResourceTypes.ENERGY:
-            world.modify_agent_energy(agent_accept.id, -quantity)
-        elif resource_type == ResourceTypes.MATERIALS:
-            world.modify_agent_materials(agent_accept.id, -quantity)
-
-    # New agent: category, id suffix and name all routed through world.rng so the
-    # offspring identity is reproducible from the world seed.
+    # Compute the offspring FULLY before mutating any world state: a single-type
+    # commitment (only energy or only materials) must default the missing type to
+    # zero, not crash mid-mutation and strand the acceptor's deducted resources
+    # (validate-before-mutate). Randomness (id suffix, Faker name) routes through
+    # world.rng so the offspring identity is reproducible from the world seed.
     offspring_id = f"{world.rng.choice(AGENT_ID_CATEGORIES)}_{world.rng.getrandbits(16):04x}"
     faker = Faker()
     faker.seed_instance(world.rng.getrandbits(32))
@@ -236,8 +278,8 @@ async def accept_mating(
     # Persona currently just concatenated; later phases will do LLM-based infusion.
     offspring_persona = f"{agent_init.persona}|{agent_accept.persona}"
     # Not exactly the sum committed -- some is "burned" in the process.
-    offspring_energy = resources.get(ResourceTypes.ENERGY) * MATING_OFFSPRING_MULTIPLIER
-    offspring_materials = resources.get(ResourceTypes.MATERIALS) * MATING_OFFSPRING_MULTIPLIER
+    offspring_energy = resources.get(ResourceTypes.ENERGY, 0.0) * MATING_OFFSPRING_MULTIPLIER
+    offspring_materials = resources.get(ResourceTypes.MATERIALS, 0.0) * MATING_OFFSPRING_MULTIPLIER
     offspring = AgentState(
         id=offspring_id,
         name=offspring_name,
@@ -247,6 +289,12 @@ async def accept_mating(
         current_materials=offspring_materials,
         status=AgentStatus.ALIVE,
     )
+
+    for resource_type, quantity in resources.items():
+        if resource_type == ResourceTypes.ENERGY:
+            world.modify_agent_energy(agent_accept.id, -quantity)
+        elif resource_type == ResourceTypes.MATERIALS:
+            world.modify_agent_materials(agent_accept.id, -quantity)
     world.add_agent(offspring)
     world.remove_proposal(agent_init.id, agent_accept.id)
     payload = {

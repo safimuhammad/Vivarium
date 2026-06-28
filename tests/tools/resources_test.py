@@ -263,3 +263,157 @@ async def test_harvest_in_unknown_region_returns_error(
         world, event_bus, "lost", resource_type=ResourceTypes.ENERGY, amount=5.0
     )
     assert result.startswith("Error:")
+
+
+# ---- amount coercion: harvest_resources -----------------------------------
+
+
+async def test_harvest_numeric_string_amount_succeeds(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A numeric-string amount (the model often sends ``"50"``) harvests normally."""
+    result = await harvest_resources(
+        world, event_bus, "wanderer_001", resource_type=ResourceTypes.ENERGY, amount="50"
+    )
+    agent = world.get_agent("wanderer_001")
+    region = world.get_region("alpha")
+    assert agent is not None and region is not None
+    assert agent.current_energy == 150.0  # 100 + 50
+    assert region.current_energy == 50.0  # 100 - 50
+    assert result.startswith("Successfully harvested")
+    assert len(event_bus.get_events("wanderer_001")) == 1
+
+
+async def test_harvest_non_numeric_amount_returns_error_no_mutation(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A non-numeric amount yields an ``Error:`` string without raising or mutating."""
+    result = await harvest_resources(
+        world, event_bus, "wanderer_001", resource_type=ResourceTypes.ENERGY, amount="five"
+    )
+    agent = world.get_agent("wanderer_001")
+    region = world.get_region("alpha")
+    assert agent is not None and region is not None
+    assert agent.current_energy == 100.0  # unchanged
+    assert region.current_energy == 100.0  # unchanged
+    assert result.startswith("Error:")
+    assert event_bus.get_events("wanderer_001") == []
+
+
+async def test_harvest_negative_amount_is_invalid_no_mutation(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A negative amount is a rule violation, not a reversed (deposit) flow."""
+    result = await harvest_resources(
+        world, event_bus, "wanderer_001", resource_type=ResourceTypes.ENERGY, amount=-30.0
+    )
+    agent = world.get_agent("wanderer_001")
+    region = world.get_region("alpha")
+    assert agent is not None and region is not None
+    assert agent.current_energy == 100.0  # unchanged
+    assert region.current_energy == 100.0  # unchanged
+    assert result.startswith("Invalid:")
+    assert event_bus.get_events("wanderer_001") == []
+
+
+async def test_harvest_zero_amount_is_invalid_no_event(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A zero amount is a pointless no-op and must not fire an event."""
+    result = await harvest_resources(
+        world, event_bus, "wanderer_001", resource_type=ResourceTypes.ENERGY, amount=0.0
+    )
+    agent = world.get_agent("wanderer_001")
+    region = world.get_region("alpha")
+    assert agent is not None and region is not None
+    assert agent.current_energy == 100.0  # unchanged
+    assert region.current_energy == 100.0  # unchanged
+    assert result.startswith("Invalid:")
+    assert event_bus.get_events("wanderer_001") == []
+
+
+# ---- amount coercion: transfer_resource -----------------------------------
+
+
+async def test_transfer_numeric_string_amount_succeeds(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A numeric-string amount transfers normally between co-located agents."""
+    result = await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount="40",
+    )
+    sender = world.get_agent("wanderer_001")
+    receiver = world.get_agent("wanderer_002")
+    assert sender is not None and receiver is not None
+    assert sender.current_energy == 60.0  # 100 - 40
+    assert receiver.current_energy == 140.0  # 100 + 40
+    assert result.startswith("Successfully transferred")
+    assert len(event_bus.get_events("wanderer_002")) == 1
+
+
+async def test_transfer_non_numeric_amount_returns_error_no_mutation(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A non-numeric amount yields an ``Error:`` string without raising or mutating."""
+    result = await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount="five",
+    )
+    sender = world.get_agent("wanderer_001")
+    receiver = world.get_agent("wanderer_002")
+    assert sender is not None and receiver is not None
+    assert sender.current_energy == 100.0  # unchanged
+    assert receiver.current_energy == 100.0  # unchanged
+    assert result.startswith("Error:")
+    assert event_bus.get_events("wanderer_002") == []
+
+
+async def test_transfer_negative_amount_is_invalid_no_mutation(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A negative amount must not reverse the flow and drain the receiver."""
+    result = await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount=-30.0,
+    )
+    sender = world.get_agent("wanderer_001")
+    receiver = world.get_agent("wanderer_002")
+    assert sender is not None and receiver is not None
+    assert sender.current_energy == 100.0  # unchanged
+    assert receiver.current_energy == 100.0  # unchanged
+    assert result.startswith("Invalid:")
+    assert event_bus.get_events("wanderer_002") == []
+
+
+async def test_transfer_zero_amount_is_invalid_no_event(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A zero amount is a pointless no-op and must not fire an event."""
+    result = await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount=0.0,
+    )
+    sender = world.get_agent("wanderer_001")
+    receiver = world.get_agent("wanderer_002")
+    assert sender is not None and receiver is not None
+    assert sender.current_energy == 100.0  # unchanged
+    assert receiver.current_energy == 100.0  # unchanged
+    assert result.startswith("Invalid:")
+    assert event_bus.get_events("wanderer_002") == []

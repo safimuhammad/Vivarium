@@ -17,6 +17,7 @@ from bus.event_bus import EventBus
 from bus.events import ScopeType
 from core.constants import ATTACK_DAMAGE, ATTACK_ENERGY_COST
 from tools.builtin.combat import attack
+from world.agents import AgentStatus
 from world.world import WorldState
 
 
@@ -86,6 +87,35 @@ async def test_attack_across_regions_is_invalid(world: WorldState, event_bus: Ev
     assert "alpha" in result
     assert event_bus.get_events("wanderer_001") == []
     assert event_bus.get_events("wanderer_002") == []
+
+
+async def test_attack_dead_target_is_invalid_no_effect(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Attacking a co-located corpse is a rule violation, with no cost and no event."""
+    target = world.get_agent("wanderer_002")
+    assert target is not None
+    target.status = AgentStatus.DEAD
+
+    result = await attack(world, event_bus, "wanderer_001", target="wanderer_002")
+
+    attacker = world.get_agent("wanderer_001")
+    assert attacker is not None and attacker.current_energy == 100.0  # no cost paid
+    assert target.current_energy == 100.0  # corpse undamaged
+    assert result.startswith("Invalid:")
+    assert "Boris" in result
+    assert event_bus.get_events("wanderer_001") == []
+    assert event_bus.get_events("wanderer_002") == []
+
+
+async def test_attack_self_is_invalid_no_effect(world: WorldState, event_bus: EventBus) -> None:
+    """Attacking oneself is a rule violation; the attacker takes no self-harm."""
+    result = await attack(world, event_bus, "wanderer_001", target="wanderer_001")
+
+    attacker = world.get_agent("wanderer_001")
+    assert attacker is not None and attacker.current_energy == 100.0  # untouched
+    assert result.startswith("Invalid:")
+    assert event_bus.get_events("wanderer_001") == []
 
 
 async def test_attack_with_insufficient_energy_is_invalid(
