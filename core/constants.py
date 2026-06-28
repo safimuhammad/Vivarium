@@ -35,7 +35,10 @@ DIVERGENCES (history; items 1 and 2 were reconciled in Sprint 4 Phase 2):
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Final
+
+from memory.models import Importance
 
 # ---------------------------------------------------------------------------
 # Action energy costs
@@ -168,3 +171,59 @@ HOARDING_ENERGY_THRESHOLD: Final[float] = 500.0
 HOARDING_MATERIALS_THRESHOLD: Final[float] = 300.0
 """Materials above which an agent is considered to be hoarding. [doc]
 (not yet enforced in code)."""
+
+# ---------------------------------------------------------------------------
+# Memory subsystem (Sprint 5)
+# [design: docs/superpowers/specs/2026-06-28-sprint5-memory-design.md §7]
+#
+# These are the memory "dials" -- Game-of-Life rules for an agent's cognition.
+# They are first-guess values meant to be TUNED by the benchmark/optimization
+# pass (plan Tasks 12-13), not gospel. Provenance: [design] (this spec).
+# ---------------------------------------------------------------------------
+
+REFLECT_EVERY_N_BREATHS: Final[int] = 12
+"""Reflection cadence: a dedicated reflection step runs every N breaths. [design].
+
+The write path (the qwen3:8b spike showed in-loop authoring fails; isolated
+reflection works). Larger N = cheaper (one extra inference + one KV re-prefill
+per reflection) but slower-forming memory.
+"""
+
+REFLECT_RECAP_TURNS: Final[int] = 6
+"""How many recent lifecycle turns the reflection step is shown as a recap. [design]."""
+
+RETRIEVAL_K: Final[int] = 5
+"""Number of memories surfaced into the perception turn per breath. [design]."""
+
+RECENCY_DECAY: Final[float] = 0.97
+"""Per-breath exponential decay base for the recency term (subjective time). [design].
+
+``recency = RECENCY_DECAY ** (current_breath - created_breath)``; over 12 breaths
+~0.69, over 50 ~0.22. Higher = memories stay 'fresh' longer.
+"""
+
+W_RECENCY: Final[float] = 1.0
+"""Scorer weight on the recency term (equal-weight start, per Generative Agents). [design]."""
+
+W_IMPORTANCE: Final[float] = 1.0
+"""Scorer weight on the importance term -- the salience RAG cannot supply. [design]."""
+
+W_RELEVANCE: Final[float] = 1.0
+"""Scorer weight on the relevance (vector-similarity) term. [design]."""
+
+IMPORTANCE_WEIGHTS: Final[dict[Importance, float]] = {
+    Importance.LOW: 0.3,
+    Importance.MEDIUM: 0.6,
+    Importance.HIGH: 1.0,
+}
+"""Numeric weight per agent-assigned importance level. [design]."""
+
+EMBED_MODEL: Final[str] = "all-MiniLM-L6-v2"
+"""Local sentence-transformer ChromaDB uses in production. [design].
+
+Deliberately a CPU/onnx model, NOT an Ollama embed model, so embedding never
+contends with the agent decider on Ollama's sequential backend.
+"""
+
+MEMORY_ROOT: Final[Path] = Path("./memory")
+"""Default root directory under which per-agent memory dirs are created. [design]."""

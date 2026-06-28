@@ -61,3 +61,20 @@ def test_child_share_and_multiplier_are_consistent() -> None:
 def test_agent_id_categories_is_immutable() -> None:
     """The category list is a tuple so the module constant cannot be mutated."""
     assert isinstance(constants.AGENT_ID_CATEGORIES, tuple)
+
+
+def test_memory_dials_present_and_sane() -> None:
+    """The Sprint-5 memory dials exist and hold sane, internally-consistent values."""
+    from memory.models import Importance
+
+    assert constants.REFLECT_EVERY_N_BREATHS >= 1
+    assert constants.REFLECT_RECAP_TURNS >= 1
+    assert constants.RETRIEVAL_K >= 1
+    assert 0.0 < constants.RECENCY_DECAY <= 1.0
+    assert set(constants.IMPORTANCE_WEIGHTS) == set(Importance)
+    assert (
+        constants.IMPORTANCE_WEIGHTS[Importance.HIGH]
+        > constants.IMPORTANCE_WEIGHTS[Importance.MEDIUM]
+        > constants.IMPORTANCE_WEIGHTS[Importance.LOW]
+    )
+    assert constants.EMBED_MODEL
