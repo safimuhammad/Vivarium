@@ -9,12 +9,19 @@ or live Ollama is touched (see ``CLAUDE.md`` Section 5).
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from agents.decider import Decision, ToolCall, parse_ollama_response
+from agents.decider import (
+    DECIDE_NUM_CTX,
+    Decision,
+    OllamaDecider,
+    ToolCall,
+    parse_ollama_response,
+)
 from tests.conftest import MockDecider
 
 
@@ -114,3 +121,68 @@ async def test_mock_decider_returns_scripted_decisions_in_order_and_cycles(
     assert second.tool_calls[0].name == "wait"
     assert third.tool_calls[0].name == "look_around"  # cycled back to the start
     assert mock_decider.history == [first, second, third]
+
+
+async def test_ollama_decider_forwards_request_and_parses_injected_client() -> None:
+    """``decide`` awaits the injected client and returns the parsed Decision.
+
+    Exercises the real :meth:`OllamaDecider.decide` path with a structural client
+    double (no network): it must forward model/messages/tools and the
+    non-streaming flag verbatim, then map the response via
+    :func:`parse_ollama_response`.
+    """
+    captured: dict[str, Any] = {}
+
+    class _FakeClient:
+        async def chat(self, **kwargs: Any) -> SimpleNamespace:
+            captured.update(kwargs)
+            return _fake_response(
+                content="Onward.",
+                thinking=None,
+                tool_calls=[_fake_tool_call("move", {"destination": "grove"})],
+            )
+
+    decider = OllamaDecider("test-model", client=_FakeClient())
+    decision = await decider.decide([{"role": "user", "content": "go"}], [{"name": "move"}])
+
+    assert decision.text == "Onward."
+    assert [c.name for c in decision.tool_calls] == ["move"]
+    assert captured["model"] == "test-model"
+    assert captured["messages"] == [{"role": "user", "content": "go"}]
+    assert captured["tools"] == [{"name": "move"}]
+    assert captured["stream"] is False
+    # The context window is requested explicitly (Ollama defaults to a cramped 4096
+    # regardless of the model's true capacity).
+    assert captured["options"] == {"num_ctx": DECIDE_NUM_CTX}
+
+
+async def test_ollama_decider_forwards_custom_num_ctx() -> None:
+    """A per-instance ``num_ctx`` overrides the default in the forwarded options."""
+    captured: dict[str, Any] = {}
+
+    class _FakeClient:
+        async def chat(self, **kwargs: Any) -> SimpleNamespace:
+            captured.update(kwargs)
+            return _fake_response(content="ok", thinking=None, tool_calls=[])
+
+    decider = OllamaDecider("test-model", num_ctx=8192, client=_FakeClient())
+    await decider.decide([], [])
+    assert captured["options"] == {"num_ctx": 8192}
+
+
+async def test_ollama_decider_times_out_on_a_hung_client() -> None:
+    """A model that never responds raises ``TimeoutError`` (loop then backs off).
+
+    This is the homeostasis-saving fix: an unbounded await on a wedged Ollama is
+    bounded by ``timeout`` so the breathing loop degrades to a failed breath
+    (which it already absorbs via backoff) instead of hanging forever.
+    """
+
+    class _HangingClient:
+        async def chat(self, **kwargs: Any) -> SimpleNamespace:
+            await asyncio.Event().wait()  # never resolves
+            raise AssertionError("unreachable")  # pragma: no cover
+
+    decider = OllamaDecider("test-model", timeout=0.01, client=_HangingClient())
+    with pytest.raises(TimeoutError):
+        await decider.decide([], [])

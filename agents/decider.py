@@ -19,8 +19,27 @@ This module provides:
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
+
+#: Per-decision wall-clock budget for the live Ollama call (seconds). A local
+#: model must load (cold start) and then generate with the tool schemas attached,
+#: so this is generous; its job is to bound a *wedged* model, not a slow-but-
+#: healthy one. On expiry :meth:`OllamaDecider.decide` raises ``TimeoutError``,
+#: which the breathing loop already treats as a failed breath (then backs off).
+DECIDE_TIMEOUT_SECONDS: float = 120.0
+
+#: Context window (tokens) requested per decision. Ollama defaults every model to a
+#: cramped 4096 regardless of its true capacity, which truncates the agent's growing
+#: ``lifecycle_history`` mid-run. qwen3 supports far more, so we request 64K -- paired
+#: with a q8_0 server-side KV cache (``OLLAMA_KV_CACHE_TYPE=q8_0`` + flash attention)
+#: so the cache fits ~16-18GB RAM alongside the model weights. Ollama silently CLAMPS
+#: this to the model's trained maximum, so the effective window is whatever the model
+#: supports (40960 for qwen3:8b) -- requesting a ceiling keeps us correct across models.
+#: This buys runway, not forever: unbounded history is ultimately Sprint 5's job
+#: (episodic memory + identity summary instead of the full transcript in-context).
+DECIDE_NUM_CTX: int = 65536
 
 
 @dataclass(slots=True)
@@ -115,30 +134,67 @@ def parse_ollama_response(response: Any) -> Decision:
     return Decision(text=text, thinking=thinking, tool_calls=tool_calls)
 
 
+class _ChatClient(Protocol):
+    """Minimal async chat surface :class:`OllamaDecider` depends on.
+
+    ``ollama.AsyncClient`` satisfies this structurally, as does a test double; it
+    lets the decider be unit-tested (response parsing, timeout) without a live
+    model -- the same "depend on a seam" approach as :class:`Decider`.
+    """
+
+    async def chat(self, **kwargs: Any) -> Any:
+        """Send one chat request and return the provider's response."""
+        ...
+
+
 class OllamaDecider:
     """Production :class:`Decider` backed by a local Ollama model (design DD2).
 
     Makes a single, non-streaming ``ollama.chat`` call per decision and parses
-    the result with :func:`parse_ollama_response`. Network access is
-    integration-only and excluded from unit coverage; unit tests use a mock
-    decider instead.
+    the result with :func:`parse_ollama_response`. The call is bounded by
+    :attr:`timeout` (default :data:`DECIDE_TIMEOUT_SECONDS`): a wedged or
+    unresponsive model raises ``TimeoutError`` rather than hanging the breathing
+    loop forever -- the loop already absorbs a raising decider as a failed breath
+    and backs off.
+
+    The chat client is injectable so the parse/timeout behaviour is unit-testable
+    without a network; in production it lazily constructs ``ollama.AsyncClient``.
 
     Attributes:
         model: Name of the Ollama model to query (e.g. ``"qwen3:8b"``).
+        timeout: Per-decision wall-clock budget in seconds.
+        num_ctx: Context window (tokens) requested per decision.
     """
 
-    def __init__(self, model: str) -> None:
+    def __init__(
+        self,
+        model: str,
+        *,
+        timeout: float = DECIDE_TIMEOUT_SECONDS,
+        num_ctx: int = DECIDE_NUM_CTX,
+        client: _ChatClient | None = None,
+    ) -> None:
         """Initialise the decider.
 
         Args:
             model: Name of the Ollama model to query.
+            timeout: Per-decision wall-clock budget in seconds; on expiry
+                :meth:`decide` raises ``TimeoutError``.
+            num_ctx: Context window (tokens) to request, overriding Ollama's
+                cramped 4096 default.
+            client: Chat client to use. Defaults to ``None``, which lazily
+                constructs an ``ollama.AsyncClient`` on first call; tests inject a
+                double to avoid the network.
         """
         self.model: str = model
+        self.timeout: float = timeout
+        self.num_ctx: int = num_ctx
+        self._client: _ChatClient | None = client
 
-    async def decide(  # pragma: no cover - exercised only against a live Ollama
+    async def decide(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
     ) -> Decision:
-        """Query the model once (non-streaming) and parse the response.
+        """Query the model once (non-streaming, time-bounded) and parse the result.
 
         Args:
             messages: Chat-style message history (role/content dicts).
@@ -146,11 +202,29 @@ class OllamaDecider:
 
         Returns:
             The parsed :class:`Decision`.
-        """
-        import ollama
 
-        client = ollama.AsyncClient()
-        response = await client.chat(model=self.model, messages=messages, tools=tools, stream=False)
+        Raises:
+            TimeoutError: If the model does not respond within :attr:`timeout`
+                seconds (the in-flight request is cancelled). The breathing loop
+                catches this and ends the breath gracefully.
+        """
+        client = self._client
+        if client is None:  # pragma: no cover - real network client construction
+            import ollama
+
+            # ``AsyncClient`` provides ``chat`` but is not declared against our
+            # loose ``_ChatClient`` seam; assert the fit at this boundary.
+            client = cast(_ChatClient, ollama.AsyncClient())
+        response = await asyncio.wait_for(
+            client.chat(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                stream=False,
+                options={"num_ctx": self.num_ctx},
+            ),
+            self.timeout,
+        )
         return parse_ollama_response(response)
 
 
