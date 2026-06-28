@@ -201,7 +201,14 @@ class WorldState:
         """
         if agent_id in self.agents and destination in self.regions:
             current_pos = self.agents[agent_id].current_position
-            current_region = self.regions[current_pos]
+            current_region = self.regions.get(current_pos)
+            if current_region is None:
+                logger.error(
+                    "move_agent: agent %r has unknown current_position %r",
+                    agent_id,
+                    current_pos,
+                )
+                return False
             if destination in current_region.connections:
                 self.agents[agent_id].current_position = destination
                 return True
@@ -420,8 +427,10 @@ class WorldState:
     def regenerate_resources(self) -> None:
         """Regenerate every region's energy and materials by one tick.
 
-        For each region adds its ``energy_rate``/``materials_rate`` and caps the
-        result at the region's ``max_energy``/``max_materials``. Mutates the
+        For each region adds its ``energy_rate``/``materials_rate``, caps the
+        result at the region's ``max_energy``/``max_materials``, and floors it at
+        ``0.0`` (defense-in-depth: config validation already forbids negative
+        rates, so a pool can never drift below zero over a forever-run). Mutates the
         :attr:`~world.regions.Region.current_energy` and
         :attr:`~world.regions.Region.current_materials` of every region in
         :attr:`regions`.
@@ -430,9 +439,9 @@ class WorldState:
             None.
         """
         for region in self.regions.values():
-            region.current_energy = min(
-                region.current_energy + region.energy_rate, region.max_energy
+            region.current_energy = max(
+                0.0, min(region.current_energy + region.energy_rate, region.max_energy)
             )
-            region.current_materials = min(
-                region.current_materials + region.materials_rate, region.max_materials
+            region.current_materials = max(
+                0.0, min(region.current_materials + region.materials_rate, region.max_materials)
             )

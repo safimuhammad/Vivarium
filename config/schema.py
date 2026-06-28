@@ -14,7 +14,7 @@ Policy: every model sets ``extra="forbid"`` so an unknown or mistyped field in
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from world.agents import AgentState, AgentStatus
 from world.regions import Region
@@ -46,12 +46,35 @@ class RegionConfig(BaseModel):
     name: str
     description: str
     connections: list[str]
-    energy_rate: float
-    materials_rate: float
-    current_energy: float
-    current_materials: float
-    max_energy: float
-    max_materials: float
+    energy_rate: float = Field(ge=0.0)
+    materials_rate: float = Field(ge=0.0)
+    current_energy: float = Field(ge=0.0)
+    current_materials: float = Field(ge=0.0)
+    max_energy: float = Field(gt=0.0)
+    max_materials: float = Field(gt=0.0)
+
+    @model_validator(mode="after")
+    def _check_within_caps(self) -> RegionConfig:
+        """Reject starting pools that exceed their caps (a still-life misconfig).
+
+        Returns:
+            ``self`` when valid.
+
+        Raises:
+            ValueError: If ``current_energy`` > ``max_energy`` or
+                ``current_materials`` > ``max_materials``.
+        """
+        if self.current_energy > self.max_energy:
+            raise ValueError(
+                f"Region {self.name!r}: current_energy ({self.current_energy}) "
+                f"exceeds max_energy ({self.max_energy})."
+            )
+        if self.current_materials > self.max_materials:
+            raise ValueError(
+                f"Region {self.name!r}: current_materials ({self.current_materials}) "
+                f"exceeds max_materials ({self.max_materials})."
+            )
+        return self
 
     def to_region(self) -> Region:
         """Convert this validated config into a domain :class:`Region`.
@@ -97,8 +120,8 @@ class AgentConfig(BaseModel):
     name: str
     persona: str
     current_position: str
-    current_energy: float
-    current_materials: float
+    current_energy: float = Field(ge=0.0)
+    current_materials: float = Field(ge=0.0)
     status: AgentStatus
 
     def to_agent_state(self) -> AgentState:
@@ -133,8 +156,49 @@ class WorldConfig(BaseModel):
 
     model_config = _STRICT
 
-    regions: list[RegionConfig]
-    agents: list[AgentConfig]
+    regions: list[RegionConfig] = Field(min_length=1)
+    agents: list[AgentConfig] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_references_and_uniqueness(self) -> WorldConfig:
+        """Cross-validate the world: unique names/ids and valid region references.
+
+        Pydantic validates each region/agent in isolation; this checks the
+        *relationships* a typo can silently break -- so a bad ``world.yaml`` fails
+        loudly at load instead of producing a ghost region or a bricked agent.
+
+        Returns:
+            ``self`` when valid.
+
+        Raises:
+            ValueError: On duplicate region names or agent ids, a ``connections``
+                entry naming an unknown region, or an agent ``current_position``
+                naming an unknown region.
+        """
+        region_names = [region.name for region in self.regions]
+        known_regions = set(region_names)
+        if len(region_names) != len(known_regions):
+            duplicates = sorted({n for n in region_names if region_names.count(n) > 1})
+            raise ValueError(f"Duplicate region names: {duplicates}.")
+
+        agent_ids = [agent.id for agent in self.agents]
+        if len(agent_ids) != len(set(agent_ids)):
+            duplicates = sorted({i for i in agent_ids if agent_ids.count(i) > 1})
+            raise ValueError(f"Duplicate agent ids: {duplicates}.")
+
+        for region in self.regions:
+            for connection in region.connections:
+                if connection not in known_regions:
+                    raise ValueError(
+                        f"Region {region.name!r} connects to unknown region {connection!r}."
+                    )
+
+        for agent in self.agents:
+            if agent.current_position not in known_regions:
+                raise ValueError(
+                    f"Agent {agent.id!r} starts in unknown region {agent.current_position!r}."
+                )
+        return self
 
     def to_regions(self) -> list[Region]:
         """Convert all region configs into domain :class:`Region` objects.

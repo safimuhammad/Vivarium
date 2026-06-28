@@ -37,6 +37,7 @@ from agents.prompt import build_system_prompt
 from agents.tool_schemas import schemas_for
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
+from core.constants import DECIDE_BACKOFF_SECONDS
 from core.exceptions import EventBusError, ToolError
 from core.logging import get_logger
 from tools.registry import ToolRegistry
@@ -46,12 +47,9 @@ from world.world import WorldState
 
 logger = get_logger(__name__)
 
-DECIDE_BACKOFF_SECONDS: float = 1.0
-"""Minimum pause after a failed ``decide`` so a downed model cannot busy-loop.
-
-Applied (as the floor of the inter-breath sleep) only when a breath's decision
-could not be produced; a healthy loop sleeps for its :attr:`Agent.pace` instead.
-"""
+# DECIDE_BACKOFF_SECONDS is re-exported from core.constants (its one tuned home);
+# imported here because the breathing loop applies it and tests reference it.
+__all__ = ["DECIDE_BACKOFF_SECONDS", "Agent"]
 
 
 class Agent:

@@ -193,6 +193,18 @@ def test_move_agent_unknown_destination(world: WorldState) -> None:
     assert agent.current_position == "alpha"
 
 
+def test_move_agent_from_unknown_current_region_returns_false(world: WorldState) -> None:
+    """An agent stranded at an unknown position fails to move gracefully (no KeyError).
+
+    Config validation makes this unreachable from a loaded world, but defends the
+    forever-run against any code path that mispositions an agent at runtime.
+    """
+    agent = world.get_agent("wanderer_001")
+    assert agent is not None
+    agent.current_position = "void"  # corrupted/unknown position
+    assert world.move_agent("wanderer_001", "beta") is False  # must not raise
+
+
 # ---------------------------------------------------------------------------
 # update_agent_status
 # ---------------------------------------------------------------------------
@@ -493,3 +505,17 @@ def test_regenerate_resources_caps_at_max(world: WorldState) -> None:
     world.regenerate_resources()
     assert alpha.current_energy == 500.0
     assert alpha.current_materials == 500.0
+
+
+def test_regenerate_resources_floors_at_zero(world: WorldState) -> None:
+    """Defense-in-depth: a (config-forbidden) negative rate can't push a pool < 0.
+
+    Config validation rejects negative rates at load, but the live mutation floors
+    at 0.0 so no runtime path can drift a pool negative over a forever-run.
+    """
+    alpha = world.get_region("alpha")
+    assert alpha is not None
+    alpha.current_energy = 1.0
+    alpha.energy_rate = -10.0  # bypass the config boundary, simulate corruption
+    world.regenerate_resources()
+    assert alpha.current_energy == 0.0  # floored, not -9.0

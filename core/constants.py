@@ -147,6 +147,17 @@ MOVE_DURATION_SECONDS: Final[float] = 2.0
 """Wall-clock time a move takes. [doc] (not yet enforced in code)."""
 
 # ---------------------------------------------------------------------------
+# Runtime timing
+# ---------------------------------------------------------------------------
+
+DECIDE_BACKOFF_SECONDS: Final[float] = 1.0
+"""Minimum pause after a failed ``decide`` so a downed model cannot busy-loop.
+
+Applied (as the floor of the inter-breath sleep) only when a breath's decision
+could not be produced; a healthy loop sleeps for its ``Agent.pace`` instead.
+[code: agents/runtime.py]"""
+
+# ---------------------------------------------------------------------------
 # Hoarding thresholds
 # ---------------------------------------------------------------------------
 

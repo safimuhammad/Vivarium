@@ -151,11 +151,15 @@ def test_agent_config_to_agent_state() -> None:
 
 
 def test_world_config_validates() -> None:
-    """A mapping with ``regions`` and ``agents`` validates into a ``WorldConfig``."""
+    """A self-consistent mapping of ``regions`` and ``agents`` validates."""
+    beta = valid_region_data()
+    beta["name"] = "beta"
+    beta["connections"] = ["alpha"]
     cfg = WorldConfig.model_validate(
-        {"regions": [valid_region_data()], "agents": [valid_agent_data()]}
+        # alpha connects to beta (and vice-versa); the agent starts in alpha.
+        {"regions": [valid_region_data(), beta], "agents": [valid_agent_data()]}
     )
-    assert len(cfg.regions) == 1
+    assert len(cfg.regions) == 2
     assert len(cfg.agents) == 1
 
 
@@ -181,3 +185,83 @@ def test_world_config_forbids_extra_top_level_key() -> None:
                 "metadata": {"author": "safi"},
             }
         )
+
+
+# ---- WorldConfig: cross-reference & uniqueness validation ----
+
+
+def test_world_config_rejects_connection_to_unknown_region() -> None:
+    """A ``connections`` entry naming an undefined region fails loudly at load."""
+    region = valid_region_data()  # alpha -> ["beta"], but no beta defined
+    with pytest.raises(ValidationError, match="unknown region"):
+        WorldConfig.model_validate({"regions": [region], "agents": [valid_agent_data()]})
+
+
+def test_world_config_rejects_agent_in_unknown_region() -> None:
+    """An agent ``current_position`` naming an undefined region is rejected."""
+    region = valid_region_data()
+    region["connections"] = []
+    agent = valid_agent_data()
+    agent["current_position"] = "nowhere"
+    with pytest.raises(ValidationError, match="unknown region"):
+        WorldConfig.model_validate({"regions": [region], "agents": [agent]})
+
+
+def test_world_config_rejects_duplicate_region_names() -> None:
+    """Two regions sharing a name are rejected (a dict would silently drop one)."""
+    a, b = valid_region_data(), valid_region_data()  # both named "alpha"
+    a["connections"] = []
+    b["connections"] = []
+    with pytest.raises(ValidationError, match="Duplicate region names"):
+        WorldConfig.model_validate({"regions": [a, b], "agents": [valid_agent_data()]})
+
+
+def test_world_config_rejects_duplicate_agent_ids() -> None:
+    """Two agents sharing an id are rejected (a dict would silently drop one)."""
+    region = valid_region_data()
+    region["connections"] = []
+    with pytest.raises(ValidationError, match="Duplicate agent ids"):
+        WorldConfig.model_validate(
+            {"regions": [region], "agents": [valid_agent_data(), valid_agent_data()]}
+        )
+
+
+def test_world_config_rejects_empty_regions() -> None:
+    """A world with no regions is rejected (min_length=1)."""
+    with pytest.raises(ValidationError):
+        WorldConfig.model_validate({"regions": [], "agents": [valid_agent_data()]})
+
+
+def test_world_config_rejects_empty_agents() -> None:
+    """A world with no agents is rejected (min_length=1)."""
+    region = valid_region_data()
+    region["connections"] = []
+    with pytest.raises(ValidationError):
+        WorldConfig.model_validate({"regions": [region], "agents": []})
+
+
+# ---- RegionConfig / AgentConfig: range validation ----
+
+
+def test_region_config_rejects_negative_rate() -> None:
+    """A negative regen rate is rejected (would drive a pool below zero forever)."""
+    region = valid_region_data()
+    region["energy_rate"] = -1.0
+    with pytest.raises(ValidationError):
+        RegionConfig.model_validate(region)
+
+
+def test_region_config_rejects_current_exceeding_max() -> None:
+    """A starting pool above its cap is rejected."""
+    region = valid_region_data()
+    region["current_energy"] = 9999
+    with pytest.raises(ValidationError, match="exceeds max_energy"):
+        RegionConfig.model_validate(region)
+
+
+def test_agent_config_rejects_negative_energy() -> None:
+    """A negative starting energy is rejected (nonsensical perception)."""
+    agent = valid_agent_data()
+    agent["current_energy"] = -10.0
+    with pytest.raises(ValidationError):
+        AgentConfig.model_validate(agent)
