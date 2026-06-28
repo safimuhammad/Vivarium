@@ -84,9 +84,7 @@ show_error_codes = true
 # this list as they bring it up to strict typing. (Phase 2 removed `world.*`.)
 [[tool.mypy.overrides]]
 module = [
-    "bus.*",
     "tools.*",
-    "config.*",
     "agents.*",
     "tests.integration.*",
 ]
