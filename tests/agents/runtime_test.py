@@ -489,6 +489,81 @@ async def test_perceive_shows_region_capacity_and_regeneration(
     assert "the land renews about 1.0 each moment" in content  # the regeneration rate
 
 
+async def test_breathing_loop_completes_a_mating_end_to_end(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """The full perceive->decide->execute chain closes the mating arc into a birth.
+
+    The tool layer (accept -> spawn) and the perception layer (a standing offer is
+    surfaced) are each covered in isolation; this drives the WHOLE loop through two
+    Agent runtimes -- the initiator proposes on one breath, then the acceptor PERCEIVES
+    the standing offer and its decider chooses ``accept_mating`` -- and asserts a new
+    agent is born. This is the deterministic proof of the arc the live qwen3 run is
+    meant to exhibit; the 600s proposal-timeout retune matters precisely because it
+    keeps the offer alive long enough for the acceptor's next breath to reach it.
+
+    Resources use string keys (``{"energy": ...}``) to replicate the real decide path,
+    where the local-LLM decider emits JSON the mating tool must clean.
+    """
+    before = {agent.id for agent in world.get_all_agents()}
+
+    joe = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider(
+            [
+                Decision(
+                    tool_calls=[
+                        ToolCall(
+                            "initiate_mating",
+                            {
+                                "target": BORIS,
+                                "message": "Build a life with me.",
+                                "resources": {"energy": 50.0, "materials": 30.0},
+                            },
+                        )
+                    ]
+                )
+            ]
+        ),
+        pace=0.0,
+    )
+    mae = Agent(
+        BORIS,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider(
+            [Decision(tool_calls=[ToolCall("accept_mating", {"target": ADA, "message": "Yes."})])]
+        ),
+        pace=0.0,
+    )
+
+    joe_state = world.get_agent(ADA)
+    mae_state = world.get_agent(BORIS)
+    assert joe_state is not None and mae_state is not None
+
+    await joe.breathe()  # proposes: escrow deducted, proposal stored
+    await mae.breathe()  # perceives the standing offer, accepts -> birth
+
+    after = {agent.id for agent in world.get_all_agents()}
+    newborn_ids = after - before
+    assert len(newborn_ids) == 1  # exactly one offspring was born
+    (newborn_id,) = newborn_ids
+    newborn = world.get_agent(newborn_id)
+    assert newborn is not None
+    assert newborn.status is AgentStatus.ALIVE
+    assert newborn.current_position == "alpha"  # born where the acceptor stands
+    assert newborn.persona == f"{joe_state.persona}|{mae_state.persona}"
+    # The birth is announced as an agent_born event sourced from the newborn.
+    born_events = [e for e in event_bus.get_events(ADA) if e.type == "agent_born"]
+    assert len(born_events) == 1 and born_events[0].source == newborn_id
+    # The proposal is consumed, not left dangling.
+    assert world.get_agent_proposals(ADA, BORIS) == {}
+
+
 # ---------------------------------------------------------------------------
 # Sprint 6 T5: revisit items (low-energy attack warning; abort-on-paralyze)
 # ---------------------------------------------------------------------------
