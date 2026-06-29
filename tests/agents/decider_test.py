@@ -50,6 +50,7 @@ def test_decision_defaults() -> None:
     assert decision.text == ""
     assert decision.thinking == ""
     assert decision.tool_calls == []
+    assert decision.prompt_tokens == 0
 
 
 def test_decision_default_tool_calls_are_independent() -> None:
@@ -59,11 +60,20 @@ def test_decision_default_tool_calls_are_independent() -> None:
     assert second.tool_calls == []
 
 
-def _fake_response(*, content: str, thinking: str | None, tool_calls: list[Any]) -> SimpleNamespace:
+def _fake_response(
+    *,
+    content: str,
+    thinking: str | None,
+    tool_calls: list[Any],
+    prompt_eval_count: int | None = None,
+) -> SimpleNamespace:
     """Build a minimal stand-in for an ``ollama`` chat response."""
-    return SimpleNamespace(
+    response = SimpleNamespace(
         message=SimpleNamespace(content=content, thinking=thinking, tool_calls=tool_calls)
     )
+    if prompt_eval_count is not None:
+        response.prompt_eval_count = prompt_eval_count
+    return response
 
 
 def _fake_tool_call(
@@ -95,6 +105,15 @@ def test_parse_ollama_response_plain_text_has_no_tool_calls() -> None:
     assert decision.text == "Just thinking aloud."
     assert decision.thinking == ""
     assert decision.tool_calls == []
+    assert decision.prompt_tokens == 0  # absent prompt_eval_count -> 0
+
+
+def test_parse_ollama_response_reads_prompt_eval_count() -> None:
+    resp = _fake_response(
+        content="ok", thinking=None, tool_calls=[], prompt_eval_count=1234
+    )
+    decision = parse_ollama_response(resp)
+    assert decision.prompt_tokens == 1234  # the real prompt size, for the safety net
 
 
 def test_parse_ollama_response_multiple_tool_calls() -> None:

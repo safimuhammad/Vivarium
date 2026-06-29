@@ -70,11 +70,16 @@ class Decision:
             (may be empty).
         tool_calls: Tool invocations the model requested; empty for a plain-text
             response (the loop simply continues).
+        prompt_tokens: The actual prompt size in tokens for this call, as reported
+            by the backend (Ollama ``prompt_eval_count``); ``0`` when unavailable.
+            The breathing loop uses it as the ground-truth safety net for
+            transcript compaction (Sprint 5.5).
     """
 
     text: str = ""
     thinking: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    prompt_tokens: int = 0
 
 
 class Decider(Protocol):
@@ -131,7 +136,13 @@ def parse_ollama_response(response: Any) -> Decision:
         arguments = getattr(function, "arguments", None) or {}
         tool_calls.append(ToolCall(name=name, params=dict(arguments), id=getattr(raw, "id", None)))
 
-    return Decision(text=text, thinking=thinking, tool_calls=tool_calls)
+    # ``prompt_eval_count`` lives on the response (not ``message``); it is the actual
+    # prompt size in tokens, the ground-truth safety net for compaction (Sprint 5.5).
+    prompt_tokens = getattr(response, "prompt_eval_count", 0) or 0
+
+    return Decision(
+        text=text, thinking=thinking, tool_calls=tool_calls, prompt_tokens=prompt_tokens
+    )
 
 
 class _ChatClient(Protocol):

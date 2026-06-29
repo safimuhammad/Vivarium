@@ -257,3 +257,55 @@ contends with the agent decider on Ollama's sequential backend.
 
 MEMORY_ROOT: Final[Path] = Path("./memory")
 """Default root directory under which per-agent memory dirs are created. [design]."""
+
+# ---------------------------------------------------------------------------
+# Transcript compaction (Sprint 5.5)
+# [design: docs/superpowers/specs/2026-06-28-sprint5.5-compaction-design.md]
+#
+# These bound the running ``lifecycle_history`` so an agent breathes FOREVER
+# without overflowing the model's context window. The window counts prompt +
+# generation together, so the prompt must leave room for the model's own output.
+# The never-overflow guarantee rests on: target < trigger < hard-safety < budget
+# < window (asserted in tests/core/constants_test.py).
+# ---------------------------------------------------------------------------
+
+MODEL_CONTEXT_TOKENS: Final[int] = 40960
+"""The model's real context window in tokens (qwen3:8b trained max). [design].
+
+Ollama clamps the requested ``DECIDE_NUM_CTX`` (65536) to the model's trained
+maximum, so this -- not the request -- is the true ceiling we must stay under.
+"""
+
+GENERATION_RESERVE_TOKENS: Final[int] = 6144
+"""Tokens reserved within the window for the model's OWN output. [design].
+
+The window is prompt + completion together; qwen3's hidden ``thinking`` plus its
+reply can be large, so the prompt may occupy at most ``window - this``.
+"""
+
+PROMPT_BUDGET_TOKENS: Final[int] = MODEL_CONTEXT_TOKENS - GENERATION_RESERVE_TOKENS
+"""Max tokens the assembled prompt may occupy (= window - generation reserve)."""
+
+COMPACTION_TRIGGER_TOKENS: Final[int] = int(0.70 * PROMPT_BUDGET_TOKENS)
+"""Estimated-prompt size above which a breath compacts before deciding. [design]."""
+
+COMPACTION_TARGET_TOKENS: Final[int] = int(0.50 * PROMPT_BUDGET_TOKENS)
+"""Compaction evicts down to roughly this, so it does not re-trigger every breath. [design]."""
+
+COMPACTION_HARD_SAFETY_TOKENS: Final[int] = int(0.90 * PROMPT_BUDGET_TOKENS)
+"""If the last REAL prompt (Ollama ``prompt_eval_count``) exceeded this, force a
+compaction next breath -- the self-correcting net against estimator drift. [design]."""
+
+COMPACTION_KEEP_RECENT_TURNS: Final[int] = 8
+"""Minimum number of recent verbatim turns compaction always keeps. [design].
+
+The agent's immediate continuity; older turns fold into the running recap.
+"""
+
+CHARS_PER_TOKEN: Final[float] = 3.5
+"""Characters-per-token divisor for the pre-call token estimate. [design].
+
+No pre-call tokenizer is available, so the estimate is heuristic. Deliberately
+LOW (so it OVER-counts tokens and errs toward compacting early); JSON tool schemas
+tokenize denser than prose.
+"""

@@ -78,3 +78,25 @@ def test_memory_dials_present_and_sane() -> None:
         > constants.IMPORTANCE_WEIGHTS[Importance.LOW]
     )
     assert constants.EMBED_MODEL
+
+
+def test_compaction_dials_present_and_guarantee_headroom() -> None:
+    """The Sprint-5.5 compaction budget is internally consistent and leaves headroom.
+
+    The whole never-overflow guarantee rests on these inequalities holding.
+    """
+    assert constants.PROMPT_BUDGET_TOKENS == (
+        constants.MODEL_CONTEXT_TOKENS - constants.GENERATION_RESERVE_TOKENS
+    )
+    assert constants.GENERATION_RESERVE_TOKENS > 0
+    # target < trigger < hard-safety < budget < window: compaction acts with margin.
+    assert (
+        0
+        < constants.COMPACTION_TARGET_TOKENS
+        < constants.COMPACTION_TRIGGER_TOKENS
+        < constants.COMPACTION_HARD_SAFETY_TOKENS
+        < constants.PROMPT_BUDGET_TOKENS
+        < constants.MODEL_CONTEXT_TOKENS
+    )
+    assert constants.COMPACTION_KEEP_RECENT_TURNS >= 1
+    assert constants.CHARS_PER_TOKEN > 0
