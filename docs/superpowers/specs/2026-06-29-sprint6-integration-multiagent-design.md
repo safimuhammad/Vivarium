@@ -51,17 +51,24 @@ multi-agent run agents would drop out one by one → collapse.
 ### 3.1 Paralysis (recoverable, not terminal)
 - Energy floors at 0.0 (never negative from action costs). At `energy <= 5.0` an ALIVE
   agent becomes PARALYZED (existing `WorldState.modify_agent_energy` logic — unchanged).
-- A PARALYZED agent **keeps breathing** (so it can perceive and be revived) but **cannot
-  act** — `breathe()` already gates `decide()`+`execute()` on `previous_status is ALIVE`.
+- A PARALYZED agent **keeps its loop alive** (so it can be revived by others) but a
+  paralyzed breath does **nothing but drain its inbox** — no perceive-append, no decide,
+  no execute, no compaction. Draining (`event_bus.get_events(agent_id)`, discarded) keeps
+  the queue bounded; freezing the history avoids both unbounded perception growth and the
+  illegal *consecutive user turns* that perceiving-without-deciding would create; and it
+  spends **zero Ollama** on a frozen agent (so it can't starve the alive ones). On revival
+  the next breath sees `previous_status is ALIVE` and perceives fresh, resuming cleanly
+  (the prior turn was a `tool` turn, so the new perception user turn is legal).
 - Recovery is **only** by another agent feeding it via `transfer_resource` →
   `modify_agent_energy(+amount)` → revives to ALIVE at `energy > 5.0` (existing logic).
-- **Loop fix (two changes, both required):**
-  1. `refresh_status()`: do **not** set `_stopped = True` on PARALYZED; only DEAD is terminal.
+- **Loop fix (three changes):**
+  1. `refresh_status()`: on ALIVE→PARALYZED, still emit `agent_paralyzed` but do **not**
+     set `_stopped = True`; only DEAD is terminal.
   2. `_can_continue()`: terminate on `self._status() is AgentStatus.DEAD` (not `not self.alive`).
-- **Compaction gate:** in `breathe()`, only run `_ensure_context_budget(...)` when
-  `previous_status is ALIVE`. A paralyzed agent adds only one bounded perceive turn per
-  breath and never an assistant/tool turn, so its history cannot overflow — and we must
-  not spend Ollama compacting agents that cannot act (it would starve the alive ones).
+  3. `breathe()`: restructure so the ALIVE branch does the full path (perceive →
+     `_ensure_context_budget` → decide → execute → reflect); a non-ALIVE breath only
+     drains the inbox. `_ensure_context_budget`/`compact` therefore run **only** for ALIVE
+     agents (a frozen agent's history doesn't grow, so it needs no budget check).
 - **`agent_recovered` event:** when a feeding `transfer_resource` lifts a target
   PARALYZED→ALIVE, emit a LOCAL `agent_recovered` event so nearby agents perceive the
   revival (perception is the product). `source = feeder_id` (the agent calling
