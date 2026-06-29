@@ -168,9 +168,15 @@ async def run_activity_feed(
 
     with Live(console=console, refresh_per_second=4) as live:  # pragma: no cover
         while not should_stop():
-            events, cursor = feed.new_events(cursor)
-            for event in events:
-                lines.append(render_event(event))
-            panel = Panel("\n".join(lines), title="Activity")
-            live.update(Group(panel, render_world_table(world)))
+            # Isolate a render error so one bad frame cannot freeze the live view for
+            # the rest of the run (perception is the product). The renderers it calls
+            # are pure and unit-tested; this guard covers transient rich/terminal hiccups.
+            try:
+                events, cursor = feed.new_events(cursor)
+                for event in events:
+                    lines.append(render_event(event))
+                panel = Panel("\n".join(lines), title="Activity")
+                live.update(Group(panel, render_world_table(world)))
+            except Exception:
+                logger.exception("activity-feed render failed; skipping this frame")
             await asyncio.sleep(refresh_interval)

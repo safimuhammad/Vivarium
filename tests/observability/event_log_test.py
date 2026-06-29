@@ -30,6 +30,30 @@ def _event(kind: str, source: str = "wanderer_001") -> Event:
     )
 
 
+class _RaisingLog:
+    """A sink that always raises, to exercise CompositeEventLog isolation."""
+
+    def record(self, event: Event) -> None:
+        raise RuntimeError("sink unavailable")
+
+
+def test_composite_isolates_a_raising_sink() -> None:
+    """One sink raising neither blocks the other sinks nor propagates the error.
+
+    Fan-out completeness + crash-resistance: a transient sink failure (e.g. a disk
+    error in JsonlEventLog) must not skip the live feed or crash the publisher.
+    """
+    before = InMemoryEventLog()
+    after = InMemoryEventLog()
+    composite = CompositeEventLog(before, _RaisingLog(), after)
+
+    event = _event("speak")
+    composite.record(event)  # must NOT raise
+
+    assert before.events == [event]
+    assert after.events == [event]  # a later sink still receives it
+
+
 def test_in_memory_log_records_in_order() -> None:
     log = InMemoryEventLog()
     first = _event("speak")

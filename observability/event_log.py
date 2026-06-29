@@ -29,6 +29,9 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from bus.events import Event
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class EventLog(Protocol):
@@ -156,15 +159,24 @@ class CompositeEventLog:
     def record(self, event: Event) -> None:
         """Forward ``event`` to every underlying sink, in registration order.
 
+        Per-sink isolation: a sink that raises (e.g. a :class:`JsonlEventLog` on a
+        mid-run disk error) is logged and skipped so it neither blocks the remaining
+        sinks (fan-out completeness) nor propagates into the publishing agent's breath
+        (crash-resistance / run-forever, ``CLAUDE.md`` Section 1).
+
         Args:
             event: The event to fan out.
 
         Side effects:
             Calls ``record(event)`` on each underlying sink (their respective side
-            effects -- file appends, buffer growth -- apply).
+            effects -- file appends, buffer growth -- apply); a failing sink is logged
+            via :func:`logging.Logger.exception` and skipped.
         """
         for log in self._logs:
-            log.record(event)
+            try:
+                log.record(event)
+            except Exception:
+                logger.exception("event-log sink %r failed to record an event; skipping it", log)
 
 
 class FeedEventLog:

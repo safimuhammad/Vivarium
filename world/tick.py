@@ -102,11 +102,35 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
         await event_bus.publish(event)
 
 
+async def _tick_once_resilient(world: WorldState, event_bus: EventBus) -> None:
+    """Run one :func:`tick`, isolating any error so the heartbeat survives it.
+
+    The free-running heartbeat (:func:`run_world_tick`) must keep regenerating
+    resources for the world to self-heal and run forever; a single bad tick (e.g. an
+    :class:`~core.exceptions.EventBusError` while publishing a timeout, or a
+    malformed proposal) must not kill the loop and silently stop regeneration. This
+    wrapper mirrors the per-breath isolation in :meth:`~agents.runtime.Agent.run`.
+
+    Args:
+        world: The live world state.
+        event_bus: The bus the tick publishes timeout events to.
+
+    Returns:
+        None.
+    """
+    try:
+        await tick(world, event_bus)
+    except Exception:
+        logger.exception("world-tick failed; skipping this tick to keep the heartbeat alive")
+
+
 async def run_world_tick(world: WorldState, event_bus: EventBus, *, interval: float) -> None:
     """Drive :func:`tick` forever, sleeping ``interval`` seconds between steps.
 
     This is the integration-only free-running driver (the pure, unit-tested entry
-    point is :func:`tick`). It never returns on its own; cancel the task to stop.
+    points are :func:`tick` and :func:`_tick_once_resilient`). It never returns on
+    its own; cancel the task to stop. Each step is run through
+    :func:`_tick_once_resilient` so one failing tick cannot stop the heartbeat.
 
     Args:
         world: The live world state.
@@ -117,5 +141,5 @@ async def run_world_tick(world: WorldState, event_bus: EventBus, *, interval: fl
         None.
     """
     while True:  # pragma: no cover - integration-only driver loop
-        await tick(world, event_bus)
+        await _tick_once_resilient(world, event_bus)
         await asyncio.sleep(interval)

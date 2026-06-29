@@ -306,6 +306,28 @@ async def test_publish_without_event_log_is_backward_compatible(bus: EventBus) -
     assert bus.get_events("a1") == [event]
 
 
+async def test_publish_survives_a_raising_event_log(bus_world: WorldState) -> None:
+    """A failing event-log sink must not propagate into the publishing agent's breath.
+
+    The single capture point records *after* routing; a transient sink error (e.g.
+    disk full) must be swallowed so it cannot crash the agent whose tool published
+    the event (run-forever / crash-resistance, CLAUDE.md Section 1).
+    """
+
+    class _RaisingLog:
+        def record(self, event: Event) -> None:
+            raise RuntimeError("disk full")
+
+    event_bus = EventBus(bus_world, event_log=_RaisingLog())
+    for agent in bus_world.get_all_agents():
+        event_bus.subscribe(agent.id)
+
+    event = Event(type="x", source="a1", payload={}, scope=ScopeType.GLOBAL)
+    await event_bus.publish(event)  # must NOT raise despite the sink failing
+
+    assert event_bus.get_events("a1") == [event]  # routing still happened
+
+
 # ---- unsubscribe ----------------------------------------------------------
 
 

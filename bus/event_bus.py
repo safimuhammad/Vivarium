@@ -156,9 +156,14 @@ class EventBus:
                 logger.error(message)
                 raise EventBusError(message)
 
-        # Single capture point: record only events that routed without raising.
+        # Single capture point: record only events that routed without raising. The
+        # record is isolated -- a failing sink (e.g. a disk error) is logged but must
+        # never propagate into the publishing agent's breath (crash-resistance).
         if self.event_log is not None:
-            self.event_log.record(event)
+            try:
+                self.event_log.record(event)
+            except Exception:
+                logger.exception("event-log record failed for event %r; continuing", event.type)
 
     async def _deliver_to_region(self, region_name: str, event: Event) -> None:
         """Enqueue ``event`` for every subscribed agent in a region.
