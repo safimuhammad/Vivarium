@@ -673,3 +673,81 @@ async def test_reflection_ignores_unexpected_tool(
     await agent.reflect()  # unexpected tool offered nowhere -> ignored, no crash
 
     assert memory_store.retrieve("anything", current_breath=1, k=5) == []
+
+
+# ---- Sprint 5.1: the recall action --------------------------------------------
+
+
+class ToolsCapturingDecider:
+    """Records the tool schemas offered on the latest ``decide`` call."""
+
+    def __init__(self) -> None:
+        self.tools: list[dict[str, Any]] = []
+
+    async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
+        self.tools = tools
+        return Decision()
+
+
+async def test_recall_offered_in_action_schemas_when_memory_present(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    decider = ToolsCapturingDecider()
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, memory=memory_store)
+
+    await agent.decide()
+
+    names = {tool["function"]["name"] for tool in decider.tools}
+    assert "recall" in names
+    assert "look_around" in names  # registry tools still offered alongside recall
+
+
+async def test_recall_not_offered_without_memory(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+) -> None:
+    decider = ToolsCapturingDecider()
+    agent = Agent(ADA, world, event_bus, populated_registry, decider)  # NULL_MEMORY default
+
+    await agent.decide()
+
+    names = {tool["function"]["name"] for tool in decider.tools}
+    assert "recall" not in names  # a memory-less being cannot search a memory
+
+
+async def test_execute_routes_recall_to_memory_not_registry(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    memory_store.append_memory("the spring lies east of the dead oak", Importance.LOW, breath=0)
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), memory=memory_store)
+
+    await agent.execute([ToolCall("recall", {"query": "where is the spring"})])
+
+    last = agent.lifecycle_history[-1]
+    assert last["role"] == "tool"
+    assert last["tool_name"] == "recall"
+    # Routed to memory, NOT the registry: the registry would reject the unknown
+    # tool with the "could not be performed" sentinel.
+    assert "could not be performed" not in last["content"]
+
+
+async def test_execute_recall_tolerates_missing_query(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), memory=memory_store)
+
+    await agent.execute([ToolCall("recall", {})])  # no query key -> empty search, no crash
+
+    last = agent.lifecycle_history[-1]
+    assert last["role"] == "tool"
+    assert last["tool_name"] == "recall"

@@ -34,12 +34,14 @@ from typing import Any
 
 from agents.decider import Decider, Decision, ToolCall
 from agents.prompt import build_system_prompt
+from agents.recall import RECALL_TOOL_NAME, RECALL_TOOL_SCHEMA, render_recall
 from agents.reflection import REFLECTION_TOOL_SCHEMAS, build_reflection_messages, render_recap
 from agents.tool_schemas import schemas_for
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
     DECIDE_BACKOFF_SECONDS,
+    RECALL_K,
     REFLECT_EVERY_N_BREATHS,
     REFLECT_RECAP_TURNS,
     RETRIEVAL_K,
@@ -148,6 +150,22 @@ class Agent:
         """Return the names of the tools available to this agent (registry order)."""
         return self.tool_registry.list_tools()
 
+    def _action_schemas(self) -> list[dict[str, Any]]:
+        """Return the tool schemas offered to the decider for an action.
+
+        The registry tools, plus the agent-owned ``recall`` tool when (and only
+        when) the agent has a real memory store -- a memory-less agent cannot search
+        a memory it does not have. The set is stable for an agent's lifetime (it
+        never flips as memory grows), so the model's KV cache stays warm.
+
+        Returns:
+            The action tool schemas, registry tools first then ``recall`` if offered.
+        """
+        schemas = schemas_for(self._tool_names())
+        if self.memory is not NULL_MEMORY:
+            schemas.append(RECALL_TOOL_SCHEMA)
+        return schemas
+
     # ---- setup ------------------------------------------------------------
 
     def _load_system_prompt(self) -> None:
@@ -219,8 +237,7 @@ class Agent:
             failed (the failure is logged).
         """
         try:
-            tools = schemas_for(self._tool_names())
-            decision = await self.decider.decide(self.lifecycle_history, tools)
+            decision = await self.decider.decide(self.lifecycle_history, self._action_schemas())
         except Exception:
             logger.exception("Decider failed for agent %r; ending breath gracefully", self.agent_id)
             self._rollback_perception()
@@ -245,14 +262,19 @@ class Agent:
         """
         for index, tool_call in enumerate(tool_calls):
             call_id = self._call_id(tool_call, index)
-            params = self._coerce_params(tool_call.params)
-            try:
-                result = await self.tool_registry.invoke(tool_call.name, self.agent_id, params)
-            except ToolError as error:
-                logger.warning(
-                    "Tool %r failed for agent %r: %s", tool_call.name, self.agent_id, error
-                )
-                result = f"Nothing happened; the action {tool_call.name!r} could not be performed."
+            if tool_call.name == RECALL_TOOL_NAME:
+                result = self._recall(tool_call.params)
+            else:
+                params = self._coerce_params(tool_call.params)
+                try:
+                    result = await self.tool_registry.invoke(tool_call.name, self.agent_id, params)
+                except ToolError as error:
+                    logger.warning(
+                        "Tool %r failed for agent %r: %s", tool_call.name, self.agent_id, error
+                    )
+                    result = (
+                        f"Nothing happened; the action {tool_call.name!r} could not be performed."
+                    )
             self.lifecycle_history.append(
                 {
                     "role": "tool",
@@ -370,6 +392,25 @@ class Agent:
         lines = ["Surfacing from your memory, things you carry:"]
         lines.extend(f"- {memory.content}" for memory in memories)
         return "\n".join(lines)
+
+    def _recall(self, params: dict[str, Any]) -> str:
+        """Run a ``recall`` action: search memory overflow and render the result.
+
+        The agent owns this (not the registry) because only it holds the memory
+        store. A missing or blank ``query`` is tolerated -- it searches with an empty
+        query (the store handles it) so a malformed call still yields a perception
+        rather than a dangling assistant tool call.
+
+        Args:
+            params: The tool-call params; ``query`` is the search text.
+
+        Returns:
+            The rendered recall result (an in-world ``tool`` perception string).
+        """
+        query = params.get("query")
+        query = query.strip() if isinstance(query, str) else ""
+        memories = self.memory.recall(query, self.breath_count, RECALL_K)
+        return render_recall(memories)
 
     # ---- the breath & the loop -------------------------------------------
 
