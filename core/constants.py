@@ -102,15 +102,25 @@ MATING_COOLDOWN_SECONDS: Final[float] = 300.0
 """Cooldown between matings for an agent, in seconds (5 minutes). [doc]
 (enforced for both parties in ``initiate_mating`` / ``accept_mating`` -- Sprint 7)."""
 
-MATING_PROPOSAL_TIMEOUT_SECONDS: Final[float] = 60.0
+MATING_PROPOSAL_TIMEOUT_SECONDS: Final[float] = 600.0
 """How long a mating proposal's escrow may sit unanswered before the world-tick
-refunds the initiator and removes it, in seconds. [design -- Sprint 4 Phase 2].
+refunds the initiator and removes it, in seconds (10 minutes). [design -- Sprint 4
+Phase 2; retuned 2026-06-29 from the F4 viability run].
 
 DISTINCT from :data:`MATING_COOLDOWN_SECONDS` (the gap *between* matings): this is
 the lifetime of a single outstanding proposal. Not part of the design doc's
 "World Rules" table; introduced for the proposal-timeout sweep on the Revisit List
-(see the Sprint-4 design spec Section 4.7). Chosen shorter than the cooldown so
-escrowed resources are returned promptly rather than locked indefinitely.
+(see the Sprint-4 design spec Section 4.7).
+
+**Why 600s, not the original 60s.** The timeout must outlast the *target's* breath
+interval, or a proposal expires before its target ever perceives it. Ollama runs
+inference sequentially, so with N agents sharing one model each agent breathes only
+about every ``N * latency`` seconds. The F4 run (4 agents) measured per-agent breath
+gaps of ~150-600s; against those, a 60s window guaranteed every proposal timed out
+unanswered (7/7 in run 5) -- the target had no breath while the offer stood. 600s
+spans ~2-3 target breaths so a standing offer survives long enough to be seen and
+answered. It is now *longer* than the cooldown by design: escrow held a few extra
+minutes is a far cheaper failure than mating that can never complete.
 """
 
 MATING_MAX_OFFSPRING: Final[int] = 5
