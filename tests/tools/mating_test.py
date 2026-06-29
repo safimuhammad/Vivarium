@@ -617,6 +617,14 @@ async def test_accept_stale_initiator_refunds_escrow_and_drops_proposal(
     assert world.get_agent_proposals("wanderer_001", "wanderer_002") == {}  # proposal dropped
     assert len(world.get_all_agents()) == 2  # no offspring
 
+    # The refunded initiator is notified so its LLM can perceive the returned escrow.
+    inbox = event_bus.get_events("wanderer_001")
+    assert len(inbox) == 1
+    assert inbox[0].type == "mating_proposal_invalidated"
+    assert inbox[0].scope is ScopeType.TARGETED
+    assert inbox[0].target == "wanderer_001"
+    assert inbox[0].source == "wanderer_001"
+
 
 async def test_accept_stamps_both_parents_cooldown_and_offspring_count(
     world: WorldState, event_bus: EventBus

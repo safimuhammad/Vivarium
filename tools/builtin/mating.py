@@ -280,8 +280,12 @@ async def accept_mating(
           removes the proposal (no offspring; mirrors :func:`reject_mating`).
 
     Emits events:
-        * One ``"agent_born"`` event (:attr:`~bus.events.ScopeType.LOCAL` to the
-          birth region, stamped with ``world.now()``, sourced from the offspring).
+        * On success: one ``"agent_born"`` event (:attr:`~bus.events.ScopeType.LOCAL`
+          to the birth region, stamped with ``world.now()``, sourced from the offspring).
+        * On a stale-initiator rejection: one ``"mating_proposal_invalidated"`` event
+          (:attr:`~bus.events.ScopeType.TARGETED` to the initiator) so the refunded
+          initiator can perceive why its escrow returned (mirrors the world-tick
+          ``"mating_proposal_timeout"`` event).
 
     Args:
         world: The live world state.
@@ -331,6 +335,26 @@ async def accept_mating(
             elif resource_type == ResourceTypes.MATERIALS:
                 world.modify_agent_materials(agent_init.id, quantity)
         world.remove_proposal(agent_init.id, agent_accept.id)
+        # Notify the initiator so its LLM perceives why the escrow reappeared (perception
+        # is the product; mirrors the world-tick ``mating_proposal_timeout`` event). All
+        # mutations are done before this ``await``, so a concurrent reject/tick on the now
+        # already-removed proposal cannot double-refund.
+        await event_bus.publish(
+            Event(
+                "mating_proposal_invalidated",
+                agent_init.id,
+                {
+                    "message": (
+                        f"Your mating proposal to {agent_accept.id} was invalidated because "
+                        f"you are no longer eligible to mate (cooldown or offspring cap); "
+                        f"your committed resources have been refunded."
+                    )
+                },
+                scope=ScopeType.TARGETED,
+                target=agent_init.id,
+                timestamp=world.now(),
+            )
+        )
         return (
             "Invalid: This mating proposal is no longer valid (the initiator is on "
             "cooldown or at their offspring cap); their committed resources have been refunded."

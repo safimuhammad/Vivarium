@@ -197,7 +197,7 @@ async def test_tick_and_reject_interleave_yield_single_refund(
 
     initiator = world.get_agent("wanderer_001")
     assert initiator is not None
-    # Exactly one refund: 80 -> 100 (NOT 120) energy; 40 -> 50 (NOT 60) materials.
+    # Exactly one refund: 50 -> 100 (NOT 150) energy; 20 -> 50 (NOT 80) materials.
     assert initiator.current_energy == 100.0
     assert initiator.current_materials == 50.0
     # The proposal is gone and the maps are consistent.

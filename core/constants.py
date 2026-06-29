@@ -21,8 +21,10 @@ DIVERGENCES (history; items 1 and 2 were reconciled in Sprint 4 Phase 2):
 2. Paralysis threshold: RECONCILED (S4 P2) -- ``WorldState.modify_agent_energy``
    now paralyses at ``energy <= 5.0`` (inclusive) and revives above it. Death
    (the kill-threshold) is still deferred to Sprint 6.
-3. Mating minimums / cooldown / max-offspring: doc-specified but unenforced in
-   the current mating tool.
+3. Mating minimums / cooldown / max-offspring: RECONCILED (Sprint 7) --
+   ``tools/builtin/mating.py`` now enforces the minimum contributions, the cooldown,
+   and the per-agent offspring cap (the "explosion guard"), using
+   ``WorldState.record_mating`` / ``is_on_mating_cooldown`` for the bookkeeping.
 4. Mating child share: the doc says "child receives 80% of combined
    contributions". The code computes the offspring's resources as the
    *initiator's* committed amount * 1.6. Because ``accept_mating`` forces the
@@ -90,15 +92,15 @@ PARALYZED agent only when ``energy > 5.0``; a DEAD agent is left untouched.
 
 MATING_MIN_ENERGY_CONTRIBUTION: Final[float] = 50.0
 """Minimum energy a parent must commit to a mating proposal. [doc]
-(not yet enforced in code)."""
+(enforced in ``initiate_mating`` -- Sprint 7)."""
 
 MATING_MIN_MATERIALS_CONTRIBUTION: Final[float] = 30.0
 """Minimum materials a parent must commit to a mating proposal. [doc]
-(not yet enforced in code)."""
+(enforced in ``initiate_mating`` -- Sprint 7)."""
 
 MATING_COOLDOWN_SECONDS: Final[float] = 300.0
 """Cooldown between matings for an agent, in seconds (5 minutes). [doc]
-(not yet enforced in code)."""
+(enforced for both parties in ``initiate_mating`` / ``accept_mating`` -- Sprint 7)."""
 
 MATING_PROPOSAL_TIMEOUT_SECONDS: Final[float] = 60.0
 """How long a mating proposal's escrow may sit unanswered before the world-tick
@@ -113,7 +115,7 @@ escrowed resources are returned promptly rather than locked indefinitely.
 
 MATING_MAX_OFFSPRING: Final[int] = 5
 """Maximum offspring a single agent may produce. [doc]
-(not yet enforced in code)."""
+(enforced for both parties in ``initiate_mating`` / ``accept_mating`` -- Sprint 7)."""
 
 MATING_CHILD_SHARE: Final[float] = 0.8
 """Fraction of the *combined* parental contribution the child receives. [doc].
