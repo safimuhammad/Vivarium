@@ -10,6 +10,12 @@ Measures what memory *costs* and how well it *retrieves*, so the optimization pa
   5. footprint             -- jsonl bytes/memory, chroma dir bytes, process RSS
   6. retrieval quality     -- does the salience scorer surface a high-importance
                               grudge that pure relevance / pure recency miss?
+  7. resident-block build  -- ms per resident_block under vs over the cap (the
+                              per-breath retrieval cost; ~free under cap)  [5.1]
+  8. recall latency/quality-- ms per recall(query) vs N, and whether recall surfaces
+                              a planted overflow memory by exact text / paraphrase  [5.1]
+  9. overflow correctness  -- HIGH always resident, block size == cap, a dropped
+                              low-importance memory still reachable via recall  [5.1]
 
 Run (deterministic machinery, fast):   python -m bench.bench_memory --backend fake
 Run (real MiniLM + Chroma, realistic): python -m bench.bench_memory --backend chroma
@@ -267,6 +273,143 @@ def bench_quality(backend: str) -> Section:
     return section
 
 
+def bench_resident_block(backend: str, scales: tuple[int, ...]) -> Section:
+    """Measure resident_block build latency under vs over the cap (Sprint 5.1).
+
+    The whole point of the resident block: under the cap it returns the entire
+    memory with NO embedding (near-free per breath), and only pays the query-embed +
+    distance scan once memory overflows the cap. This section makes that contrast
+    visible -- the cheap regime is what lets memory stay resident every breath.
+    """
+    cap = constants.MEMORY_RESIDENT_CAP
+    section = Section(f"Resident-block build latency (retrieval) -- backend=`{backend}`, cap={cap}")
+    section.lines.append("| N | regime | resident_block ms (median/p95) | block size |")
+    section.lines.append("|--:|--|--:|--:|")
+    for n in scales:
+        root = Path(tempfile.mkdtemp(prefix="vivbench_rb_"))
+        try:
+            store = _make_store(backend, root)
+            store.append_memory("warmup -- loads the model outside timing", Importance.LOW, 0)
+            for i in range(n):
+                store.append_memory(_content(i), Importance.MEDIUM, i)
+            timings = []
+            block: list[MemoryItem] = []
+            for q in range(RETRIEVE_SAMPLES):
+                start = time.perf_counter()
+                block = store.resident_block(f"thoughts on topic {q % TOPICS}", n)
+                timings.append(_ms(time.perf_counter() - start))
+            regime = "under cap (whole memory, no embed)" if n <= cap else "over cap (embed + scan)"
+            section.lines.append(f"| {n} | {regime} | {_p(timings)} | {len(block)} |")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+    return section
+
+
+def bench_recall_latency(backend: str, scales: tuple[int, ...]) -> Section:
+    """Measure recall(query) latency vs N (the on-demand overflow-access cost)."""
+    section = Section(f"Recall latency -- backend=`{backend}`")
+    section.lines.append("| N | recall ms (median/p95) |")
+    section.lines.append("|--:|--:|")
+    for n in scales:
+        root = Path(tempfile.mkdtemp(prefix="vivbench_rc_"))
+        try:
+            store = _make_store(backend, root)
+            store.append_memory("warmup -- loads the model outside timing", Importance.LOW, 0)
+            for i in range(n):
+                store.append_memory(_content(i), Importance.MEDIUM, i)
+            timings = []
+            for q in range(RETRIEVE_SAMPLES):
+                start = time.perf_counter()
+                store.recall(f"thoughts on topic {q % TOPICS}", n, constants.RECALL_K)
+                timings.append(_ms(time.perf_counter() - start))
+            section.lines.append(f"| {n} | {_p(timings)} |")
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+    return section
+
+
+def bench_recall_quality(backend: str) -> Section:
+    """Can recall surface a planted overflow memory by exact text and by paraphrase?
+
+    Exact-text recall should always land it (distance ~0). Paraphrase recall is the
+    real test of semantic search -- it lands on the MiniLM backend but not on the
+    fake (sha256) embedder, which has no semantics; the table makes that explicit.
+    """
+    section = Section(f"Recall quality -- backend=`{backend}`")
+    root = Path(tempfile.mkdtemp(prefix="vivbench_rq_"))
+    try:
+        store = _make_store(backend, root)
+        planted = "The copper key is buried beneath the third grey stone by the old mill."
+        store.append_memory(planted, Importance.LOW, 0)  # old, low, will be deep overflow
+        for i in range(20):
+            store.append_memory(_content(i), Importance.LOW, i + 1)
+        current = 30
+        exact = store.recall(planted, current, constants.RECALL_K)
+        para = store.recall(
+            "where did I hide the key near the old mill?", current, constants.RECALL_K
+        )
+
+        def in_topk(items: list[MemoryItem]) -> str:
+            return "yes" if any(m.content == planted for m in items) else "no"
+
+        def ranked_first(items: list[MemoryItem]) -> str:
+            return "yes" if items and items[0].content == planted else "no"
+
+        section.lines.append("| query | planted in top-k? | ranked #1? |")
+        section.lines.append("|--|--|--|")
+        section.lines.append(f"| exact text | {in_topk(exact)} | {ranked_first(exact)} |")
+        section.lines.append(f"| paraphrase | {in_topk(para)} | {ranked_first(para)} |")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    return section
+
+
+def bench_overflow_correctness(backend: str) -> Section:
+    """Verify the over-cap guarantees at the REAL cap (N grown past MEMORY_RESIDENT_CAP).
+
+    With memory past the cap: every HIGH-importance memory stays resident, the block
+    is exactly the cap size, and a distinctive low-importance memory that the block
+    drops is still reachable via recall. Tested at the production cap (no temporary
+    override) so the result reflects exactly what agents run with.
+    """
+    section = Section(f"Overflow correctness -- backend=`{backend}`")
+    cap = constants.MEMORY_RESIDENT_CAP
+    root = Path(tempfile.mkdtemp(prefix="vivbench_of_"))
+    try:
+        store = _make_store(backend, root)
+        vow = "I swore a vow never to abandon my kin, whatever it costs me."
+        key = "The copper key is buried beneath the third grey stone by the old mill."
+        store.append_memory(vow, Importance.HIGH, 0)  # must stay resident forever
+        store.append_memory(key, Importance.LOW, 1)  # distinctive overflow memory
+        n = cap + 60  # comfortably over the cap
+        for i in range(n):
+            store.append_memory(_content(i), Importance.MEDIUM, i + 2)
+        current = n + 2
+        block = store.resident_block("the ordinary business of an ordinary day", current)
+        contents = [m.content for m in block]
+        recalled = store.recall(key, current, constants.RECALL_K)  # exact -> robust on any backend
+
+        def yn(ok: bool) -> str:
+            return "yes" if ok else "no"
+
+        high_resident = any("vow never to abandon" in c for c in contents)
+        size_ok = len(block) == cap
+        key_overflowed = not any("copper key" in c for c in contents)
+        key_recalled = any("copper key" in m.content for m in recalled)
+
+        section.lines.append(f"| check (N={current}, cap={cap}) | result |")
+        section.lines.append("|--|--|")
+        section.lines.append(f"| HIGH-importance memory always resident | {yn(high_resident)} |")
+        section.lines.append(f"| block size == cap | {yn(size_ok)} ({len(block)}=={cap}) |")
+        section.lines.append(
+            f"| distinctive low-importance memory overflowed (not resident) | {yn(key_overflowed)}|"
+        )
+        section.lines.append(f"| ... yet reachable via recall | {yn(key_recalled)} |")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    return section
+
+
 def _retrieve_relevance_only(store: FileMemoryStore, query: str) -> list[MemoryItem]:
     items = store._items
     return score_memories(
@@ -315,6 +458,11 @@ def run(backend: str, scales: tuple[int, ...]) -> list[Section]:
         bench_scorer_pure(scales),
         bench_embedding(backend),
         bench_quality(backend),
+        # Sprint 5.1: the resident-block redesign -- retrieval / recall / overflow.
+        bench_resident_block(backend, scales),
+        bench_recall_latency(backend, scales),
+        bench_recall_quality(backend),
+        bench_overflow_correctness(backend),
     ]
     if backend == "chroma":  # restart cost is only meaningful for the persistent store
         sections.append(bench_restart(scales))
@@ -329,6 +477,9 @@ def render(sections: list[Section], backend: str, scales: tuple[int, ...], elaps
         f"Dials: RETRIEVAL_K={constants.RETRIEVAL_K}, RECENCY_DECAY={constants.RECENCY_DECAY}, "
         f"REFLECT_EVERY_N_BREATHS={constants.REFLECT_EVERY_N_BREATHS}, "
         f"weights=(r={constants.W_RECENCY}, i={constants.W_IMPORTANCE}, v={constants.W_RELEVANCE})",
+        f"Resident-block dials: MEMORY_RESIDENT_CAP={constants.MEMORY_RESIDENT_CAP}, "
+        f"RECALL_K={constants.RECALL_K}, recall weights=(r={constants.RECALL_W_RECENCY}, "
+        f"i={constants.RECALL_W_IMPORTANCE}, v={constants.RECALL_W_RELEVANCE})",
         "",
     ]
     for section in sections:

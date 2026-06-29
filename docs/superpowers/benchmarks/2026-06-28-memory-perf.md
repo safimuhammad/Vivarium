@@ -177,3 +177,98 @@ Dials: RETRIEVAL_K=5, RECENCY_DECAY=0.97, REFLECT_EVERY_N_BREATHS=12, weights=(r
 |--:|--:|--:|
 | 100 | 2.1 | 4530 |
 | 1000 | 4.4 | 45304 |
+
+---
+
+# Sprint 5.1 — Resident Memory Block (retrieval / recall / overflow)
+
+> The Sprint-5 design retrieved top-K memories **every breath**, which (per the
+> findings above) cost ~45–50 ms of embedding per breath and could still *miss* a
+> salient fact that didn't rank top-K that moment. Sprint 5.1 replaces per-breath
+> retrieval with an always-resident memory block (whole memory up to a cap, rebuilt
+> only at reflection) + on-demand `recall` for the overflow. New benchmark
+> dimensions: **retrieval** (resident-block build), **recall** (latency + quality),
+> **overflow** (correctness).
+
+## Targets
+
+| Metric | Target | Rationale |
+|---|---|---|
+| per-breath memory tax | ≈ 0 ms under cap | the block is in context; nothing is embedded per breath |
+| resident-block build (over cap) | embedding-bound, at reflection only | paid every REFLECT_EVERY_N_BREATHS, not every breath |
+| recall quality (paraphrase) | planted memory surfaces (ideally #1) | relevance-dominant recall must do real semantic search |
+| overflow guarantees | HIGH always resident; size == cap; overflow recall-reachable | the safety net that lets us cap the block at all |
+
+## The headline result — per-breath memory cost: ~45 ms → ~0 ms
+
+The redesign *is* the optimization. Real MiniLM + Chroma backend:
+
+| path | when it runs | cost (N=100) | cost (N=1000) |
+|---|---|--:|--:|
+| **before** — Sprint 5 `retrieve()` (top-K) | **every breath** | 45.2 ms | 49.9 ms |
+| **after** — `resident_block` under cap | init + reflection only | **0.00 ms** | n/a (N=1000 > cap) |
+| **after** — `resident_block` over cap | reflection only | — | 49.6 ms (~4 ms/breath amortized over 12) |
+| **after** — `recall` | on demand only (model-initiated) | 46.0 ms | 49.4 ms |
+
+Under the cap (every agent, for a very long life — 400 memories at the default
+reflection cadence is thousands of breaths) the per-breath memory tax is **0 ms**:
+no query embed, no distance scan; the whole memory simply sits resident and is
+rebuilt only at reflection — a point that already evicts and re-prefills the KV
+cache, so the rebuild is effectively free. The trade is *recurring compute* for
+*bounded context size* (≤ 400 lines ≈ a few thousand tokens, comfortably inside the
+64K request / qwen3's 40960 effective window). That is the right trade when
+embedding is the dominant cost and context under the window is cheap.
+
+Verified no per-breath embed remains: `perceive → decide → execute` calls neither
+`retrieve`, `resident_block`, nor `recall` (the block is built only in
+`_set_resident_block` at init/reflection; `recall` only when the model emits the
+action). The 45 ms/breath embedding tax is off the hot path entirely.
+
+## Recall quality (real MiniLM)
+
+| query | planted in top-k? | ranked #1? |
+|---|---|---|
+| exact text | yes | yes |
+| paraphrase ("where did I hide the key near the old mill?") | **yes** | **yes** |
+
+The relevance-dominant recall weights (`RECALL_W_RELEVANCE=1.0`,
+`RECALL_W_RECENCY=RECALL_W_IMPORTANCE=0.15`) surface a deep, old, low-importance
+overflow memory by *paraphrase* — real semantic search, not lexical match. (On the
+fake sha256 embedder this is correctly `no`: it has no semantics, only exact-match
+distance 0 — the benchmark reports both so the distinction is explicit.)
+
+## Overflow correctness (real cap = 400, N = 462)
+
+| check | result |
+|---|---|
+| HIGH-importance memory always resident | yes |
+| block size == cap | yes (400 == 400) |
+| distinctive low-importance memory overflowed (not resident) | yes |
+| ... yet reachable via `recall` | yes |
+
+All four guarantees hold at the production cap. The HIGH-importance reservation
+(`reserved = min(#HIGH, cap)`) is what makes a bounded resident block *safe*: a vow
+or a grudge can never be evicted by recency, and anything the block does drop is
+still one `recall` away.
+
+## Optimization conclusion — no further dial-tuning warranted
+
+Rigorous check of every cost center against the real backend:
+
+- **Per-breath tax:** 0 ms under cap (the redesign). Nothing to tune.
+- **Embedding (~45 ms):** the floor wherever it appears (over-cap build, recall).
+  Inherent to MiniLM-on-CPU; it is now off the per-breath path, so it no longer
+  multiplies. Batching doesn't apply (single query); caching doesn't (query is the
+  changing recap). No constant changes this.
+- **Scorer:** 0.5 ms at N=1k — noise against any embed. No tuning.
+- **Restart:** warm reopen 4.4–5.5 ms (the Sprint-5 count()-skip still holds);
+  re-embedding ~45 s avoided at N=1k. Unchanged, still essential for run-forever.
+- **`MEMORY_RESIDENT_CAP=400`:** 400 lines (~12–20K tokens) fits the window with
+  room for identity + tools + live history; large enough that overflow (and thus any
+  recurring embed cost) is rare in practice. Left as-is.
+
+The benchmark's job here was to prove the redesign removed the dominant recurring
+cost without sacrificing recall or the salience guarantees. It did: **45 ms/breath →
+0 ms/breath under cap, paraphrase recall ranks the target #1, and all overflow
+guarantees hold.** Best performance for this design is reached; the remaining cost
+(one MiniLM embed) is a hardware floor, not a tunable.
