@@ -15,7 +15,7 @@ import math
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from world.agents import AgentState
+from world.agents import AgentState, AgentStatus
 from world.regions import Region, ResourceTypes
 from world.world import WorldState
 
@@ -205,6 +205,11 @@ async def transfer_resource(
         * One ``"resource_transferred"`` event
           (:attr:`~bus.events.ScopeType.LOCAL`, stamped with ``world.now()``,
           targeting the receiver) to the sender's region.
+        * One ``"agent_recovered"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, source = the sending feeder,
+          targeting the receiver, stamped with ``world.now()``) **only** when an
+          energy transfer lifts a ``PARALYZED`` receiver back to ``ALIVE``, so
+          nearby agents perceive the revival.
 
     Args:
         world: The live world state.
@@ -251,8 +256,26 @@ async def transfer_resource(
         )
 
     if req_resource == ResourceTypes.ENERGY:
+        was_paralyzed = receiver_agent.status is AgentStatus.PARALYZED
         world.modify_agent_energy(sender_agent.id, -quantity)
         world.modify_agent_energy(receiver_agent.id, quantity)
+        if was_paralyzed and receiver_agent.status is AgentStatus.ALIVE:
+            recover_payload = {
+                "message": (
+                    f"{sender_agent.name} revived {receiver_agent.name} "
+                    f"(ID:{receiver_agent.id})."
+                )
+            }
+            await event_bus.publish(
+                Event(
+                    "agent_recovered",
+                    sender_agent.id,
+                    recover_payload,
+                    scope=ScopeType.LOCAL,
+                    target=receiver_agent.id,
+                    timestamp=world.now(),
+                )
+            )
     else:
         world.modify_agent_materials(sender_agent.id, -quantity)
         world.modify_agent_materials(receiver_agent.id, quantity)

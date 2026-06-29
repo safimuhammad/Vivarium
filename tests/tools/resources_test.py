@@ -417,3 +417,66 @@ async def test_transfer_zero_amount_is_invalid_no_event(
     assert receiver.current_energy == 100.0  # unchanged
     assert result.startswith("Invalid:")
     assert event_bus.get_events("wanderer_002") == []
+
+
+# ---- transfer_resource: agent_recovered on revival ------------------------
+
+
+async def test_transfer_energy_revives_emits_agent_recovered(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Feeding a PARALYZED agent above the threshold flips it ALIVE and emits a
+    LOCAL ``agent_recovered`` event (source = feeder, target = revived)."""
+    world.modify_agent_energy("wanderer_002", -96.0)  # -> PARALYZED at 4.0
+    await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount=10.0,
+    )  # 4 -> 14 > 5
+    t = world.get_agent("wanderer_002")
+    assert t is not None and t.status is AgentStatus.ALIVE
+    recovered = [
+        e for e in event_bus.get_events("wanderer_002") if e.type == "agent_recovered"
+    ]
+    assert recovered and recovered[0].scope is ScopeType.LOCAL
+    assert recovered[0].source == "wanderer_001" and recovered[0].target == "wanderer_002"
+
+
+async def test_transfer_not_enough_to_revive_no_event(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A transfer that leaves the receiver PARALYZED emits no ``agent_recovered``."""
+    world.modify_agent_energy("wanderer_002", -98.0)  # -> 2.0 PARALYZED
+    await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount=1.0,
+    )  # 2 -> 3, still <= 5
+    t = world.get_agent("wanderer_002")
+    assert t is not None and t.status is AgentStatus.PARALYZED
+    assert not any(
+        e.type == "agent_recovered" for e in event_bus.get_events("wanderer_002")
+    )
+
+
+async def test_transfer_to_alive_no_recovered_event(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A transfer to an already-ALIVE receiver emits no ``agent_recovered``."""
+    await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount=10.0,
+    )
+    assert not any(
+        e.type == "agent_recovered" for e in event_bus.get_events("wanderer_002")
+    )
