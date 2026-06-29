@@ -455,7 +455,9 @@ def test_is_on_mating_cooldown_just_mated_is_true(world: WorldState) -> None:
     assert world.is_on_mating_cooldown("wanderer_001", world.now(), 300.0) is True
 
 
-def test_is_on_mating_cooldown_expires_after_window(world: WorldState, fake_clock: FakeClock) -> None:
+def test_is_on_mating_cooldown_expires_after_window(
+    world: WorldState, fake_clock: FakeClock
+) -> None:
     """Cooldown clears once more than the window has elapsed since the last mating."""
     mated_at = world.now()
     world.record_mating("wanderer_001", mated_at)
