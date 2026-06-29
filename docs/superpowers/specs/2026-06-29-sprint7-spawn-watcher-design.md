@@ -105,6 +105,12 @@ the fixed-list `gather` entirely, so dynamic tasks are handled uniformly. (`run_
 intent: a lineage that keeps producing live agents runs indefinitely, exactly as the art-piece
 wants — generations carrying the world forward.)
 
+*Timing note (reviewer):* the old `_watch_agents_done` fired the instant the last agent's
+`run()` task completed (event-driven, immediate); the poll-based `_liveness_watch` detects an
+all-DEAD world up to one `interval` later. This polling latency is intentional (it is how the
+dynamic set is handled uniformly) and is well within the existing tests' bounds
+(`test_runner_stops_when_all_dead` uses a 0.05 s interval vs a 4.0 s assertion).
+
 > Reviewer question to confirm: is "the run continues as long as any agent is ALIVE or
 > revivable" the right run-forever semantics? Per CLAUDE.md §1 (a world that neither collapses
 > nor explodes, run indefinitely) the answer is yes — the run should outlive any individual.
@@ -133,6 +139,10 @@ The spawn-watcher is a background task; the existing `finally` already cancels
     tasks into the shutdown.
 - No changes to `world/`, `bus/`, `tools/` (offspring are ordinary agents; `accept_mating`
   already emits `agent_born`).
+- `observability/activity_feed.py`: `render_world_table` gains a population summary line
+  (total + ALIVE / PARALYZED / DEAD counts) so an observer can *see* population growth and
+  diagnose Ollama-throughput degradation during the F4 run (perception is the product; a
+  one-line render addition, reviewer Finding 4).
 
 ## 5. Testing (TDD, deterministic, no live model)
 - **Offspring breathes:** build a sim; mid-run inject a new agent via `world.add_agent` (or
@@ -150,9 +160,12 @@ The spawn-watcher is a background task; the existing `finally` already cancels
 - **Shutdown unsubscribes offspring:** after a run with a spawned offspring, its inbox is freed.
 - **Factory parity:** an offspring built by the factory has the same memory wiring (a recall
   tool offered, etc.) as an initial agent.
-- All existing `run_test.py` tests keep passing (the collapse-watch test is re-expressed: the
-  watcher now breathes injected agents, so the "inert offspring" scenario is replaced by a
-  "dead world stops" / "offspring keeps alive" pair).
+- **`test_collapse_watch_ignores_inert_offspring` is DELETED, not kept** (reviewer Finding 1):
+  with the watcher live it can never pass — the watcher breathes the injected offspring, so the
+  world no longer collapses and the run goes to `duration`. Its intent is fully covered by the
+  "run survives via a living offspring" + "truly-dead world stops fast" pair above (the "inert
+  offspring" scenario ceases to exist once offspring breathe). All *other* `run_test.py` tests
+  keep passing.
 
 ## 6. Gates (must reproduce CI exactly before merge)
 `ruff check .`, `ruff format --check .`,
@@ -164,6 +177,15 @@ The spawn-watcher is a background task; the existing `finally` already cancels
   check + cancelling the watcher first.
 - **List mutation during iteration**: mitigated — all readers iterate without `await` inside
   the loop (cooperative scheduling makes the append atomic w.r.t. them).
+- **Polling gap** (reviewer Finding 3): an offspring that lands in `world.agents` between two
+  spawn-watcher polls is briefly invisible to `_liveness_watch`. If *all* breathing agents
+  coincidentally die in that same sub-interval window, the run could stop with one living agent
+  still in the world. Probability is very low (both mating parents must die within one
+  `world_tick_interval` of a completed mating). Accepted for this sprint; revisit with Sprint 8
+  persistence work.
 - **Unbounded population (explosion)**: out of scope here, but note it — mating minimums /
   max-offspring (existing debt) are the explosion guard; the spawn-watcher itself adds no cap.
-  Flag for F4 tuning so the world neither collapses nor explodes.
+  The bigger near-term effect is Ollama-throughput degradation: `SerializingDecider` shares one
+  inference slot, so each new agent lowers every agent's breath rate (5→25 agents ≈ 5× slower) —
+  it degrades quietly rather than crashing. The population summary added to the activity feed
+  (§4) makes this visible. Flag for F4 tuning so the world neither collapses nor explodes.
