@@ -350,6 +350,20 @@ def test_modify_agent_materials_missing_agent(world: WorldState) -> None:
     assert world.modify_agent_materials("ghost", 10.0) is False
 
 
+def test_modify_agent_materials_dead_is_terminal(world: WorldState) -> None:
+    """A DEAD agent is terminal: materials are never changed (mirrors energy).
+
+    Defense-in-depth so a corpse can never hoard materials no one can recover.
+    """
+    assert world.update_agent_status("wanderer_001", AgentStatus.DEAD) is True
+    agent = world.get_agent("wanderer_001")
+    assert agent is not None
+    materials_before = agent.current_materials
+    # The agent exists, so the call is "handled" (True), but it is a no-op.
+    assert world.modify_agent_materials("wanderer_001", 1000.0) is True
+    assert agent.current_materials == materials_before  # unchanged
+
+
 # ---------------------------------------------------------------------------
 # Mating proposals
 # ---------------------------------------------------------------------------

@@ -241,6 +241,19 @@ async def transfer_resource(
     if not sender_agent or not receiver_agent:
         return "Error: Cannot find Agents in the world"
 
+    if sender_agent.id == receiver_agent.id:
+        return "Invalid: You cannot transfer resources to yourself."
+
+    if receiver_agent.status is AgentStatus.DEAD:
+        # Feeding a corpse would debit the sender while the receiver's DEAD-guarded
+        # credit no-ops (energy destroyed) or strand materials on the dead; reject
+        # before any mutation. PARALYZED receivers are allowed -- that is the revival
+        # path -- so only DEAD is blocked.
+        return (
+            f"Invalid: {receiver_agent.name} is dead; you cannot transfer "
+            f"resources to a corpse."
+        )
+
     if sender_agent.current_position != receiver_agent.current_position:
         return (
             "Invalid: Cannot transfer resources across regions, "

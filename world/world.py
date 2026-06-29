@@ -276,19 +276,26 @@ class WorldState:
         """Add ``amount`` to an agent's materials, flooring at 0.0.
 
         Mutates the agent's :attr:`~world.agents.AgentState.current_materials`.
+        A ``DEAD`` agent is terminal: the call early-returns without touching
+        materials (mirroring :meth:`modify_agent_energy`), so a corpse can never
+        hoard materials no living agent can recover.
 
         Args:
             agent_id: Id of the agent to modify.
             amount: Signed delta to apply (negative to spend).
 
         Returns:
-            ``True`` if the agent exists and was modified; ``False`` otherwise.
+            ``True`` if the agent exists (including the ``DEAD`` terminal no-op);
+            ``False`` only if no such agent exists.
         """
-        if agent_id in self.agents:
-            agent = self.agents[agent_id]
-            agent.current_materials = max(agent.current_materials + amount, 0.0)
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return False
+        if agent.status is AgentStatus.DEAD:
+            # Death is terminal: never change a dead agent's materials.
             return True
-        return False
+        agent.current_materials = max(agent.current_materials + amount, 0.0)
+        return True
 
     def kill_agent(self, agent_id: str) -> bool:
         """Mark an agent DEAD and clean up its pending mating proposals.
