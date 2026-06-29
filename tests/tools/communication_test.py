@@ -93,6 +93,14 @@ async def test_speak_whisper_to_nonexistent_target_returns_error(
     assert event_bus.get_events("wanderer_002") == []
 
 
+async def test_speak_blocked_when_paralyzed(world: WorldState, event_bus: EventBus) -> None:
+    """A PARALYZED agent cannot speak: an ``Invalid:`` string, no charge, no event."""
+    world.modify_agent_energy("wanderer_001", -96.0)  # 100.0 -> 4.0 => PARALYZED
+    out = await speak(world, event_bus, "wanderer_001", message="hello")
+    assert out.startswith("Invalid:")
+    assert not event_bus.get_events("wanderer_001")  # nothing published
+
+
 async def test_wait_returns_phrase_and_emits_no_event(
     world: WorldState, event_bus: EventBus
 ) -> None:

@@ -273,7 +273,11 @@ async def test_harvest_numeric_string_amount_succeeds(
 ) -> None:
     """A numeric-string amount (the model often sends ``"50"``) harvests normally."""
     result = await harvest_resources(
-        world, event_bus, "wanderer_001", resource_type=ResourceTypes.ENERGY, amount="50"
+        world,
+        event_bus,
+        "wanderer_001",
+        resource_type=ResourceTypes.ENERGY,
+        amount="50",  # type: ignore[arg-type]  # deliberately a numeric string (model input)
     )
     agent = world.get_agent("wanderer_001")
     region = world.get_region("alpha")
@@ -289,7 +293,11 @@ async def test_harvest_non_numeric_amount_returns_error_no_mutation(
 ) -> None:
     """A non-numeric amount yields an ``Error:`` string without raising or mutating."""
     result = await harvest_resources(
-        world, event_bus, "wanderer_001", resource_type=ResourceTypes.ENERGY, amount="five"
+        world,
+        event_bus,
+        "wanderer_001",
+        resource_type=ResourceTypes.ENERGY,
+        amount="five",  # type: ignore[arg-type]  # deliberately non-numeric (model input)
     )
     agent = world.get_agent("wanderer_001")
     region = world.get_region("alpha")
@@ -345,7 +353,7 @@ async def test_transfer_numeric_string_amount_succeeds(
         "wanderer_001",
         target="wanderer_002",
         resource_type=ResourceTypes.ENERGY,
-        amount="40",
+        amount="40",  # type: ignore[arg-type]  # deliberately a numeric string (model input)
     )
     sender = world.get_agent("wanderer_001")
     receiver = world.get_agent("wanderer_002")
@@ -366,7 +374,7 @@ async def test_transfer_non_numeric_amount_returns_error_no_mutation(
         "wanderer_001",
         target="wanderer_002",
         resource_type=ResourceTypes.ENERGY,
-        amount="five",
+        amount="five",  # type: ignore[arg-type]  # deliberately non-numeric (model input)
     )
     sender = world.get_agent("wanderer_001")
     receiver = world.get_agent("wanderer_002")
@@ -417,3 +425,121 @@ async def test_transfer_zero_amount_is_invalid_no_event(
     assert receiver.current_energy == 100.0  # unchanged
     assert result.startswith("Invalid:")
     assert event_bus.get_events("wanderer_002") == []
+
+
+# ---- transfer_resource: agent_recovered on revival ------------------------
+
+
+async def test_transfer_energy_revives_emits_agent_recovered(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Feeding a PARALYZED agent above the threshold flips it ALIVE and emits a
+    LOCAL ``agent_recovered`` event (source = feeder, target = revived)."""
+    world.modify_agent_energy("wanderer_002", -96.0)  # -> PARALYZED at 4.0
+    await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount=10.0,
+    )  # 4 -> 14 > 5
+    t = world.get_agent("wanderer_002")
+    assert t is not None and t.status is AgentStatus.ALIVE
+    recovered = [e for e in event_bus.get_events("wanderer_002") if e.type == "agent_recovered"]
+    assert recovered and recovered[0].scope is ScopeType.LOCAL
+    assert recovered[0].source == "wanderer_001" and recovered[0].target == "wanderer_002"
+
+
+async def test_transfer_not_enough_to_revive_no_event(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A transfer that leaves the receiver PARALYZED emits no ``agent_recovered``."""
+    world.modify_agent_energy("wanderer_002", -98.0)  # -> 2.0 PARALYZED
+    await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount=1.0,
+    )  # 2 -> 3, still <= 5
+    t = world.get_agent("wanderer_002")
+    assert t is not None and t.status is AgentStatus.PARALYZED
+    assert not any(e.type == "agent_recovered" for e in event_bus.get_events("wanderer_002"))
+
+
+async def test_transfer_to_alive_no_recovered_event(world: WorldState, event_bus: EventBus) -> None:
+    """A transfer to an already-ALIVE receiver emits no ``agent_recovered``."""
+    await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount=10.0,
+    )
+    assert not any(e.type == "agent_recovered" for e in event_bus.get_events("wanderer_002"))
+
+
+# ---- transfer_resource: DEAD-receiver + self-transfer guards ---------------
+
+
+async def test_transfer_energy_to_dead_receiver_is_invalid_no_mutation(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Feeding energy to a corpse is rejected before any mutation.
+
+    Without the guard the sender is debited but the receiver's DEAD-guarded credit
+    no-ops, *destroying* energy from the economy and falsely reporting success.
+    """
+    assert world.kill_agent("wanderer_002") is True
+    result = await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount=20.0,
+    )
+    sender = world.get_agent("wanderer_001")
+    assert sender is not None and sender.current_energy == 100.0  # not debited
+    assert result.startswith("Invalid:")
+    assert event_bus.get_events("wanderer_002") == []
+
+
+async def test_transfer_materials_to_dead_receiver_is_invalid_no_mutation(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Sending materials to a corpse is rejected (would otherwise strand them)."""
+    assert world.kill_agent("wanderer_002") is True
+    result = await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.MATERIALS,
+        amount=15.0,
+    )
+    sender = world.get_agent("wanderer_001")
+    receiver = world.get_agent("wanderer_002")
+    assert sender is not None and sender.current_materials == 50.0  # not debited
+    assert receiver is not None and receiver.current_materials == 50.0  # not credited
+    assert result.startswith("Invalid:")
+    assert event_bus.get_events("wanderer_002") == []
+
+
+async def test_transfer_to_self_is_invalid_no_event(world: WorldState, event_bus: EventBus) -> None:
+    """A self-transfer is a misleading net-zero no-op and is rejected."""
+    result = await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_001",
+        resource_type=ResourceTypes.ENERGY,
+        amount=10.0,
+    )
+    sender = world.get_agent("wanderer_001")
+    assert sender is not None and sender.current_energy == 100.0  # unchanged
+    assert result.startswith("Invalid:")
+    assert event_bus.get_events("wanderer_001") == []

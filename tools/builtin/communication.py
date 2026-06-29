@@ -11,6 +11,7 @@ from __future__ import annotations
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import SPEAK_ENERGY_COST
+from world.agents import AgentStatus
 from world.world import WorldState
 
 WAIT_PHRASES: tuple[str, ...] = (
@@ -54,12 +55,18 @@ async def speak(
     Returns:
         A confirmation sentence naming the destination, or a rejection string:
         ``"Error: "`` if the speaker is unknown or a whisper ``target`` does not
-        exist, or ``"Invalid: "`` if the message is empty/blank. On any rejection
-        path no energy is deducted and no event is published.
+        exist, or ``"Invalid: "`` if the speaker is not ``ALIVE`` (e.g. paralysed)
+        or the message is empty/blank. On any rejection path no energy is deducted
+        and no event is published.
     """
     agent_state = world.get_agent(agent_id)
     if not agent_state:
         return "Error: Cannot speak, agent does not exist."
+
+    # A paralysed (non-ALIVE) agent cannot act: reject before mutating or
+    # publishing so a frozen agent neither spends energy nor broadcasts.
+    if agent_state.status is not AgentStatus.ALIVE:
+        return "Invalid: You are paralyzed and cannot speak."
 
     # Validate before mutating: an empty/blank message would broadcast a
     # semantically empty perception to every regional agent at full energy cost.

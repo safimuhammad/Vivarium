@@ -17,8 +17,15 @@ import pytest
 import agents.runtime as runtime_module
 from agents.compaction import estimate_tokens
 from agents.decider import Decision, ToolCall
+from agents.recall import RECALL_TOOL_NAME
 from agents.runtime import DECIDE_BACKOFF_SECONDS, Agent
 from bus.event_bus import EventBus
+from bus.events import Event, ScopeType
+from core.constants import (
+    ATTACK_ENERGY_COST,
+    PARALYSIS_ENERGY_THRESHOLD,
+    REFLECT_EVERY_N_BREATHS,
+)
 from memory.models import Importance
 from memory.store import FileMemoryStore
 from observability.event_log import InMemoryEventLog
@@ -339,11 +346,99 @@ async def test_perceive_contains_self_state_and_region_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# 9.3 Status (paralysis only; death is Sprint 6)
+# Sprint 6 T5: revisit items (low-energy attack warning; abort-on-paralyze)
 # ---------------------------------------------------------------------------
 
 
-async def test_breath_into_paralysis_emits_event_and_stops_run(world: WorldState) -> None:
+def test_low_energy_attack_warning_in_perception(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """Below ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD, perception warns of paralysis."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 8.0))  # 8 energy
+    text = agent._render_perception([])
+    assert "⚠" in text and "paralyzed" in text.lower()
+
+
+async def test_execute_aborts_remaining_calls_when_paralyzed_midbreath(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """If a tool call paralyzes the agent, later calls in the same breath are skipped."""
+    # speak costs 0.5; drive ADA to 5.5 so the first speak -> 5.0 => PARALYZED.
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 5.5))
+    await agent.execute(
+        [ToolCall("speak", {"message": "one"}), ToolCall("speak", {"message": "two"})]
+    )
+    # The second call must produce a skipped tool message (not a real action).
+    tool_msgs = [m for m in agent.lifecycle_history if m["role"] == "tool"]
+    assert any(
+        "could not act" in m["content"].lower() or "paralyzed" in m["content"].lower()
+        for m in tool_msgs
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9.3 Status (paralysis is recoverable; only death is terminal -- Sprint 6 T1)
+# ---------------------------------------------------------------------------
+
+
+async def test_paralyzed_agent_loop_continues_and_only_drains(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A PARALYZED agent keeps _can_continue True, takes no action, and drains its inbox."""
+    decider = MockDecider([Decision(tool_calls=[ToolCall("look_around")])])
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
+    # Drive ADA to paralysis directly via the world (sole status writer).
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 1.0))  # ~1 energy
+    assert _live(world, ADA).status is AgentStatus.PARALYZED
+    history_len_before = len(agent.lifecycle_history)
+
+    # Put an event in ADA's inbox; a paralyzed breath should drain (not append) it.
+    await event_bus.publish(
+        Event(
+            "speak",
+            BORIS,
+            {"message": "hi"},
+            scope=ScopeType.LOCAL,
+            region=_live(world, ADA).current_position,
+        )
+    )
+    await agent.breathe()
+
+    assert agent._can_continue(None) is True  # paralysis is NOT terminal
+    assert len(agent.lifecycle_history) == history_len_before  # no perceive-append
+    assert event_bus.get_events(ADA) == []  # inbox was drained
+    assert agent.breath_count == 1
+
+
+async def test_dead_agent_loop_terminates(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    world.update_agent_status(ADA, AgentStatus.DEAD)
+    assert agent._can_continue(None) is False
+
+
+async def test_revived_agent_acts_again(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """Fed back above the threshold, a previously-paralyzed agent decides and acts."""
+    decider = MockDecider(
+        [
+            Decision(tool_calls=[ToolCall("look_around")]),
+            Decision(tool_calls=[ToolCall("look_around")]),
+        ]
+    )
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 1.0))
+    await agent.breathe()  # paralyzed: drains only
+    world.modify_agent_energy(ADA, 50.0)  # fed -> revives ALIVE
+    await agent.breathe()  # now acts
+    assert any(m["role"] == "assistant" for m in agent.lifecycle_history)
+
+
+async def test_breath_into_paralysis_emits_event_and_loop_survives(world: WorldState) -> None:
     bus, registry, log = _wired(world, with_log=True)
     assert log is not None
     world.modify_agent_energy(ADA, -94.5)  # 100.0 -> 5.5, still ALIVE (> 5.0)
@@ -354,10 +449,10 @@ async def test_breath_into_paralysis_emits_event_and_stops_run(world: WorldState
     await agent.run(max_breaths=10)
 
     assert _live(world, ADA).status is AgentStatus.PARALYZED  # speak's 0.5 cost: 5.5 -> 5.0
-    assert agent.breath_count == 1  # the loop stopped after paralysis
-    assert not agent.alive
+    assert agent.breath_count == 10  # the loop kept breathing through paralysis (did NOT stop)
+    assert agent._can_continue(None) is True  # paralysis is NOT terminal; the loop survives
     paralyzed = [event for event in log.events if event.type == "agent_paralyzed"]
-    assert len(paralyzed) == 1
+    assert len(paralyzed) == 1  # the transition fires exactly once, not every frozen breath
 
 
 async def test_run_does_not_act_for_dead_agent(
@@ -373,20 +468,102 @@ async def test_run_does_not_act_for_dead_agent(
     assert not agent.alive
 
 
-async def test_paralyzed_agent_breathe_perceives_but_does_not_act(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+# ---------------------------------------------------------------------------
+# Sprint 6 review fixes: runtime robustness
+# ---------------------------------------------------------------------------
+
+
+async def test_execute_recall_that_raises_is_caught_and_paired(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    world.modify_agent_energy(ADA, -100.0)  # 100.0 -> 0.0 -> PARALYZED
-    assert _live(world, ADA).status is AgentStatus.PARALYZED
-    decider = MockDecider([Decision(tool_calls=[ToolCall("wait")])])
-    agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
+    """A recall whose backend raises still produces a paired tool turn, never dangling.
+
+    In production ``recall`` hits a real vector store that can raise; the assistant
+    turn must never be left with an unpaired tool call (which would corrupt history).
+    """
+
+    def boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("vector store unavailable")
+
+    monkeypatch.setattr(memory_store, "recall", boom)
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), memory=memory_store)
+
+    await agent.execute([ToolCall(RECALL_TOOL_NAME, {"query": "anything"})])
+
+    tool_msgs = [m for m in agent.lifecycle_history if m["role"] == "tool"]
+    assert len(tool_msgs) == 1  # the call is paired, not dangling
+    assert "could not" in tool_msgs[0]["content"].lower()
+
+
+async def test_reflection_skipped_when_paralyzed_midbreath(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    """A reflection-cadence breath that paralyzes the agent mid-breath spends no Ollama on it."""
+    reflection = Decision(
+        tool_calls=[ToolCall("remember", {"content": "I reflected.", "importance": "high"})]
+    )
+    decider = ReflectAwareDecider(
+        action=Decision(tool_calls=[ToolCall("speak", {"message": "Fading..."})]),
+        reflection=reflection,
+    )
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, memory=memory_store)
+    # 5.5 energy: the speak action costs 0.5 -> 5.0 => PARALYZED mid-breath.
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 5.5))
+    agent.breath_count = REFLECT_EVERY_N_BREATHS - 1  # next breath is a reflection breath
 
     await agent.breathe()
 
-    assert [m["role"] for m in agent.lifecycle_history] == ["system", "user"]  # perceived only
-    assert decider.history == []  # decide was never called
-    assert agent.breath_count == 1
-    assert "paralyzed" in agent.lifecycle_history[-1]["content"]
+    assert _live(world, ADA).status is AgentStatus.PARALYZED
+    assert reflection not in decider.history  # reflection never ran on the frozen agent
+    assert memory_store.memory_count() == 0  # nothing was authored
+
+
+async def test_paralyzed_breath_resets_last_decide_failed(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A drain-only paralyzed breath clears the stale decide-failed backoff flag."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 1.0))  # PARALYZED
+    agent._last_decide_failed = True  # left over from a prior failed decide
+
+    await agent.breathe()
+
+    assert agent._last_decide_failed is False  # a paralyzed breath performs no decide
+
+
+def test_perception_annotates_non_alive_neighbors(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """Corpses / fallen agents in the region are labelled, not shown as normal neighbours."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    assert world.kill_agent(BORIS) is True
+
+    text = agent._render_perception([])
+
+    assert "Boris" in text
+    assert "(dead)" in text  # marked as a corpse, not an ordinary neighbour
+
+
+def test_low_energy_attack_warning_fires_at_exact_threshold(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """At exactly ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD the warning still fires.
+
+    Attacking from 15.0 lands at 5.0, which is <= the paralysis threshold and DOES
+    paralyse, so the advisory must include the boundary (a ``<`` would miss it).
+    """
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    threshold = ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - threshold))
+    text = agent._render_perception([])
+    assert "⚠" in text and "paralyzed" in text.lower()
 
 
 # ---- Sprint 5: memory + reflection integration --------------------------------
@@ -857,7 +1034,9 @@ def _shrink_budget(monkeypatch: pytest.MonkeyPatch, **overrides: int) -> None:
 
 
 async def test_compaction_fires_over_trigger_and_installs_recap(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _shrink_budget(monkeypatch)
@@ -874,7 +1053,9 @@ async def test_compaction_fires_over_trigger_and_installs_recap(
 
 
 async def test_recap_stays_bounded_across_many_compactions(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A verbose recap model must not grow the recap turn without bound."""
@@ -902,7 +1083,9 @@ async def test_recap_stays_bounded_across_many_compactions(
 
 
 async def test_prompt_never_exceeds_budget_over_many_breaths(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The headline guarantee: the assembled prompt never exceeds PROMPT_BUDGET."""
@@ -920,7 +1103,9 @@ async def test_prompt_never_exceeds_budget_over_many_breaths(
 
 
 async def test_compaction_keeps_tail_on_user_turn(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _shrink_budget(monkeypatch)
@@ -937,7 +1122,9 @@ async def test_compaction_keeps_tail_on_user_turn(
 
 
 async def test_compaction_passes_no_tools_to_the_recap_call(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _shrink_budget(monkeypatch)
@@ -951,7 +1138,9 @@ async def test_compaction_passes_no_tools_to_the_recap_call(
 
 
 async def test_compaction_is_mechanical_when_decider_fails(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """C2: even if the recap LLM call fails, the oldest turns are still evicted."""
@@ -976,7 +1165,9 @@ async def test_compaction_is_mechanical_when_decider_fails(
 
 
 async def test_hard_safety_net_forces_compaction(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Even when the estimate is under target, a too-large ACTUAL last prompt compacts."""
@@ -996,8 +1187,11 @@ async def test_hard_safety_net_forces_compaction(
 
 
 async def test_recap_pair_sits_after_memory_block(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
-    memory_store: FileMemoryStore, monkeypatch: pytest.MonkeyPatch,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _shrink_budget(monkeypatch)
     memory_store.append_memory("I carry a vow.", Importance.HIGH, breath=0)
@@ -1016,7 +1210,9 @@ async def test_recap_pair_sits_after_memory_block(
 
 
 async def test_live_turns_excludes_recap_scaffolding(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _shrink_budget(monkeypatch)
@@ -1032,7 +1228,9 @@ async def test_live_turns_excludes_recap_scaffolding(
 
 
 def test_floor_net_shrinks_a_single_oversized_turn(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A lone surviving turn bigger than the budget (e.g. a huge perception, which the
@@ -1050,8 +1248,11 @@ def test_floor_net_shrinks_a_single_oversized_turn(
 
 
 def test_floor_net_logs_critical_when_tools_alone_exceed_budget(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The irreducible floor: tool schemas are unshrinkable, so if they alone exceed the
     budget no truncation can make the prompt fit. The loop empties every turn, logs
@@ -1069,7 +1270,9 @@ def test_floor_net_logs_critical_when_tools_alone_exceed_budget(
 
 
 def test_floor_net_shrinks_scaffolding_when_it_alone_exceeds_budget(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Even when the system prompt + tools alone exceed the budget (a misconfiguration),
@@ -1089,7 +1292,9 @@ def test_floor_net_shrinks_scaffolding_when_it_alone_exceeds_budget(
 
 
 def test_floor_net_drops_oldest_breath_groups_as_last_resort(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """With no recap/block to shrink, the oldest whole breath-groups are dropped, always
@@ -1114,8 +1319,11 @@ def test_floor_net_drops_oldest_breath_groups_as_last_resort(
 
 
 def test_floor_overflow_net_truncates_block_to_fit(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
-    memory_store: FileMemoryStore, monkeypatch: pytest.MonkeyPatch,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When system+block alone exceed budget, the in-context block is truncated to fit."""
     for i in range(120):  # a large resident block

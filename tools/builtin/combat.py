@@ -9,9 +9,11 @@ violation). Combat costs and damage are sourced from :mod:`core.constants`.
 
 from __future__ import annotations
 
+from typing import Any
+
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from core.constants import ATTACK_DAMAGE, ATTACK_ENERGY_COST
+from core.constants import ATTACK_DAMAGE, ATTACK_ENERGY_COST, KILL_ENERGY_THRESHOLD
 from world.agents import AgentStatus
 from world.world import WorldState
 
@@ -19,17 +21,34 @@ from world.world import WorldState
 async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: str) -> str:
     """Attack a co-located agent, draining the attacker's and target's energy.
 
+    Implements the Sprint 6 "Both" death model (combat is the only thing that
+    kills; starvation only paralyses). A hit is **lethal** when either the target
+    is already :attr:`~world.agents.AgentStatus.PARALYZED` (a finishing blow) or
+    the damage would overshoot the kill threshold
+    (``target.energy - ATTACK_DAMAGE < KILL_ENERGY_THRESHOLD``); otherwise damage
+    is applied normally (which may itself paralyse the target if the result lands
+    at or below the paralysis threshold). A hit landing exactly at the threshold
+    (e.g. ``0.0``) paralyses but does not kill.
+
     Mutates world state:
         * Subtracts :data:`~core.constants.ATTACK_ENERGY_COST` from the
           attacker's energy.
-        * Subtracts :data:`~core.constants.ATTACK_DAMAGE` from the target's
-          energy (floored at 0.0 by the world; the world paralyses the target
-          if it reaches exactly 0.0).
+        * On a **lethal** hit: calls :meth:`~world.world.WorldState.kill_agent`
+          on the target (sets it ``DEAD`` and sweeps its mating escrow); the
+          target's energy is *not* further drained.
+        * On a **non-lethal** hit: subtracts
+          :data:`~core.constants.ATTACK_DAMAGE` from the target's energy (floored
+          at 0.0 by the world; the world paralyses the target if it reaches the
+          paralysis threshold).
 
     Emits events:
-        * One ``"attack"`` event (:attr:`~bus.events.ScopeType.LOCAL`, stamped
-          with ``world.now()``) targeting the victim, delivered to every agent in
-          the attacker's region.
+        * On a **lethal** hit: one ``"agent_died"`` event
+          (:attr:`~bus.events.ScopeType.GLOBAL`, ``source`` = the victim,
+          ``payload`` carrying a narrating ``"message"`` and the ``"killer"`` id,
+          stamped with ``world.now()``) so the whole world perceives the death.
+        * On a **non-lethal** hit: one ``"attack"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, stamped with ``world.now()``)
+          targeting the victim, delivered to every agent in the attacker's region.
 
     Args:
         world: The live world state.
@@ -38,10 +57,11 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
         target: Id of the agent being attacked.
 
     Returns:
-        A success sentence on a landed attack; an ``"Error: "`` string if either
-        agent is unknown; an ``"Invalid: "`` string if the attacker targets
-        itself, the target is already dead, the target is in another region, or
-        the attacker lacks the energy to attack.
+        A success sentence on a landed attack (a distinct "struck down" sentence
+        when the hit is lethal); an ``"Error: "`` string if either agent is
+        unknown; an ``"Invalid: "`` string if the attacker targets itself, the
+        target is already dead, the target is in another region, or the attacker
+        lacks the energy to attack.
     """
     attacker_agent = world.get_agent(agent_id)
     target_agent = world.get_agent(target)
@@ -60,6 +80,32 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
         )
 
     world.modify_agent_energy(attacker_agent.id, -ATTACK_ENERGY_COST)
+
+    target_was_paralyzed = target_agent.status is AgentStatus.PARALYZED
+    overshoots = target_agent.current_energy - ATTACK_DAMAGE < KILL_ENERGY_THRESHOLD
+    if target_was_paralyzed or overshoots:
+        world.kill_agent(target_agent.id)
+        death_payload: dict[str, Any] = {
+            "message": (
+                f"{target_agent.name} (ID:{target_agent.id}) was slain by "
+                f"{attacker_agent.name} (ID:{attacker_agent.id})."
+            ),
+            "killer": attacker_agent.id,
+        }
+        await event_bus.publish(
+            Event(
+                "agent_died",
+                target_agent.id,
+                death_payload,
+                scope=ScopeType.GLOBAL,
+                timestamp=world.now(),
+            )
+        )
+        return (
+            f"You struck down {target_agent.name}|ID{target_agent.id}.\n"
+            f" Energy remaining: {attacker_agent.current_energy}"
+        )
+
     world.modify_agent_energy(target_agent.id, -ATTACK_DAMAGE)
     payload = {
         "message": (
@@ -77,6 +123,26 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
         timestamp=world.now(),
     )
     await event_bus.publish(event_message)
+
+    # If this blow just flipped a previously-ALIVE target to PARALYZED, announce the
+    # collapse here. The victim is asleep when the blow lands, so its own
+    # refresh_status would miss an externally-caused flip (it only sees transitions
+    # within one of its own breaths); the actor that caused the change emits it,
+    # mirroring the agent_recovered pattern in transfer_resource. (The non-lethal
+    # branch only runs when the target was ALIVE, so reaching PARALYZED here is a
+    # true ALIVE -> PARALYZED flip.)
+    if target_agent.status is AgentStatus.PARALYZED:
+        await event_bus.publish(
+            Event(
+                "agent_paralyzed",
+                "system",
+                {"message": f"{target_agent.name} has collapsed and can no longer move."},
+                scope=ScopeType.LOCAL,
+                region=target_agent.current_position,
+                timestamp=world.now(),
+            )
+        )
+
     return (
         f"Successfully Attacked {target_agent.name}|ID{target_agent.id}\n"
         f" Energy remaining: {attacker_agent.current_energy}"

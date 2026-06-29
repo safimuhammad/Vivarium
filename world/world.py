@@ -276,19 +276,65 @@ class WorldState:
         """Add ``amount`` to an agent's materials, flooring at 0.0.
 
         Mutates the agent's :attr:`~world.agents.AgentState.current_materials`.
+        A ``DEAD`` agent is terminal: the call early-returns without touching
+        materials (mirroring :meth:`modify_agent_energy`), so a corpse can never
+        hoard materials no living agent can recover.
 
         Args:
             agent_id: Id of the agent to modify.
             amount: Signed delta to apply (negative to spend).
 
         Returns:
-            ``True`` if the agent exists and was modified; ``False`` otherwise.
+            ``True`` if the agent exists (including the ``DEAD`` terminal no-op);
+            ``False`` only if no such agent exists.
         """
-        if agent_id in self.agents:
-            agent = self.agents[agent_id]
-            agent.current_materials = max(agent.current_materials + amount, 0.0)
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return False
+        if agent.status is AgentStatus.DEAD:
+            # Death is terminal: never change a dead agent's materials.
             return True
-        return False
+        agent.current_materials = max(agent.current_materials + amount, 0.0)
+        return True
+
+    def kill_agent(self, agent_id: str) -> bool:
+        """Mark an agent DEAD and clean up its pending mating proposals.
+
+        The sole death writer (Sprint 6). Sets status to DEAD, then sweeps proposals:
+        where the dead agent is the *initiator*, the proposal is removed and its escrow is
+        abandoned (not refunded to a corpse); where the dead agent is a *target*, the
+        proposal is removed and the still-live initiator's escrow is refunded immediately
+        (rather than waiting for the world-tick timeout sweep). Emits no event (the caller
+        emits ``agent_died``).
+
+        Mutates the agent's :attr:`~world.agents.AgentState.status`, the escrow balances
+        of any still-live initiators (via :meth:`modify_agent_energy` /
+        :meth:`modify_agent_materials`), and both :attr:`pending_proposals` and
+        :attr:`pending_proposal_targets`.
+
+        Args:
+            agent_id: Id of the agent to kill.
+
+        Returns:
+            ``True`` if the agent existed (and is now DEAD); ``False`` otherwise.
+        """
+        if agent_id not in self.agents:
+            return False
+        self.agents[agent_id].status = AgentStatus.DEAD
+        # Initiator died: drop its proposals, abandon escrow.
+        for target in list(self.get_proposed_targets(agent_id)):
+            self.remove_proposal(agent_id, target)
+        # Target died: refund the live initiator, drop the proposal.
+        for (initiator_id, target_id), proposal in list(self.pending_proposals.items()):
+            if target_id != agent_id:
+                continue
+            for resource_type, quantity in proposal["resources"].items():
+                if resource_type is ResourceTypes.ENERGY:
+                    self.modify_agent_energy(initiator_id, quantity)
+                elif resource_type is ResourceTypes.MATERIALS:
+                    self.modify_agent_materials(initiator_id, quantity)
+            self.remove_proposal(initiator_id, target_id)
+        return True
 
     # ---- Mating proposal methods ----
 

@@ -16,15 +16,45 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+import world.tick as tick_module
 from bus.event_bus import EventBus
 from core.constants import MATING_PROPOSAL_TIMEOUT_SECONDS
 from tests.conftest import FakeClock
 from tools.builtin.mating import initiate_mating, reject_mating
 from world.regions import ResourceTypes
-from world.tick import tick
+from world.tick import _tick_once_resilient, tick
 from world.world import WorldState
 
 # ---- Resource regeneration ------------------------------------------------
+
+
+# ---- Heartbeat crash-resistance -------------------------------------------
+
+
+async def test_tick_once_resilient_runs_tick_normally(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """The resilient wrapper runs a normal tick (resources still regenerate)."""
+    alpha = world.get_region("alpha")
+    assert alpha is not None
+    before = alpha.current_energy
+    await _tick_once_resilient(world, event_bus)
+    assert alpha.current_energy > before  # regen ran through the wrapper
+
+
+async def test_tick_once_resilient_isolates_a_failing_tick(
+    world: WorldState, event_bus: EventBus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bad tick is swallowed so the forever-loop heartbeat survives it."""
+
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("malformed proposal")
+
+    monkeypatch.setattr(tick_module, "tick", boom)
+    # Must NOT raise: a single failing tick cannot kill the heartbeat task.
+    await _tick_once_resilient(world, event_bus)
 
 
 async def test_tick_regenerates_regions_by_rate(world: WorldState, event_bus: EventBus) -> None:

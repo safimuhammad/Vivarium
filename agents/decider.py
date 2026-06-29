@@ -219,9 +219,7 @@ class OllamaDecider:
         self.num_predict: int = num_predict
         self._client: _ChatClient | None = client
 
-    async def decide(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> Decision:
+    async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
         """Query the model once (non-streaming, time-bounded) and parse the result.
 
         Args:
@@ -254,6 +252,57 @@ class OllamaDecider:
             self.timeout,
         )
         return parse_ollama_response(response)
+
+
+class SerializingDecider:
+    """Wrap a :class:`Decider` so only one decision runs at a time.
+
+    Ollama serves requests sequentially (the design's single local model). Letting
+    every agent's breathing loop call the model concurrently would thunder-herd it
+    and cascade timeouts; this decorator makes "sequential inference, pseudo-parallel
+    via asyncio" explicit by guarding the inner ``decide`` with a shared
+    :class:`asyncio.Lock`. ``async with`` guarantees the lock is released on normal
+    return, exception, timeout, and cancellation, so one failing decision cannot
+    wedge every other agent behind a permanently held lock.
+
+    This does not undermine temporal asymmetry: ``pace`` governs an agent's
+    inter-breath sleep, not its think time, so a fast-pace agent simply queues for
+    the lock more often and still wins more turns over a long run.
+
+    Attributes:
+        _inner: The wrapped decider whose ``decide`` is serialized.
+        _lock: The mutual-exclusion lock; share one instance across agents to
+            serialize them against a single model.
+    """
+
+    def __init__(self, inner: Decider, lock: asyncio.Lock | None = None) -> None:
+        """Initialise the serializing wrapper.
+
+        Args:
+            inner: The decider to serialize (e.g. an :class:`OllamaDecider`).
+            lock: A shared lock to serialize on. Defaults to ``None``, which
+                creates a fresh :class:`asyncio.Lock`; pass one shared instance to
+                serialize several wrappers against the same model.
+        """
+        self._inner: Decider = inner
+        self._lock: asyncio.Lock = lock or asyncio.Lock()
+
+    async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
+        """Acquire the lock, delegate to the inner decider, then release.
+
+        Args:
+            messages: Chat-style message history (role/content dicts).
+            tools: Tool schemas offered to the model (Ollama function format).
+
+        Returns:
+            The inner decider's :class:`Decision`.
+
+        Raises:
+            Exception: Re-raises anything the inner decider raises (e.g.
+                ``TimeoutError``); the lock is still released via ``async with``.
+        """
+        async with self._lock:
+            return await self._inner.decide(messages, tools)
 
 
 def make_default_decider(model: str) -> Decider:

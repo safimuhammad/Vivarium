@@ -15,7 +15,7 @@ import math
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from world.agents import AgentState
+from world.agents import AgentState, AgentStatus
 from world.regions import Region, ResourceTypes
 from world.world import WorldState
 
@@ -205,6 +205,11 @@ async def transfer_resource(
         * One ``"resource_transferred"`` event
           (:attr:`~bus.events.ScopeType.LOCAL`, stamped with ``world.now()``,
           targeting the receiver) to the sender's region.
+        * One ``"agent_recovered"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, source = the sending feeder,
+          targeting the receiver, stamped with ``world.now()``) **only** when an
+          energy transfer lifts a ``PARALYZED`` receiver back to ``ALIVE``, so
+          nearby agents perceive the revival.
 
     Args:
         world: The live world state.
@@ -236,6 +241,16 @@ async def transfer_resource(
     if not sender_agent or not receiver_agent:
         return "Error: Cannot find Agents in the world"
 
+    if sender_agent.id == receiver_agent.id:
+        return "Invalid: You cannot transfer resources to yourself."
+
+    if receiver_agent.status is AgentStatus.DEAD:
+        # Feeding a corpse would debit the sender while the receiver's DEAD-guarded
+        # credit no-ops (energy destroyed) or strand materials on the dead; reject
+        # before any mutation. PARALYZED receivers are allowed -- that is the revival
+        # path -- so only DEAD is blocked.
+        return f"Invalid: {receiver_agent.name} is dead; you cannot transfer resources to a corpse."
+
     if sender_agent.current_position != receiver_agent.current_position:
         return (
             "Invalid: Cannot transfer resources across regions, "
@@ -251,8 +266,25 @@ async def transfer_resource(
         )
 
     if req_resource == ResourceTypes.ENERGY:
+        was_paralyzed = receiver_agent.status is AgentStatus.PARALYZED
         world.modify_agent_energy(sender_agent.id, -quantity)
         world.modify_agent_energy(receiver_agent.id, quantity)
+        if was_paralyzed and receiver_agent.status is AgentStatus.ALIVE:
+            recover_payload = {
+                "message": (
+                    f"{sender_agent.name} revived {receiver_agent.name} (ID:{receiver_agent.id})."
+                )
+            }
+            await event_bus.publish(
+                Event(
+                    "agent_recovered",
+                    sender_agent.id,
+                    recover_payload,
+                    scope=ScopeType.LOCAL,
+                    target=receiver_agent.id,
+                    timestamp=world.now(),
+                )
+            )
     else:
         world.modify_agent_materials(sender_agent.id, -quantity)
         world.modify_agent_materials(receiver_agent.id, quantity)

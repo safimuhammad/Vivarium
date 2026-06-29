@@ -279,8 +279,10 @@ def run_live_compaction(breaths: int, model: str, budget: int) -> int:
         print(f"- peak estimate: {peak} tok ({100 * peak / window:.0f}% of real window)")
         print(f"- final history turns: {len(agent.lifecycle_history)}")
         print(f"- recap rewrites (compactions qwen3 authored): {len(recap_versions)}")
-        print(f"- final recap size: {recap_tokens} tok of the {cap}-tok cap "
-              f"({100 * recap_tokens / cap:.0f}% filled)")
+        print(
+            f"- final recap size: {recap_tokens} tok of the {cap}-tok cap "
+            f"({100 * recap_tokens / cap:.0f}% filled)"
+        )
         print(f"- agent ALIVE at end: {alive}")
         print()
         print("### The memoir real qwen3 wrote (final cumulative recap)")

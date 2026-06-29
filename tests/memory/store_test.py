@@ -139,8 +139,11 @@ def test_reopen_skips_reembedding_when_vectors_present(tmp_path: Path) -> None:
 def test_reopen_rebuilds_when_vectors_missing(tmp_path: Path) -> None:
     # First store persists to jsonl with one vector store...
     seeding = FileMemoryStore(
-        "wanderer_001", tmp_path, persona=PERSONA,
-        vector_store=FakeVectorStore(FakeEmbeddingFunction()), clock=lambda: 0.0,
+        "wanderer_001",
+        tmp_path,
+        persona=PERSONA,
+        vector_store=FakeVectorStore(FakeEmbeddingFunction()),
+        clock=lambda: 0.0,
     )
     seeding.append_memory("durable", Importance.HIGH, 1)
 

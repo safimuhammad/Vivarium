@@ -21,10 +21,10 @@ Two invariants matter for the chat backend the decider talks to:
 
 Liveness is read live from the agent's
 :class:`~world.agents.AgentStatus`: the loop acts only while ``ALIVE``. Paralysis
-is the milestone's failure boundary -- on an ``ALIVE -> PARALYZED`` transition the
+is **recoverable**, not terminal -- on an ``ALIVE -> PARALYZED`` transition the
 agent emits a system ``agent_paralyzed`` event (the agent holds the bus; the world
-does not, per design DD4) and stops acting. ``DEAD`` also stops the loop (death
-itself is Sprint 6).
+does not, per design DD4) but the loop keeps breathing (drain-only) so another
+agent can feed and revive it (Sprint 6). Only ``DEAD`` stops the loop.
 """
 
 from __future__ import annotations
@@ -46,12 +46,14 @@ from agents.tool_schemas import schemas_for
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
+    ATTACK_ENERGY_COST,
     COMPACTION_HARD_SAFETY_TOKENS,
     COMPACTION_KEEP_RECENT_TURNS,
     COMPACTION_RECAP_RESERVE_TOKENS,
     COMPACTION_TARGET_TOKENS,
     COMPACTION_TRIGGER_TOKENS,
     DECIDE_BACKOFF_SECONDS,
+    PARALYSIS_ENERGY_THRESHOLD,
     PROMPT_BUDGET_TOKENS,
     RECALL_K,
     REFLECT_EVERY_N_BREATHS,
@@ -68,9 +70,17 @@ from world.world import WorldState
 
 logger = get_logger(__name__)
 
-# DECIDE_BACKOFF_SECONDS is re-exported from core.constants (its one tuned home);
-# imported here because the breathing loop applies it and tests reference it.
-__all__ = ["DECIDE_BACKOFF_SECONDS", "Agent"]
+# These names are re-exported from core.constants (their one tuned home); they are
+# imported here because the breathing loop applies them and the compaction tests
+# monkeypatch them on this module (so they must be reachable as runtime attributes,
+# which under mypy strict's implicit_reexport=False requires listing them in __all__).
+__all__ = [
+    "COMPACTION_HARD_SAFETY_TOKENS",
+    "COMPACTION_RECAP_RESERVE_TOKENS",
+    "DECIDE_BACKOFF_SECONDS",
+    "PROMPT_BUDGET_TOKENS",
+    "Agent",
+]
 
 #: The agent's own (assistant-voice) acknowledgement of its resident memory block.
 #: It sits at ``lifecycle_history[2]`` so the block (a ``user`` turn at ``[1]``) is
@@ -276,6 +286,12 @@ class Agent:
         caught, logged, and fed back as a ``tool`` message so the loop never
         crashes and the assistant turn never dangles without its results.
 
+        Abort-on-paralyse (Sprint 6 T5): if an earlier call in the same breath
+        leaves the agent no longer ``ALIVE`` (e.g. a ``speak`` that drops it to the
+        paralysis threshold), the remaining calls are **not** invoked -- each still
+        gets a paired ``tool`` turn (so the assistant turn never dangles) reporting
+        that the agent could not act.
+
         Args:
             tool_calls: The tool calls from the decision (possibly empty).
 
@@ -284,8 +300,17 @@ class Agent:
         """
         for index, tool_call in enumerate(tool_calls):
             call_id = self._call_id(tool_call, index)
-            if tool_call.name == RECALL_TOOL_NAME:
-                result = self._recall(tool_call.params)
+            if self._status() is not AgentStatus.ALIVE:
+                result = f"You could not act ({tool_call.name!r}): you are no longer able to."
+            elif tool_call.name == RECALL_TOOL_NAME:
+                try:
+                    result = self._recall(tool_call.params)
+                except Exception:
+                    # In production recall hits a real vector store that can raise;
+                    # feed the failure back as a paired tool turn so the assistant
+                    # turn never dangles (mirrors the ToolError path below).
+                    logger.exception("recall failed for agent %r", self.agent_id)
+                    result = "Nothing surfaced; your memory could not be searched just now."
             else:
                 params = self._coerce_params(tool_call.params)
                 try:
@@ -312,8 +337,9 @@ class Agent:
         Compares the status captured before the breath to the freshly re-read
         status. On an ``ALIVE -> PARALYZED`` transition the agent emits a system
         ``agent_paralyzed`` event (the world cannot -- it has no bus, design DD4)
-        and marks the loop to stop acting (paralysis is this milestone's failure
-        boundary). ``DEAD`` also stops the loop (death is Sprint 6).
+        so nearby beings perceive the collapse. Paralysis is **recoverable**, not
+        terminal: the loop keeps breathing (drain-only) so another agent can feed
+        and revive it (Sprint 6). Only ``DEAD`` stops the loop.
 
         Args:
             previous_status: The agent's status at the start of the breath
@@ -329,7 +355,6 @@ class Agent:
             and current_status is AgentStatus.PARALYZED
             and agent_state is not None
         ):
-            self._stopped = True
             await self._announce_paralysis(agent_state)
         elif current_status is AgentStatus.DEAD:
             self._stopped = True
@@ -412,9 +437,7 @@ class Agent:
         (perception/decision/tool) always begin at this index.
         """
         return (
-            1
-            + (2 if self._resident_block_installed else 0)
-            + (2 if self._recap_installed else 0)
+            1 + (2 if self._resident_block_installed else 0) + (2 if self._recap_installed else 0)
         )
 
     def _recap_index(self) -> int:
@@ -754,23 +777,26 @@ class Agent:
     async def breathe(self) -> None:
         """Take one breath: perceive, decide, execute, then refresh status.
 
-        A paralysed (or otherwise non-``ALIVE``) agent still perceives but does
-        not decide or execute. :attr:`breath_count` is incremented exactly once,
-        even if a step raises unexpectedly, so the run loop's budget always makes
-        progress.
+        Only an ``ALIVE`` agent runs the full path (perceive -> budget -> decide ->
+        execute -> reflect). A non-``ALIVE`` (paralysed) breath does **nothing but
+        drain its inbox**: no perceive-append, no Ollama, no compaction. This keeps
+        the loop alive so another agent can feed and revive it (Sprint 6) while
+        spending zero inference on a frozen agent and keeping its queue bounded and
+        its history from growing (which would otherwise create illegal consecutive
+        ``user`` turns). :attr:`breath_count` is incremented exactly once, even if a
+        step raises unexpectedly, so the run loop's budget always makes progress.
 
         Returns:
             None.
         """
         previous_status = self._status()
         try:
-            await self.perceive()
-            # Bound the prompt BEFORE deciding -- the never-overflow guarantee. Runs
-            # even for a non-ALIVE agent so a still-perceiving loop cannot grow without
-            # limit.
-            await self._ensure_context_budget(COMPACTION_TRIGGER_TOKENS)
-            self._last_decide_failed = False
             if previous_status is AgentStatus.ALIVE:
+                await self.perceive()
+                # Bound the prompt BEFORE deciding -- the never-overflow guarantee.
+                # Only ALIVE agents grow their history, so only they need the check.
+                await self._ensure_context_budget(COMPACTION_TRIGGER_TOKENS)
+                self._last_decide_failed = False
                 decision = await self.decide()
                 if decision is None:
                     self._last_decide_failed = True
@@ -780,11 +806,22 @@ class Agent:
                     # breath_count is incremented in the finally below, so during
                     # the k-th (1-indexed) breath it still holds k-1; +1 makes the
                     # reflection fire on breaths N, 2N, ... and never on the first.
-                    if (self.breath_count + 1) % REFLECT_EVERY_N_BREATHS == 0:
+                    # Gate on liveness too: a tool call may have paralysed the agent
+                    # mid-breath, and a frozen agent must spend no Ollama (neither the
+                    # reflection decide nor the recap-authoring one).
+                    if self.alive and (self.breath_count + 1) % REFLECT_EVERY_N_BREATHS == 0:
                         await self.reflect()
                         # Reflection already re-prefilled the cache, so compact harder
                         # now (lower target) while it is "free" -- prefer reflection.
                         await self._ensure_context_budget(COMPACTION_TARGET_TOKENS)
+            else:
+                # Paralyzed: keep the loop alive to be revived; drain the inbox so the
+                # queue stays bounded (events are missed while incapacitated). No
+                # Ollama, no append. A paralyzed breath is not a failed decide, so clear
+                # any stale flag from an earlier failed decide -- else run() would apply
+                # the decide-backoff to every drain-only breath and starve inbox draining.
+                self._last_decide_failed = False
+                self.event_bus.get_events(self.agent_id)
             await self.refresh_status(previous_status)
         finally:
             self.breath_count += 1
@@ -823,8 +860,12 @@ class Agent:
             await asyncio.sleep(delay)
 
     def _can_continue(self, max_breaths: int | None) -> bool:
-        """Return whether the loop may take another breath."""
-        if self._stopped or not self.alive:
+        """Return whether the loop may take another breath.
+
+        Only death (or an explicit stop) is terminal: a PARALYZED agent keeps
+        breathing (drain-only) so it can be fed and revived (Sprint 6).
+        """
+        if self._stopped or self._status() is AgentStatus.DEAD:
             return False
         return max_breaths is None or self.breath_count < max_breaths
 
@@ -928,6 +969,17 @@ class Agent:
 
         lines: list[str] = ["You take stock of yourself and your surroundings.", "", "Within you:"]
         lines.append(f"- Energy: {agent_state.current_energy}")
+        # Low-energy attack warning (Sprint 6 T5): if an attack would drop the agent
+        # to/below the paralysis threshold, surface it so the model can decide
+        # knowingly. Only meaningful while the agent is still able to act.
+        if (
+            agent_state.status is AgentStatus.ALIVE
+            and agent_state.current_energy <= ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD
+        ):
+            lines.append(
+                f"- ⚠️ Your energy is {agent_state.current_energy}; attacking costs "
+                f"{ATTACK_ENERGY_COST} — you would be paralyzed."
+            )
         lines.append(f"- Materials: {agent_state.current_materials}")
         lines.append(f"- Where you stand: {agent_state.current_position}")
         lines.append(f"- Condition: {agent_state.status.value}")
@@ -939,7 +991,7 @@ class Agent:
             paths = ", ".join(region.connections) if region.connections else "nowhere from here"
             lines.append(f"- Paths lead to: {paths}")
             others = [
-                other.name
+                self._describe_neighbor(other)
                 for other in self.world.get_agents_in_region(region.name)
                 if other.id != self.agent_id
             ]
@@ -962,6 +1014,28 @@ class Agent:
         """Render a single perceived event as a plain-narrative line."""
         message = event.payload.get("message") if isinstance(event.payload, dict) else None
         return str(message) if message else f"Something shifted nearby ({event.type})."
+
+    @staticmethod
+    def _describe_neighbor(other: AgentState) -> str:
+        """Name a co-located agent, labelling the fallen and the dead.
+
+        Corpses and paralysed agents are kept in the region (Sprint 6), so the
+        perception must mark them rather than list them as ordinary neighbours -- a
+        plain name invites the model to speak to the dead or feed a corpse.
+
+        Args:
+            other: A co-located agent (not the perceiving agent itself).
+
+        Returns:
+            The agent's name, suffixed ``(fallen)`` if PARALYZED or ``(dead)`` if DEAD.
+        """
+        match other.status:
+            case AgentStatus.PARALYZED:
+                return f"{other.name} (fallen)"
+            case AgentStatus.DEAD:
+                return f"{other.name} (dead)"
+            case _:
+                return other.name
 
     async def _announce_paralysis(self, agent_state: AgentState) -> None:
         """Emit the system ``agent_paralyzed`` event for an ``ALIVE -> PARALYZED`` flip.

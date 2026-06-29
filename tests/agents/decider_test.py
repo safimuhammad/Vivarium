@@ -20,6 +20,7 @@ from agents.decider import (
     DECIDE_NUM_PREDICT,
     Decision,
     OllamaDecider,
+    SerializingDecider,
     ToolCall,
     parse_ollama_response,
 )
@@ -110,9 +111,7 @@ def test_parse_ollama_response_plain_text_has_no_tool_calls() -> None:
 
 
 def test_parse_ollama_response_reads_prompt_eval_count() -> None:
-    resp = _fake_response(
-        content="ok", thinking=None, tool_calls=[], prompt_eval_count=1234
-    )
+    resp = _fake_response(content="ok", thinking=None, tool_calls=[], prompt_eval_count=1234)
     decision = parse_ollama_response(resp)
     assert decision.prompt_tokens == 1234  # the real prompt size, for the safety net
 
@@ -226,3 +225,47 @@ async def test_ollama_decider_times_out_on_a_hung_client() -> None:
     decider = OllamaDecider("test-model", timeout=0.01, client=_HangingClient())
     with pytest.raises(TimeoutError):
         await decider.decide([], [])
+
+
+async def test_serializing_decider_never_overlaps() -> None:
+    """Concurrent decisions through the wrapper run strictly one at a time.
+
+    Mirrors the single-Ollama constraint: many agents may queue, but only one
+    inference is ever in flight (``max_seen == 1``).
+    """
+    inflight = 0
+    max_seen = 0
+
+    class _Probe:
+        async def decide(
+            self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        ) -> Decision:
+            nonlocal inflight, max_seen
+            inflight += 1
+            max_seen = max(max_seen, inflight)
+            await asyncio.sleep(0.01)
+            inflight -= 1
+            return Decision(text="ok")
+
+    dec = SerializingDecider(_Probe())
+    await asyncio.gather(*[dec.decide([], []) for _ in range(5)])
+    assert max_seen == 1  # strictly serialized
+
+
+async def test_serializing_decider_releases_on_error() -> None:
+    """An exception inside the inner decider still releases the lock.
+
+    ``async with`` guarantees release on timeout/cancel/exception, so a single
+    failing decision cannot wedge every other agent behind a held lock.
+    """
+
+    class _Boom:
+        async def decide(
+            self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        ) -> Decision:
+            raise RuntimeError("boom")
+
+    dec = SerializingDecider(_Boom())
+    with pytest.raises(RuntimeError):
+        await dec.decide([], [])
+    assert not dec._lock.locked()  # context manager released it
