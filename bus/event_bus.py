@@ -65,14 +65,19 @@ class EventBus:
 
         Mutates :attr:`agent_queues`. Subscribing only succeeds for an agent that
         exists in the world; this guards against typos creating phantom inboxes.
+        Idempotent: re-subscribing an already-subscribed agent is a no-op that keeps
+        the existing inbox (so a stray double-subscribe never silently drops queued
+        events), returning ``True``.
 
         Args:
             agent_id: Id of the agent to subscribe.
 
         Returns:
-            ``True`` if the agent exists and an inbox was created; ``False`` if
-            no such agent exists in the world (no inbox is created).
+            ``True`` if the agent exists (inbox created, or already present); ``False``
+            if no such agent exists in the world (no inbox is created).
         """
+        if agent_id in self.agent_queues:
+            return True  # already subscribed -- keep the existing inbox (idempotent)
         if self.world_state.get_agent(agent_id) is not None:
             self.agent_queues[agent_id] = asyncio.Queue()
             return True

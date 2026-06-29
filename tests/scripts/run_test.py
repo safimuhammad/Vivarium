@@ -13,6 +13,8 @@ import asyncio
 import time
 from pathlib import Path
 
+import pytest
+
 from agents.decider import Decision, ToolCall
 from agents.runtime import Agent
 from memory.embedding import FakeEmbeddingFunction
@@ -163,6 +165,47 @@ async def test_living_offspring_keeps_run_alive_past_founder_collapse(tmp_path: 
     assert elapsed > 0.6  # did NOT collapse early -- the offspring kept it alive
     offspring = next((a for a in sim.agents if a.agent_id == "seed_offspring"), None)
     assert offspring is not None and offspring.breath_count > 0
+
+
+async def test_offspring_survives_birth_when_both_parents_die(tmp_path: Path) -> None:
+    """A newborn whose parents both died in the mating trade still breathes (M1).
+
+    If the 'world ended' check were scoped to the breathing set, the first liveness poll
+    would see zero present (parents DEAD, offspring not yet adopted) and stop the run,
+    losing the newborn. Scanning the whole world keeps the run alive until the
+    spawn-watcher adopts the offspring.
+    """
+    sim = _build(tmp_path, MockDecider([Decision(tool_calls=[ToolCall("wait")])] * 500))
+    for a in sim.agents:  # every founder dies in the (hypothetical) mating trade
+        assert sim.world.kill_agent(a.agent_id) is True
+    _inject_offspring(sim)  # ALIVE newborn, not yet in the breathing set
+
+    await run_simulation(
+        sim, pace=0.0, duration=0.3, world_tick_interval=0.02, refresh_interval=0.05
+    )
+
+    offspring = next((a for a in sim.agents if a.agent_id == "seed_offspring"), None)
+    assert offspring is not None  # adopted, not lost to a premature stop
+    assert offspring.breath_count > 0  # and it actually breathed
+
+
+async def test_spawn_watch_survives_a_failing_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A detection pass that raises must not kill the watcher or crash the run."""
+    sim = _build(tmp_path, MockDecider([Decision(tool_calls=[ToolCall("wait")])] * 500))
+
+    def boom(_state: AgentState) -> Agent:
+        raise RuntimeError("memory store unavailable")
+
+    monkeypatch.setattr(sim, "spawn_agent", boom)
+    _inject_offspring(sim)  # the watcher will try (and fail) to build it each pass
+
+    # Must complete cleanly despite repeated spawn failures; founders keep breathing.
+    await run_simulation(
+        sim, pace=0.0, duration=0.2, world_tick_interval=0.02, refresh_interval=0.05
+    )
+    assert any(a.breath_count > 0 for a in sim.agents)
 
 
 async def test_all_paralyzed_world_collapses(tmp_path: Path) -> None:

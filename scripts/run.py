@@ -232,26 +232,27 @@ def _count_alive(world: WorldState, agents: Sequence[Agent]) -> int:
     return alive
 
 
-def _count_present(world: WorldState, agents: Sequence[Agent]) -> int:
-    """Count breathing ``agents`` that still exist and are not ``DEAD``.
+def _count_present(world: WorldState) -> int:
+    """Count agents in the WORLD that are not ``DEAD`` (ALIVE or PARALYZED).
 
-    "Present" means ALIVE *or* PARALYZED -- an agent that can still act or could be
-    revived by a feeder. A breathing set with zero present agents is a world that has
-    genuinely ended (everyone dead or gone).
+    "Present" means at least one being can still act or be revived. This is scanned over
+    the whole world -- not just the breathing set -- on purpose: an offspring added by
+    ``accept_mating`` is ALIVE in the world a poll *before* the spawn-watcher adopts it
+    into the breathing set. Counting only the breathing set would let the run end at the
+    instant of a birth where both parents died in the same mating transaction (a real
+    path: commit all energy, mate, die in the trade -- the newborn would be lost). Since
+    the spawn-watcher makes every live world agent breathe imminently, a non-DEAD world
+    agent legitimately means the world has not ended. (The *collapse* check below stays on
+    the breathing set, so an all-paralyzed breathing set still collapses; a transiently
+    un-adopted offspring is counted there within a poll or two.)
 
     Args:
-        world: The world to read each breathing agent's status from (read-only).
-        agents: The breathing agents to consider.
+        world: The world to scan (read-only).
 
     Returns:
-        The number of ``agents`` whose live world status is not ``DEAD``.
+        The number of world agents whose status is not ``DEAD``.
     """
-    present = 0
-    for agent in agents:
-        state = world.get_agent(agent.agent_id)
-        if state is not None and state.status is not AgentStatus.DEAD:
-            present += 1
-    return present
+    return sum(1 for agent in world.get_all_agents() if agent.status is not AgentStatus.DEAD)
 
 
 async def _liveness_watch(
@@ -263,10 +264,11 @@ async def _liveness_watch(
     over the *dynamic* breathing ``agents`` list, so a living lineage keeps the run
     going while a dead or wedged world still terminates. Two stop conditions:
 
-    * **All gone/dead** -- :func:`_count_present` is 0: every breathing agent is DEAD
-      (or no longer in the world). The world has ended; stop immediately. (Polling adds
-      up to one ``interval`` of latency vs the old event-driven path -- intentional, so
-      the dynamic set is handled uniformly.)
+    * **World ended** -- :func:`_count_present` is 0: every agent in the *world* is DEAD
+      (scanned world-wide, not just the breathing set, so a just-born offspring not yet
+      adopted by the spawn-watcher still counts). Stop immediately. (Polling adds up to
+      one ``interval`` of latency vs the old event-driven path -- intentional, so the
+      dynamic set is handled uniformly.)
     * **Collapse** -- :func:`_count_alive` is 0 for :data:`COLLAPSE_ZERO_ALIVE_TICKS`
       consecutive polls while some agents are still PARALYZED (present but unable to act
       and with no one left to feed them). An observable outcome, not a hang.
@@ -283,8 +285,8 @@ async def _liveness_watch(
     consecutive_zero_alive = 0
     while not stop.is_set():
         await asyncio.sleep(interval)
-        if _count_present(world, agents) == 0:
-            logger.info("All breathing agents are dead or gone; the world has ended. Stopping.")
+        if _count_present(world) == 0:
+            logger.info("Every agent in the world is dead; the world has ended. Stopping.")
             stop.set()
             return
         if _count_alive(world, agents) == 0:
@@ -369,7 +371,13 @@ async def _spawn_watch(
         await asyncio.sleep(interval)
         if stop.is_set():  # do not spawn during teardown
             return
-        _spawn_new_agents(world, sim, run_agent, agent_tasks, known)
+        try:
+            _spawn_new_agents(world, sim, run_agent, agent_tasks, known)
+        except Exception:
+            # Isolate a bad detection pass (e.g. building one offspring's memory store
+            # raises) so a transient error can't permanently stop ALL future
+            # reproduction -- the same crash-resistance the world-tick/feed drivers use.
+            logger.exception("spawn-watch pass failed; skipping it to keep adopting newborns")
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> Callable[[], None]:
@@ -522,6 +530,12 @@ async def run_simulation(
     except TimeoutError:
         logger.info("Run duration (%.1fs) elapsed; shutting down.", duration)
     finally:
+        # `stop.set()` (no await before the cancels) is what actually prevents the
+        # spawn-watch from creating new tasks during teardown -- its `stop.is_set()`
+        # guard is the real mechanism, not cancellation order -- so cancelling all tasks
+        # together here is safe. `agent_tasks`/`sim.agents` already include any offspring
+        # the spawn-watch appended. The per-agent `run_agent` finally also unsubscribes,
+        # so the loop below is an idempotent belt-and-suspenders.
         stop.set()
         for task in (*agent_tasks, *background_tasks):
             task.cancel()
