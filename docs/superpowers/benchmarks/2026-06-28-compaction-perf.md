@@ -91,6 +91,28 @@ qwen3, so the synthetic proof (which assumes `estimate ≥ actual`) holds agains
 The hard-safety net keys off the real `prompt_eval_count` regardless, as the runtime
 backstop if a future model ever tokenizes more densely than this margin absorbs.
 
+## Forced-compaction live mode (compaction FIRING on the real model)
+
+`python -m bench.bench_compaction --mode live --force-compaction --breaths 15 --budget 8000`
+drives the full `breathe()` loop with a deliberately shrunk budget so the transcript
+crosses the trigger within a few breaths and **real qwen3 authors the recap**. This is
+the one combination the other two benches don't cover (synthetic fires compaction but
+with a mock decider; plain live uses the real model but bypasses `breathe()`).
+
+```
+- shrunk budget: 8000 tok (trigger 5600)
+- peak estimate: 7167 tok (17% of real window)
+- final history turns: 20
+- recap installed (real qwen3 authored): True
+- agent ALIVE at end: True
+PASS: peak estimate 7167 <= budget 8000; recap=True; alive=True
+```
+
+**Reading it:** compaction fired on the real model, qwen3 authored the running recap,
+the estimate stayed under the shrunk budget on every breath, the transcript pinned at
+20 turns, and the agent never died. The mandate — *compaction firing on the real model
+without ever overflowing* — holds end-to-end.
+
 ## The never-overflow guarantee is now closed on BOTH sides
 
 The window counts prompt + generation together. This sprint bounds **both**:
