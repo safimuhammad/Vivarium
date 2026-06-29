@@ -99,11 +99,11 @@ async def test_tick_refunds_stale_proposal_and_keeps_fresh(
         "wanderer_001",
         target="wanderer_002",
         message="be mine",
-        resources={ResourceTypes.ENERGY: 20.0, ResourceTypes.MATERIALS: 10.0},
+        resources={ResourceTypes.ENERGY: 50.0, ResourceTypes.MATERIALS: 30.0},
     )
     initiator = world.get_agent("wanderer_001")
     assert initiator is not None
-    assert initiator.current_energy == 80.0 and initiator.current_materials == 40.0
+    assert initiator.current_energy == 50.0 and initiator.current_materials == 20.0
 
     # Age proposal A past the timeout, then add a *fresh* proposal B.
     fake_clock.advance(MATING_PROPOSAL_TIMEOUT_SECONDS + 1.0)
@@ -113,10 +113,10 @@ async def test_tick_refunds_stale_proposal_and_keeps_fresh(
         "wanderer_002",
         target="wanderer_001",
         message="no, be MINE",
-        resources={ResourceTypes.ENERGY: 30.0},
+        resources={ResourceTypes.ENERGY: 50.0, ResourceTypes.MATERIALS: 30.0},
     )
     other = world.get_agent("wanderer_002")
-    assert other is not None and other.current_energy == 70.0  # B charged
+    assert other is not None and other.current_energy == 50.0  # B charged
 
     # Drain inboxes so we can assert the timeout event in isolation.
     event_bus.get_events("wanderer_001")
@@ -131,9 +131,10 @@ async def test_tick_refunds_stale_proposal_and_keeps_fresh(
     assert world.get_proposed_targets("wanderer_001") == []
 
     # B: fresh, untouched.
-    assert other.current_energy == 70.0
+    assert other.current_energy == 50.0
     assert world.get_agent_proposals("wanderer_002", "wanderer_001").get("resources") == {
-        ResourceTypes.ENERGY: 30.0
+        ResourceTypes.ENERGY: 50.0,
+        ResourceTypes.MATERIALS: 30.0,
     }
     assert world.get_proposed_targets("wanderer_002") == ["wanderer_001"]
 
@@ -158,7 +159,7 @@ async def test_tick_leaves_recent_proposal_intact(
         "wanderer_001",
         target="wanderer_002",
         message="be mine",
-        resources={ResourceTypes.ENERGY: 20.0},
+        resources={ResourceTypes.ENERGY: 50.0, ResourceTypes.MATERIALS: 30.0},
     )
     # Advance, but stay within the timeout window.
     fake_clock.advance(MATING_PROPOSAL_TIMEOUT_SECONDS - 1.0)
@@ -167,9 +168,10 @@ async def test_tick_leaves_recent_proposal_intact(
 
     initiator = world.get_agent("wanderer_001")
     assert initiator is not None
-    assert initiator.current_energy == 80.0  # NOT refunded
+    assert initiator.current_energy == 50.0  # NOT refunded
     assert world.get_agent_proposals("wanderer_001", "wanderer_002").get("resources") == {
-        ResourceTypes.ENERGY: 20.0
+        ResourceTypes.ENERGY: 50.0,
+        ResourceTypes.MATERIALS: 30.0,
     }
 
 
@@ -183,7 +185,7 @@ async def test_tick_and_reject_interleave_yield_single_refund(
         "wanderer_001",
         target="wanderer_002",
         message="be mine",
-        resources={ResourceTypes.ENERGY: 20.0, ResourceTypes.MATERIALS: 10.0},
+        resources={ResourceTypes.ENERGY: 50.0, ResourceTypes.MATERIALS: 30.0},
     )
     fake_clock.advance(MATING_PROPOSAL_TIMEOUT_SECONDS + 1.0)
 

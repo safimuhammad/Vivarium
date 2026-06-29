@@ -15,10 +15,21 @@ natural-language result string for the acting agent's LLM. All randomness
 (offspring id category/suffix and the Faker name) routes through ``world.rng`` so
 offspring identities are reproducible from a seed.
 
-Note: the design-doc mating *minimums*, *cooldown* and *max-offspring* rules are
-centralized in :mod:`core.constants` but are deliberately **not** enforced here
-(preserving current gameplay behavior); this divergence is flagged for a later
-phase, not fixed.
+The design-doc mating rules are enforced here (the "explosion guard" — they bound
+population growth so the world neither collapses nor explodes):
+
+* **Minimum contributions** (``MATING_MIN_ENERGY_CONTRIBUTION`` /
+  ``MATING_MIN_MATERIALS_CONTRIBUTION``) — a proposal must commit at least the
+  minimum of *both* resources; checked in :func:`initiate_mating`.
+* **Cooldown** (``MATING_COOLDOWN_SECONDS``) — an agent that mated recently cannot
+  initiate or accept; eligibility is re-validated for *both* parties at accept-time
+  (a pending proposal's initiate-time snapshot can go stale).
+* **Per-agent offspring cap** (``MATING_MAX_OFFSPRING``) — checked for the initiator
+  at initiate-time and for both parties at accept-time.
+
+When the initiator is no longer eligible at accept-time the proposal can never
+legally complete, so it is auto-refunded and dropped (mirroring :func:`reject_mating`
+and the world-tick timeout sweep) rather than stranding the escrow.
 """
 
 from __future__ import annotations
@@ -30,10 +41,23 @@ from faker import Faker
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from core.constants import AGENT_ID_CATEGORIES, MATING_OFFSPRING_MULTIPLIER
+from core.constants import (
+    AGENT_ID_CATEGORIES,
+    MATING_COOLDOWN_SECONDS,
+    MATING_MAX_OFFSPRING,
+    MATING_MIN_ENERGY_CONTRIBUTION,
+    MATING_MIN_MATERIALS_CONTRIBUTION,
+    MATING_OFFSPRING_MULTIPLIER,
+)
 from world.agents import AgentState, AgentStatus
 from world.regions import ResourceTypes
 from world.world import WorldState
+
+_COOLDOWN_MESSAGE = "Invalid: You mated too recently; you must wait before mating again."
+"""Agent-facing rejection when an agent is still within its mating cooldown."""
+
+_OFFSPRING_CAP_MESSAGE = "Invalid: You have reached the maximum number of offspring."
+"""Agent-facing rejection when an agent has hit the per-agent offspring cap."""
 
 
 def _clean_committed_resources(resources: object) -> dict[ResourceTypes, float] | str:
@@ -99,8 +123,11 @@ async def initiate_mating(
             :class:`~world.regions.ResourceTypes`.
 
     Returns:
-        A success sentence on a stored proposal, or an ``"Error: "`` string if an
-        agent is unknown or a committed amount exceeds the initiator's balance.
+        A success sentence on a stored proposal; an ``"Error: "`` string if an agent
+        is unknown or a committed amount exceeds the initiator's balance; or an
+        ``"Invalid: "`` string if the initiator is on mating cooldown, has reached the
+        offspring cap, or the commitment is below the minimum contributions. Rejected
+        calls mutate nothing.
     """
     agent_init = world.get_agent(agent_id)
     agent_target = world.get_agent(target)
@@ -110,6 +137,22 @@ async def initiate_mating(
     committed = _clean_committed_resources(resources)
     if isinstance(committed, str):
         return committed
+
+    # Explosion-guard preconditions (design-doc rules), checked before any mutation:
+    # precondition -> proposal validity, all ahead of the affordability/balance check.
+    if world.is_on_mating_cooldown(agent_init.id, world.now(), MATING_COOLDOWN_SECONDS):
+        return _COOLDOWN_MESSAGE
+    if agent_init.offspring_count >= MATING_MAX_OFFSPRING:
+        return _OFFSPRING_CAP_MESSAGE
+    if (
+        committed.get(ResourceTypes.ENERGY, 0.0) < MATING_MIN_ENERGY_CONTRIBUTION
+        or committed.get(ResourceTypes.MATERIALS, 0.0) < MATING_MIN_MATERIALS_CONTRIBUTION
+    ):
+        return (
+            f"Invalid: A mating proposal must commit at least "
+            f"{MATING_MIN_ENERGY_CONTRIBUTION:.0f} energy and "
+            f"{MATING_MIN_MATERIALS_CONTRIBUTION:.0f} materials."
+        )
 
     if world.get_agent_proposals(agent_id, target):
         return (
@@ -220,12 +263,21 @@ async def accept_mating(
     initiator. The acceptor must be able to match the proposal's committed
     resources.
 
+    Both parties' mating eligibility (cooldown + offspring cap) is re-validated at
+    accept-time; the initiator's eligibility is re-checked because a pending proposal's
+    initiate-time snapshot can go stale (it may have mated elsewhere meanwhile).
+
     Mutates world state:
         * Deducts each committed resource from the acceptor.
         * Adds a new :class:`~world.agents.AgentState` (the offspring) at the
           acceptor's region with ``committed * MATING_OFFSPRING_MULTIPLIER`` of
           each resource and both parents' personas concatenated.
         * Removes the pending proposal.
+        * Records the mating for **both** parents via
+          :meth:`~world.world.WorldState.record_mating` (sets ``last_mated_at`` and
+          increments ``offspring_count`` — the cooldown/cap bookkeeping).
+        * On a stale-initiator rejection only: refunds the initiator's escrow and
+          removes the proposal (no offspring; mirrors :func:`reject_mating`).
 
     Emits events:
         * One ``"agent_born"`` event (:attr:`~bus.events.ScopeType.LOCAL` to the
@@ -240,9 +292,11 @@ async def accept_mating(
             uniform signature and future use).
 
     Returns:
-        A success sentence announcing the offspring, or an ``"Error: "`` string if
-        an agent is unknown, there is no pending proposal, or the acceptor cannot
-        match the committed resources.
+        A success sentence announcing the offspring; an ``"Error: "`` string if an
+        agent is unknown, there is no pending proposal, or the acceptor cannot match
+        the committed resources; or an ``"Invalid: "`` string if the acceptor is on
+        cooldown / at the offspring cap (proposal left intact), or the initiator is no
+        longer eligible (proposal refunded and dropped).
     """
     agent_init = world.get_agent(target)
     agent_accept = world.get_agent(agent_id)
@@ -253,6 +307,34 @@ async def accept_mating(
     resources: Any = pending_proposal.get("resources")
     if not resources:
         return "Error: Pending proposal not found."
+
+    # Acceptor must currently be eligible to mate (explosion guard). A refusal here
+    # leaves the proposal intact -- the acceptor may become eligible, or it is refunded
+    # later via reject/timeout -- so no escrow is touched.
+    if world.is_on_mating_cooldown(agent_accept.id, world.now(), MATING_COOLDOWN_SECONDS):
+        return _COOLDOWN_MESSAGE
+    if agent_accept.offspring_count >= MATING_MAX_OFFSPRING:
+        return _OFFSPRING_CAP_MESSAGE
+
+    # Re-validate the INITIATOR at commit-time: a proposal can sit in escrow while the
+    # initiator mates elsewhere, so its initiate-time snapshot may be stale. If the
+    # initiator can no longer legally mate, the proposal can never complete -- refund its
+    # escrow and drop it (as reject_mating / the timeout sweep do) so resources are never
+    # stranded behind a permanently-dead proposal.
+    if (
+        world.is_on_mating_cooldown(agent_init.id, world.now(), MATING_COOLDOWN_SECONDS)
+        or agent_init.offspring_count >= MATING_MAX_OFFSPRING
+    ):
+        for resource_type, quantity in resources.items():
+            if resource_type == ResourceTypes.ENERGY:
+                world.modify_agent_energy(agent_init.id, quantity)
+            elif resource_type == ResourceTypes.MATERIALS:
+                world.modify_agent_materials(agent_init.id, quantity)
+        world.remove_proposal(agent_init.id, agent_accept.id)
+        return (
+            "Invalid: This mating proposal is no longer valid (the initiator is on "
+            "cooldown or at their offspring cap); their committed resources have been refunded."
+        )
 
     for resource_type, quantity in resources.items():
         if resource_type == ResourceTypes.ENERGY and agent_accept.current_energy < quantity:
@@ -297,6 +379,11 @@ async def accept_mating(
             world.modify_agent_materials(agent_accept.id, -quantity)
     world.add_agent(offspring)
     world.remove_proposal(agent_init.id, agent_accept.id)
+    # Both parents go on cooldown and have their offspring count incremented -- the
+    # explosion-guard bookkeeping that the next initiate/accept eligibility checks read.
+    completed_at = world.now()
+    world.record_mating(agent_init.id, completed_at)
+    world.record_mating(agent_accept.id, completed_at)
     payload = {
         "message": (
             f"New Agent is born with Agent ID:{offspring_id}|Agent Name:{offspring_name}, "
