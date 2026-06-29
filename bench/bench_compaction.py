@@ -226,6 +226,65 @@ def run_live(breaths: int, model: str) -> int:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def run_live_compaction(breaths: int, model: str, budget: int) -> int:
+    """Force compaction to FIRE on the real model and prove never-overflow holds.
+
+    The plain live mode validates the estimator but bypasses ``breathe()`` (so no
+    compaction). This mode drives the full breathing loop with a deliberately small
+    budget so the transcript crosses the trigger within a few breaths and real qwen3
+    authors the recap. Pass condition: the estimate stays <= the (shrunk) budget on
+    EVERY breath, a recap is installed, and the agent never dies. This is the mandate
+    -- compaction firing on the real model without ever overflowing.
+    """
+    import agents.runtime as runtime_mod
+    from agents.decider import make_default_decider
+
+    # Shrink the budget dials so compaction fires early (kept proportional to the real
+    # dials: trigger 0.7, target 0.5, hard-safety 0.9 of the budget). These are module
+    # globals in agents.runtime; reassign them the way the tests' monkeypatch does. The
+    # ignore comments cover mypy's "imported, not explicitly re-exported" rule.
+    runtime_mod.PROMPT_BUDGET_TOKENS = budget  # type: ignore[attr-defined]
+    runtime_mod.COMPACTION_TRIGGER_TOKENS = int(0.70 * budget)  # type: ignore[attr-defined]
+    runtime_mod.COMPACTION_TARGET_TOKENS = int(0.50 * budget)  # type: ignore[attr-defined]
+    runtime_mod.COMPACTION_HARD_SAFETY_TOKENS = int(0.90 * budget)  # type: ignore[attr-defined]
+    runtime_mod.COMPACTION_KEEP_RECENT_TURNS = 4  # type: ignore[attr-defined]
+
+    root = Path(tempfile.mkdtemp(prefix="vivcompact_livefire_"))
+    try:
+        agent = _build_agent(root, make_default_decider(model))
+        estimates: list[int] = []
+
+        async def _drive() -> None:
+            for _ in range(breaths):
+                await agent.breathe()
+                est = estimate_tokens(agent.lifecycle_history, agent._action_schemas())
+                estimates.append(est)
+
+        asyncio.run(_drive())
+
+        peak = max(estimates)
+        window = constants.MODEL_CONTEXT_TOKENS
+        ok = peak <= budget
+        alive = agent._status() == AgentStatus.ALIVE
+        recapped = agent._recap_installed
+        print(f"## Compaction FIRING live -- qwen3 ({model}, {breaths} breaths)")
+        print()
+        print(f"- shrunk budget: {budget} tok (trigger {int(0.70 * budget)})")
+        print(f"- peak estimate: {peak} tok ({100 * peak / window:.0f}% of real window)")
+        print(f"- final history turns: {len(agent.lifecycle_history)}")
+        print(f"- recap installed (real qwen3 authored): {recapped}")
+        print(f"- agent ALIVE at end: {alive}")
+        print()
+        passed = ok and recapped and alive
+        print(
+            f"**{'PASS' if passed else 'FAIL'}: peak estimate {peak} "
+            f"{'<=' if ok else '>'} budget {budget}; recap={recapped}; alive={alive}**"
+        )
+        return 0 if passed else 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Vivarium compaction never-overflow benchmark")
     parser.add_argument("--mode", choices=("synthetic", "live"), default="synthetic")
@@ -234,9 +293,19 @@ def main(argv: list[str] | None = None) -> int:
         "--thinking", type=int, default=3000, help="chars of thinking per turn (synthetic)"
     )
     parser.add_argument("--model", default=os.environ.get("VIVARIUM_MODEL", "qwen3:8b"))
+    parser.add_argument(
+        "--force-compaction",
+        action="store_true",
+        help="live mode only: shrink the budget so compaction FIRES on the real model",
+    )
+    parser.add_argument(
+        "--budget", type=int, default=8000, help="shrunk budget for --force-compaction"
+    )
     args = parser.parse_args(argv)
 
     if args.mode == "live":
+        if args.force_compaction:
+            return run_live_compaction(args.breaths, args.model, args.budget)
         return run_live(args.breaths, args.model)
     return run_synthetic(args.breaths, args.thinking)
 
