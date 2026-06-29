@@ -35,10 +35,19 @@ _COMPACTION_SYSTEM = (
     "You are remembering your own recent past, holding on to what matters as time moves on."
 )
 
-_BREVITY = (
-    "In a few sentences, in your own voice, recount what has happened to you lately and "
-    "what of it still matters. Keep it brief -- only what is worth carrying forward."
+_RECAP_INSTRUCTION = (
+    "In your own voice, recount your life so far in a handful of full paragraphs -- the "
+    "places you have moved through, the others you have met and how they treated you, what "
+    "you have gained and lost, the choices that shaped you, and what you have come to "
+    "understand. Be unhurried and concrete: say what happened and why it still matters, so "
+    "that none of who you have become is lost."
 )
+"""The recap-authoring instruction. Asks for a fuller, multi-paragraph memoir (not a
+terse line): the recap is the agent's whole long-term self-narrative, resident every
+breath, so it should carry people, places, conflicts, and lessons -- not just a vibe.
+Length is bounded downstream by ``COMPACTION_RECAP_RESERVE_TOKENS``; this prompt sets
+how much the model *chooses* to write within that ceiling. Stays in-world (DD9: no
+'summarize'/'compact'/simulation language)."""
 
 
 def estimate_tokens(messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> int:
@@ -85,7 +94,7 @@ def build_compaction_messages(
     if prior_recap and prior_recap.strip():
         parts.append(f"Your life up to now:\n{prior_recap.strip()}\n")
     parts.append(f"More recently:\n{recent}\n")
-    parts.append(_BREVITY)
+    parts.append(_RECAP_INSTRUCTION)
     return [
         {"role": "system", "content": _COMPACTION_SYSTEM},
         {"role": "user", "content": "\n".join(parts)},
