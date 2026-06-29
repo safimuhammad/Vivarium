@@ -171,3 +171,37 @@ async def test_attack_nonlethal_damages_only(world: WorldState, event_bus: Event
     await attack(world, event_bus, "wanderer_001", target="wanderer_002")  # 100 -> 70
     t = world.get_agent("wanderer_002")
     assert t is not None and t.status is AgentStatus.ALIVE
+
+
+async def test_attack_paralyzing_blow_emits_agent_paralyzed(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A non-lethal blow that flips ALIVE -> PARALYZED announces the collapse.
+
+    The victim is asleep when the blow lands, so its own ``refresh_status`` would
+    miss the externally-caused flip; combat must emit ``agent_paralyzed`` itself so
+    co-located agents perceive the collapse (perception is the product).
+    """
+    world.modify_agent_energy("wanderer_002", -70.0)  # 100 -> 30.0, still ALIVE
+    await attack(world, event_bus, "wanderer_001", target="wanderer_002")  # 30 -> 0.0 => PARALYZED
+
+    t = world.get_agent("wanderer_002")
+    assert t is not None and t.status is AgentStatus.PARALYZED
+    inbox = event_bus.get_events("wanderer_002")
+    paralyzed = [e for e in inbox if e.type == "agent_paralyzed"]
+    assert paralyzed, "expected an agent_paralyzed event on the ALIVE->PARALYZED flip"
+    assert paralyzed[0].scope is ScopeType.LOCAL
+    assert paralyzed[0].region == "alpha"
+    assert paralyzed[0].timestamp == world.now()
+    # The damage 'attack' event is still emitted alongside it.
+    assert any(e.type == "attack" for e in inbox)
+
+
+async def test_attack_nonlethal_no_flip_no_agent_paralyzed(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A non-lethal hit that leaves the target ALIVE emits no ``agent_paralyzed``."""
+    await attack(world, event_bus, "wanderer_001", target="wanderer_002")  # 100 -> 70, ALIVE
+    assert not any(
+        e.type == "agent_paralyzed" for e in event_bus.get_events("wanderer_002")
+    )

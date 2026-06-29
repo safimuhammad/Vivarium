@@ -123,6 +123,26 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
         timestamp=world.now(),
     )
     await event_bus.publish(event_message)
+
+    # If this blow just flipped a previously-ALIVE target to PARALYZED, announce the
+    # collapse here. The victim is asleep when the blow lands, so its own
+    # refresh_status would miss an externally-caused flip (it only sees transitions
+    # within one of its own breaths); the actor that caused the change emits it,
+    # mirroring the agent_recovered pattern in transfer_resource. (The non-lethal
+    # branch only runs when the target was ALIVE, so reaching PARALYZED here is a
+    # true ALIVE -> PARALYZED flip.)
+    if target_agent.status is AgentStatus.PARALYZED:
+        await event_bus.publish(
+            Event(
+                "agent_paralyzed",
+                "system",
+                {"message": f"{target_agent.name} has collapsed and can no longer move."},
+                scope=ScopeType.LOCAL,
+                region=target_agent.current_position,
+                timestamp=world.now(),
+            )
+        )
+
     return (
         f"Successfully Attacked {target_agent.name}|ID{target_agent.id}\n"
         f" Energy remaining: {attacker_agent.current_energy}"
