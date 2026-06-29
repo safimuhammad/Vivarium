@@ -53,6 +53,8 @@ from core.constants import (
     COMPACTION_TARGET_TOKENS,
     COMPACTION_TRIGGER_TOKENS,
     DECIDE_BACKOFF_SECONDS,
+    MATING_COOLDOWN_SECONDS,
+    MATING_MAX_OFFSPRING,
     PARALYSIS_ENERGY_THRESHOLD,
     PROMPT_BUDGET_TOKENS,
     RECALL_K,
@@ -64,7 +66,7 @@ from core.logging import get_logger
 from memory.models import Importance, MemoryItem
 from memory.store import NULL_MEMORY, MemoryStore
 from tools.registry import ToolRegistry
-from world.agents import AgentState, AgentStatus
+from world.agents import AgentState, AgentStatus, describe_agent_brief
 from world.regions import ResourceTypes
 from world.world import WorldState
 
@@ -967,7 +969,12 @@ class Agent:
         if agent_state is None:
             return "All sensation has left you; you are no longer part of this world."
 
-        lines: list[str] = ["You take stock of yourself and your surroundings.", "", "Within you:"]
+        lines: list[str] = [
+            "You take stock of yourself and your surroundings.",
+            "",
+            "Within you:",
+            f"- You are {agent_state.name} [id: {agent_state.id}]",
+        ]
         lines.append(f"- Energy: {agent_state.current_energy}")
         # Low-energy attack warning (Sprint 6 T5): if an attack would drop the agent
         # to/below the paralysis threshold, surface it so the model can decide
@@ -983,6 +990,25 @@ class Agent:
         lines.append(f"- Materials: {agent_state.current_materials}")
         lines.append(f"- Where you stand: {agent_state.current_position}")
         lines.append(f"- Condition: {agent_state.status.value}")
+        # Reproductive self-state (Finding 2): the per-agent offspring cap and the
+        # mating cooldown are enforced silently by the mating tools. An agent that
+        # cannot see its own count or cooldown cannot tell whether an offer it makes
+        # or accepts will even be allowed -- so surface both, letting the choice to
+        # bring a child into the world be an informed one rather than a guess.
+        lines.append(f"- Children brought into the world: {agent_state.offspring_count}")
+        last_mated = agent_state.last_mated_at
+        cooldown_remaining = (
+            0.0 if last_mated is None else MATING_COOLDOWN_SECONDS - (self.world.now() - last_mated)
+        )
+        if agent_state.offspring_count >= MATING_MAX_OFFSPRING:
+            lines.append("- You have brought all the children into the world that you can.")
+        elif cooldown_remaining > 0:
+            lines.append(
+                f"- It is not yet time to bring another child into the world "
+                f"(about {cooldown_remaining:.0f}s more)."
+            )
+        else:
+            lines.append("- You are able to bring a child into the world now.")
 
         region = self.world.get_region(agent_state.current_position)
         lines.append("")
@@ -996,10 +1022,48 @@ class Agent:
                 if other.id != self.agent_id
             ]
             lines.append(f"- Also here: {', '.join(others) if others else 'no one else'}")
-            lines.append(f"- Energy in this place: {region.current_energy}")
-            lines.append(f"- Materials in this place: {region.current_materials}")
+            # Region capacity + regeneration (Finding 5): the bare current level
+            # cannot tell a rich place from a near-exhausted one, nor whether what is
+            # taken will return. Surfacing the ceiling and the renewal rate lets an
+            # agent judge whether a place is worth staying in or harvesting from.
+            lines.append(
+                f"- Energy in this place: {region.current_energy} "
+                f"(of up to {region.max_energy}; the land renews about "
+                f"{region.energy_rate} each moment)"
+            )
+            lines.append(
+                f"- Materials in this place: {region.current_materials} "
+                f"(of up to {region.max_materials}; the land renews about "
+                f"{region.materials_rate} each moment)"
+            )
         else:
             lines.append("The place around you is indistinct.")
+
+        # Standing mating offers persist in the world until answered, so surface them
+        # every breath -- the one-shot mating_initiated event was drained at arrival, so
+        # an acceptor that did not act the instant it arrived would otherwise never see it.
+        incoming = self.world.get_incoming_proposals(self.agent_id)
+        outgoing = self.world.get_proposed_targets(self.agent_id)
+        if incoming or outgoing:
+            lines.append("")
+            lines.append("Mating offers awaiting a reply:")
+            for initiator_id, proposal in incoming:
+                initiator = self.world.get_agent(initiator_id)
+                who = initiator.name if initiator is not None else initiator_id
+                resources = proposal.get("resources", {})
+                energy = resources.get(ResourceTypes.ENERGY, 0.0)
+                materials = resources.get(ResourceTypes.MATERIALS, 0.0)
+                lines.append(
+                    f"- {who} [id: {initiator_id}] offers to mate with you, committing "
+                    f"{energy} energy and {materials} materials. You may accept_mating or "
+                    f"reject_mating with target {initiator_id}."
+                )
+            for target_id in outgoing:
+                target = self.world.get_agent(target_id)
+                who = target.name if target is not None else target_id
+                lines.append(
+                    f"- You are awaiting an answer to your mating offer to {who} [id: {target_id}]."
+                )
 
         lines.append("")
         if events:
@@ -1009,33 +1073,50 @@ class Agent:
             lines.append("Nothing else stirs nearby.")
         return "\n".join(lines)
 
-    @staticmethod
-    def _render_event(event: Event) -> str:
-        """Render a single perceived event as a plain-narrative line."""
+    def _render_event(self, event: Event) -> str:
+        """Render a single perceived event as a plain-narrative line.
+
+        Speech is attributed to its speaker and marked as a private whisper or a
+        regional broadcast, so a listener knows WHO addressed it and whether others
+        heard too -- the raw ``speak`` payload carries neither, which left agents
+        replying to no one in particular. Other event types keep their pre-narrated
+        ``payload["message"]`` (combat/mating tools already embed the actor), falling
+        back to a neutral line for the rare messageless event.
+
+        Args:
+            event: The perceived event to render.
+
+        Returns:
+            A single narrative line for the perception's "Lately you have noticed" list.
+        """
         message = event.payload.get("message") if isinstance(event.payload, dict) else None
+        if event.type == "speak" and message:
+            speaker = self.world.get_agent(event.source)
+            who = f"{speaker.name} [id: {event.source}]" if speaker is not None else event.source
+            verb = "whispers to you" if event.scope is ScopeType.TARGETED else "says"
+            return f"{who} {verb}: {message}"
         return str(message) if message else f"Something shifted nearby ({event.type})."
 
     @staticmethod
     def _describe_neighbor(other: AgentState) -> str:
-        """Name a co-located agent, labelling the fallen and the dead.
+        """Describe a co-located agent, delegating to the shared brief descriptor.
 
-        Corpses and paralysed agents are kept in the region (Sprint 6), so the
-        perception must mark them rather than list them as ordinary neighbours -- a
-        plain name invites the model to speak to the dead or feed a corpse.
+        Thin wrapper over :func:`world.agents.describe_agent_brief` so the breathing
+        loop's perception and the ``look_around`` tool render co-located agents with
+        one voice (name, id, energy/materials, and a ``(fallen)``/``(dead)`` marker).
+        Surfacing the neighbour's energy and materials (Finding 3) lets an agent judge
+        whether another is a viable mating partner or a weak attack target -- a bare
+        name forced it to guess. Corpses and the fallen stay marked, not hidden, since
+        Sprint 6 keeps them in the region.
 
         Args:
             other: A co-located agent (not the perceiving agent itself).
 
         Returns:
-            The agent's name, suffixed ``(fallen)`` if PARALYZED or ``(dead)`` if DEAD.
+            A single-line description, e.g. ``"Mae [id: wanderer_002] (energy 88.0,
+            materials 45.0)"`` with a ``(fallen)``/``(dead)`` marker when not ALIVE.
         """
-        match other.status:
-            case AgentStatus.PARALYZED:
-                return f"{other.name} (fallen)"
-            case AgentStatus.DEAD:
-                return f"{other.name} (dead)"
-            case _:
-                return other.name
+        return describe_agent_brief(other)
 
     async def _announce_paralysis(self, agent_state: AgentState) -> None:
         """Emit the system ``agent_paralyzed`` event for an ``ALIVE -> PARALYZED`` flip.

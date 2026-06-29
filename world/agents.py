@@ -65,3 +65,33 @@ class AgentState:
     # mating bookkeeping (defaulted so existing construction sites are unchanged)
     last_mated_at: float | None = None
     offspring_count: int = 0
+
+
+def describe_agent_brief(agent: AgentState) -> str:
+    """Render a one-line summary of an agent as another being would perceive it.
+
+    Names the agent, marks its condition (``(fallen)`` if PARALYZED, ``(dead)`` if
+    DEAD), exposes its ``id`` so a perceiver can address it in a targeted action, and
+    surfaces its energy and materials so a perceiver can judge whether it is a viable
+    mating partner (can it match a commitment?) or attack target (is it weak?). Shared
+    by the breathing-loop perception and the ``look_around`` tool so both speak with one
+    voice.
+
+    Args:
+        agent: The agent being described (someone other than the perceiver).
+
+    Returns:
+        A single-line description, e.g. ``"Mae [id: wanderer_002] (energy 88.0,
+        materials 45.0)"`` with a ``(fallen)``/``(dead)`` marker when not ALIVE.
+    """
+    match agent.status:
+        case AgentStatus.PARALYZED:
+            label = " (fallen)"
+        case AgentStatus.DEAD:
+            label = " (dead)"
+        case _:
+            label = ""
+    return (
+        f"{agent.name}{label} [id: {agent.id}] "
+        f"(energy {agent.current_energy}, materials {agent.current_materials})"
+    )

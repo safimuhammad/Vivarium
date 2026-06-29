@@ -23,6 +23,7 @@ from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
     ATTACK_ENERGY_COST,
+    MATING_MAX_OFFSPRING,
     PARALYSIS_ENERGY_THRESHOLD,
     REFLECT_EVERY_N_BREATHS,
 )
@@ -327,8 +328,26 @@ async def test_perceive_includes_local_speak_and_drains_inbox(
 
     perception = agent.lifecycle_history[-1]
     assert perception["role"] == "user"
-    assert "Greetings, traveller." in perception["content"]
+    content = perception["content"]
+    assert "Greetings, traveller." in content
+    assert "Boris" in content and BORIS in content  # attributed to the speaker (name + id)
+    assert "says" in content  # a broadcast, not a whisper
     assert event_bus.get_events(ADA) == []  # inbox drained
+
+
+async def test_perceive_marks_a_whisper_as_private(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A targeted message is rendered as a private whisper, not a public broadcast."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    await populated_registry.invoke("speak", BORIS, {"message": "Just between us.", "target": ADA})
+
+    await agent.perceive()
+
+    content = agent.lifecycle_history[-1]["content"]
+    assert "Just between us." in content
+    assert "whispers to you" in content  # listener knows it was private
+    assert "Boris" in content  # still attributed
 
 
 async def test_perceive_contains_self_state_and_region_snapshot(
@@ -344,7 +363,130 @@ async def test_perceive_contains_self_state_and_region_snapshot(
     assert "alpha" in content  # own position
     assert "alive" in content  # own status
     assert "Boris" in content  # co-located agent
+    assert BORIS in content  # ...and its id, so it can be targeted by a tool
     assert "beta" in content  # region connection
+
+
+async def test_perceive_surfaces_standing_incoming_mating_offer(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A pending offer to the agent is shown every breath (not just the arrival event)."""
+    world.add_proposal(BORIS, ADA, {ResourceTypes.ENERGY: 50.0, ResourceTypes.MATERIALS: 30.0})
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+
+    await agent.perceive()
+
+    content = agent.lifecycle_history[-1]["content"]
+    assert "Mating offers awaiting a reply" in content
+    assert BORIS in content  # the initiator's id, so the agent can accept/reject it
+    assert "accept_mating" in content and "reject_mating" in content
+
+
+async def test_perceive_surfaces_outstanding_outgoing_mating_offer(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """The proposer is reminded of its own outstanding offer awaiting a reply."""
+    world.add_proposal(ADA, BORIS, {ResourceTypes.ENERGY: 50.0, ResourceTypes.MATERIALS: 30.0})
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+
+    await agent.perceive()
+
+    content = agent.lifecycle_history[-1]["content"]
+    assert "awaiting an answer to your mating offer" in content
+    assert BORIS in content  # the target's id
+
+
+# ---------------------------------------------------------------------------
+# Context-engineering gap-fill: the agent must perceive its own condition and
+# its surroundings fully enough to act on them (Findings 2, 3, 5, 9).
+# ---------------------------------------------------------------------------
+
+
+async def test_perceive_names_self_with_id(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """The agent sees its own name and id (Finding 9), so it can recognise itself when
+    others address it by id in events and standing offers."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+
+    await agent.perceive()
+
+    content = agent.lifecycle_history[-1]["content"]
+    assert f"You are Ada [id: {ADA}]" in content
+
+
+async def test_perceive_shows_reproductive_self_state_when_available(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A never-mated agent sees a zero offspring count and that it may mate now (Finding 2)."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+
+    await agent.perceive()
+
+    content = agent.lifecycle_history[-1]["content"]
+    assert "Children brought into the world: 0" in content
+    assert "able to bring a child into the world now" in content
+
+
+async def test_perceive_shows_mating_cooldown_remaining(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """Just after mating, perception reports the cooldown, not availability (Finding 2).
+
+    The agent reads the same frozen clock the world does, so recording a mating at
+    ``world.now()`` leaves the full cooldown outstanding at perception time.
+    """
+    assert world.record_mating(ADA, world.now()) is True
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+
+    await agent.perceive()
+
+    content = agent.lifecycle_history[-1]["content"]
+    assert "Children brought into the world: 1" in content
+    assert "not yet time to bring another child" in content
+    assert "able to bring a child into the world now" not in content
+
+
+async def test_perceive_reports_offspring_cap_reached(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """At the per-agent offspring cap, perception says no more children are possible (Finding 2)."""
+    for _ in range(MATING_MAX_OFFSPRING):
+        assert world.record_mating(ADA, world.now()) is True
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+
+    await agent.perceive()
+
+    content = agent.lifecycle_history[-1]["content"]
+    assert f"Children brought into the world: {MATING_MAX_OFFSPRING}" in content
+    assert "all the children into the world that you can" in content
+
+
+async def test_perceive_shows_neighbor_energy_and_materials(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A co-located agent is described with its energy and materials (Finding 3), so the
+    perceiver can judge it as a mating partner or attack target -- not just a bare name."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+
+    await agent.perceive()
+
+    content = agent.lifecycle_history[-1]["content"]
+    assert f"Boris [id: {BORIS}] (energy 100.0, materials 50.0)" in content
+
+
+async def test_perceive_shows_region_capacity_and_regeneration(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """The region block surfaces the resource ceiling and renewal rate (Finding 5), so the
+    agent can tell a rich place from a near-exhausted one and whether what it takes returns."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+
+    await agent.perceive()
+
+    content = agent.lifecycle_history[-1]["content"]
+    assert "of up to 500.0" in content  # the region ceiling, not just the current level
+    assert "the land renews about 1.0 each moment" in content  # the regeneration rate
 
 
 # ---------------------------------------------------------------------------

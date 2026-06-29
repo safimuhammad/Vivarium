@@ -17,6 +17,15 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from core.constants import (
+    ATTACK_DAMAGE,
+    ATTACK_ENERGY_COST,
+    MATING_MAX_OFFSPRING,
+    MATING_MIN_ENERGY_CONTRIBUTION,
+    MATING_MIN_MATERIALS_CONTRIBUTION,
+    MOVE_ENERGY_COST,
+    SPEAK_ENERGY_COST,
+)
 from world.regions import ResourceTypes
 
 RESOURCE_ENUM: list[str] = [resource.value for resource in ResourceTypes]
@@ -47,7 +56,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "move",
-            "description": "Travel to a directly connected region.",
+            "description": (
+                "Travel to a directly connected region. Travelling costs you "
+                f"{MOVE_ENERGY_COST:.0f} energy."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -66,7 +78,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "speak",
             "description": (
                 "Say something. With no target, everyone in your region hears it; "
-                "with a target, only that one being hears it."
+                "with a target, only that one being hears it. Speaking costs you "
+                f"{SPEAK_ENERGY_COST:g} energy."
             ),
             "parameters": {
                 "type": "object",
@@ -89,7 +102,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "attack",
             "description": (
-                "Strike another being in your region, draining their energy and yours."
+                "Strike another being in your region, draining "
+                f"{ATTACK_DAMAGE:.0f} of their energy; striking costs you "
+                f"{ATTACK_ENERGY_COST:.0f} energy."
             ),
             "parameters": {
                 "type": "object",
@@ -156,8 +171,12 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "initiate_mating",
             "description": (
-                "Propose mating to another being, committing resources now that are "
-                "returned if the proposal is rejected or times out."
+                "Propose mating to another being in your region to bring a new being -- a "
+                "child -- into the world. Commit energy and materials now (at least "
+                f"{MATING_MIN_ENERGY_CONTRIBUTION:.0f} energy and "
+                f"{MATING_MIN_MATERIALS_CONTRIBUTION:.0f} materials); they are returned if "
+                "the proposal is rejected or times out. You may mate again only after a "
+                f"cooldown, and only up to {MATING_MAX_OFFSPRING} children in all."
             ),
             "parameters": {
                 "type": "object",
@@ -214,8 +233,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "accept_mating",
             "description": (
-                "Accept a pending mating proposal, matching the committed resources to "
-                "bring a new being into the world."
+                "Accept a pending mating proposal from a being in your region, matching "
+                "the energy and materials they committed; a new being -- a child -- is "
+                "born to you both."
             ),
             "parameters": {
                 "type": "object",

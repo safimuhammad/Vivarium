@@ -400,6 +400,23 @@ def test_get_proposed_targets_none(world: WorldState) -> None:
     assert world.get_proposed_targets("wanderer_001") == []
 
 
+def test_get_incoming_proposals_none(world: WorldState) -> None:
+    """An agent with no offers addressed to it gets an empty list."""
+    assert world.get_incoming_proposals("wanderer_002") == []
+
+
+def test_get_incoming_proposals_returns_offers_to_target(world: WorldState) -> None:
+    """Proposals where the agent is the target are returned with initiator + payload."""
+    world.add_proposal("wanderer_001", "wanderer_002", {ResourceTypes.ENERGY: 50.0})
+    incoming = world.get_incoming_proposals("wanderer_002")
+    assert len(incoming) == 1
+    initiator_id, proposal = incoming[0]
+    assert initiator_id == "wanderer_001"
+    assert proposal["resources"] == {ResourceTypes.ENERGY: 50.0}
+    # The initiator does not see it as incoming (they are the proposer, not the target).
+    assert world.get_incoming_proposals("wanderer_001") == []
+
+
 def test_remove_proposal_success(world: WorldState) -> None:
     """Removing an existing proposal clears both lookup structures."""
     world.add_proposal("wanderer_001", "wanderer_002", {ResourceTypes.ENERGY: 1.0})

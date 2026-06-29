@@ -114,6 +114,15 @@ async def test_look_around_returns_dashboard_without_event(
     assert event_bus.get_events("wanderer_002") == []
 
 
+async def test_look_around_describes_neighbors_with_brief(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Neighbours are rendered with the shared brief -- id and energy/materials (Finding 6),
+    matching the breathing-loop perception so the agent reads one consistent voice."""
+    result = await look_around(world, event_bus, "wanderer_001")
+    assert "Boris [id: wanderer_002] (energy 100.0, materials 50.0)" in result
+
+
 async def test_look_around_missing_agent_returns_error(
     world: WorldState, event_bus: EventBus
 ) -> None:

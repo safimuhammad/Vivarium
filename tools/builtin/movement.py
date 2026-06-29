@@ -16,6 +16,7 @@ from __future__ import annotations
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import MOVE_ENERGY_COST
+from world.agents import describe_agent_brief
 from world.world import WorldState
 
 
@@ -125,7 +126,13 @@ async def look_around(world: WorldState, event_bus: EventBus, agent_id: str) -> 
         return f"Error: Cannot look around, region {agent_state.current_position!r} does not exist."
 
     agents_nearby = world.get_agents_in_region(agent_state.current_position)
-    others = ",".join(agent.name for agent in agents_nearby if agent.id != agent_id)
+    # Describe each neighbour the same way the breathing-loop perception does
+    # (Finding 6): name, id, energy/materials, and a (fallen)/(dead) marker. A bare
+    # name forced the agent to guess who was a viable partner or a weak target, and
+    # left it unable to address anyone in a targeted action.
+    others = "; ".join(
+        describe_agent_brief(agent) for agent in agents_nearby if agent.id != agent_id
+    )
     return (
         f"YOUR CURRENT STATUS\n"
         f"Energy| {agent_state.current_energy}\n"

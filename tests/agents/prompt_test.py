@@ -59,3 +59,18 @@ def test_prompt_has_no_goal_or_simulation_language() -> None:
     prompt = build_system_prompt("A curious wanderer.", TOOL_NAMES).lower()
     for term in FORBIDDEN_TERMS:
         assert term not in prompt
+
+
+def test_prompt_explains_world_mechanics() -> None:
+    """The shared shell must teach the world's physics, not just list tool names."""
+    prompt = build_system_prompt("A curious wanderer.", TOOL_NAMES).lower()
+    for concept in ("energy", "materials", "place", "child"):
+        assert concept in prompt
+
+
+def test_world_mechanics_is_shared_and_persona_independent() -> None:
+    """Every agent gets the identical mechanics block; individuality is the persona."""
+    from agents.prompt import WORLD_MECHANICS
+
+    assert WORLD_MECHANICS in build_system_prompt("A curious wanderer.", TOOL_NAMES)
+    assert WORLD_MECHANICS in build_system_prompt("A fierce loner.", TOOL_NAMES)
