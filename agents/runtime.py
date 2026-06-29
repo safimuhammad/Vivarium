@@ -44,7 +44,6 @@ from core.constants import (
     RECALL_K,
     REFLECT_EVERY_N_BREATHS,
     REFLECT_RECAP_TURNS,
-    RETRIEVAL_K,
 )
 from core.exceptions import EventBusError, ToolError
 from core.logging import get_logger
@@ -60,6 +59,13 @@ logger = get_logger(__name__)
 # DECIDE_BACKOFF_SECONDS is re-exported from core.constants (its one tuned home);
 # imported here because the breathing loop applies it and tests reference it.
 __all__ = ["DECIDE_BACKOFF_SECONDS", "Agent"]
+
+#: The agent's own (assistant-voice) acknowledgement of its resident memory block.
+#: It sits at ``lifecycle_history[2]`` so the block (a ``user`` turn at ``[1]``) is
+#: followed by an assistant turn -- preserving the "never two consecutive user
+#: turns" invariant the chat backend requires. Byte-stable, so it never evicts the
+#: KV cache between reflections.
+RESIDENT_BLOCK_ACK: str = "These are the memories I carry; they are part of who I am."
 
 
 class Agent:
@@ -123,6 +129,7 @@ class Agent:
         self.breath_count: int = 0
         self._stopped: bool = False
         self._last_decide_failed: bool = False
+        self._resident_block_installed: bool = False
 
         self.event_bus.subscribe(self.agent_id)
         self._load_system_prompt()
@@ -169,13 +176,16 @@ class Agent:
     # ---- setup ------------------------------------------------------------
 
     def _load_system_prompt(self) -> None:
-        """Seed :attr:`lifecycle_history` with the agent's system prompt.
+        """Seed :attr:`lifecycle_history` with the system prompt and resident block.
 
-        The prompt is persona + tool affordances only (design DD9); no goals,
-        strategy, or simulation language. See :meth:`_system_prompt` for how the
-        persona is sourced.
+        The system prompt is persona + tool affordances only (design DD9); no goals,
+        strategy, or simulation language. Immediately after it, the resident memory
+        block is installed at ``[1]`` (a ``user`` turn) and its acknowledgement at
+        ``[2]`` (an ``assistant`` turn) -- but only for an agent with real memory
+        (see :meth:`_set_resident_block`).
         """
         self.lifecycle_history.append({"role": "system", "content": self._system_prompt()})
+        self._set_resident_block("")  # no perception yet at birth; query is irrelevant under cap
 
     def _system_prompt(self) -> str:
         """Compose the system prompt from the agent's identity + tool affordances.
@@ -205,10 +215,11 @@ class Agent:
         events as plain narrative ordered by timestamp. Appends a single ``user``
         message to :attr:`lifecycle_history`. No meta/simulation language is used.
 
-        Salient memories (scored by recency x importance x relevance against the
-        perception) are folded into the SAME ``user`` turn -- never a second
-        consecutive ``user`` turn, and always appended at the tail so the model's
-        KV cache stays warm (design spec Section 9).
+        Perception is a *pure sensory stream*: memory no longer rides along here
+        (Sprint 5.1). The agent's memories live in the always-resident block at
+        ``lifecycle_history[1]`` (rebuilt only at reflection), so each breath's
+        perception is just what the senses report -- appended at the tail, leaving
+        the system prompt and the resident block byte-stable for the KV cache.
 
         Returns:
             None.
@@ -216,9 +227,6 @@ class Agent:
         events = self.event_bus.get_events(self.agent_id)
         events.sort(key=lambda event: event.timestamp)
         perception = self._render_perception(events)
-        memories = self.memory.retrieve(perception, self.breath_count, RETRIEVAL_K)
-        if memories:
-            perception = f"{perception}\n\n{self._render_memories(memories)}"
         self.lifecycle_history.append({"role": "user", "content": perception})
 
     async def decide(self) -> Decision | None:
@@ -325,15 +333,16 @@ class Agent:
 
         Side effects:
             May append a memory (``remember``) and/or rewrite the identity and
-            rebuild the system turn (``revise_self``) via :attr:`memory`.
+            rebuild the system turn (``revise_self``) via :attr:`memory`. Always
+            refreshes the resident memory block afterwards, so a newly-remembered
+            memory becomes resident for the next breath. Reflection re-prefills the
+            KV cache anyway, so rebuilding the block here is effectively free.
 
         Returns:
             None.
         """
-        messages = build_reflection_messages(
-            self.memory.load_identity(),
-            render_recap(self.lifecycle_history, REFLECT_RECAP_TURNS),
-        )
+        recap = render_recap(self._live_turns(), REFLECT_RECAP_TURNS)
+        messages = build_reflection_messages(self.memory.load_identity(), recap)
         try:
             decision = await self.decider.decide(messages, REFLECTION_TOOL_SCHEMAS)
         except Exception:
@@ -351,6 +360,7 @@ class Agent:
                         call.name,
                         self.agent_id,
                     )
+        self._set_resident_block(recap)  # refresh the block with this reflection's view
 
     def _apply_remember(self, params: dict[str, Any]) -> None:
         """Persist a ``remember`` call's memory; ignore an empty/blank one.
@@ -380,17 +390,68 @@ class Agent:
         self.memory.write_identity(identity.strip())
         self.lifecycle_history[0] = {"role": "system", "content": self._system_prompt()}
 
-    def _render_memories(self, memories: list[MemoryItem]) -> str:
-        """Render surfaced memories as an in-world 'what you carry' block.
+    def _live_turns(self) -> list[dict[str, Any]]:
+        """Return the live conversational turns, excluding the resident scaffolding.
 
-        Args:
-            memories: The memories to render (already salience-ordered).
+        The system prompt (``[0]``) and, when installed, the resident block +
+        acknowledgement (``[1]`` / ``[2]``) are fixed scaffolding, not lived events.
+        Excluding them keeps the reflection recap focused on what has actually
+        happened (perceptions, decisions, actions).
 
         Returns:
-            A multi-line block naming what the agent carries (no meta language).
+            ``lifecycle_history`` with the leading scaffolding turns dropped.
         """
-        lines = ["Surfacing from your memory, things you carry:"]
+        start = 3 if self._resident_block_installed else 1
+        return self.lifecycle_history[start:]
+
+    def _set_resident_block(self, query: str) -> None:
+        """Install or refresh the resident memory block at ``[1]`` / ``[2]``.
+
+        For an agent with real memory, the whole memory (up to
+        :data:`~core.constants.MEMORY_RESIDENT_CAP`) is kept resident as a ``user``
+        turn at ``[1]``, followed by the agent's :data:`RESIDENT_BLOCK_ACK` at
+        ``[2]`` (so the block never creates two consecutive ``user`` turns). On the
+        first call (at birth) the pair is inserted right after the system prompt; on
+        later calls (at reflection) it is replaced in place. A
+        :data:`~memory.store.NULL_MEMORY` agent has no block at all -- this is a
+        no-op -- so memory-less agents keep an unchanged ``[system, ...live]`` shape.
+
+        Args:
+            query: The perception/recap used to rank the over-cap fill by relevance
+                (ignored when the whole memory fits under the cap).
+        """
+        if self.memory is NULL_MEMORY:
+            return
+        memories = self.memory.resident_block(query, self.breath_count)
+        block = {"role": "user", "content": self._render_resident_block(memories)}
+        ack = {"role": "assistant", "content": RESIDENT_BLOCK_ACK}
+        if self._resident_block_installed:
+            self.lifecycle_history[1] = block
+            self.lifecycle_history[2] = ack
+        else:
+            self.lifecycle_history[1:1] = [block, ack]  # insert right after the system turn
+            self._resident_block_installed = True
+
+    def _render_resident_block(self, memories: list[MemoryItem]) -> str:
+        """Render the resident memory block as an in-world 'all you carry' turn.
+
+        Args:
+            memories: The resident memories (chronological; from
+                :meth:`~memory.store.MemoryStore.resident_block`).
+
+        Returns:
+            A multi-line block naming what the agent carries (no meta language). When
+            the memory has overflowed the resident cap, a closing line nudges the
+            agent to ``recall`` deeper memories on demand.
+        """
+        if not memories:
+            return "You carry little yet; your life has only just begun."
+        lines = ["All that you carry within you, the sum of who you have become:"]
         lines.extend(f"- {memory.content}" for memory in memories)
+        if self.memory.memory_count() > len(memories):
+            lines.append(
+                "Older memories lie deeper than these; search your memory to bring one back."
+            )
         return "\n".join(lines)
 
     def _recall(self, params: dict[str, Any]) -> str:

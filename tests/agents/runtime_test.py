@@ -409,7 +409,7 @@ class ReflectAwareDecider:
         return decision
 
 
-async def test_surfaced_memories_appear_in_perception(
+async def test_memories_live_in_resident_block_not_perception(
     world: WorldState,
     event_bus: EventBus,
     populated_registry: ToolRegistry,
@@ -425,16 +425,32 @@ async def test_surfaced_memories_appear_in_perception(
         memory=memory_store,
     )
 
+    # The memory is resident at [1] (user) with the agent's ack at [2] (assistant).
+    assert agent.lifecycle_history[1]["role"] == "user"
+    assert "Kai betrayed me" in agent.lifecycle_history[1]["content"]
+    assert agent.lifecycle_history[2]["role"] == "assistant"
+
     await agent.perceive()
 
     perception = agent.lifecycle_history[-1]
     assert perception["role"] == "user"
-    assert "Kai betrayed me" in perception["content"]
+    assert "Kai betrayed me" not in perception["content"]  # perception is pure sensory now
     roles = [m["role"] for m in agent.lifecycle_history]
     assert not any(roles[i] == roles[i + 1] == "user" for i in range(len(roles) - 1))
 
 
-async def test_memories_appended_at_tail_not_mid_history(
+async def test_resident_block_absent_for_memory_less_agent(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+) -> None:
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider())  # NULL_MEMORY
+
+    # No block injected: history is just the system turn (non-breaking for ~30 sites).
+    assert [m["role"] for m in agent.lifecycle_history] == ["system"]
+
+
+async def test_resident_block_byte_stable_across_a_breath(
     world: WorldState,
     event_bus: EventBus,
     populated_registry: ToolRegistry,
@@ -449,12 +465,58 @@ async def test_memories_appended_at_tail_not_mid_history(
         MockDecider([Decision(tool_calls=[ToolCall("wait")])]),
         memory=memory_store,
     )
-    snapshot = list(agent.lifecycle_history)  # system turn only
+    block_before = dict(agent.lifecycle_history[1])
+    ack_before = dict(agent.lifecycle_history[2])
 
-    await agent.perceive()
+    await agent.perceive()  # a non-reflection step must not disturb the block
 
-    assert agent.lifecycle_history[: len(snapshot)] == snapshot  # prefix unchanged
+    assert agent.lifecycle_history[1] == block_before  # byte-stable -> KV cache stays warm
+    assert agent.lifecycle_history[2] == ack_before
     assert agent.lifecycle_history[-1]["role"] == "user"
+
+
+async def test_reflection_refreshes_resident_block(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    decider = ReflectAwareDecider(
+        action=Decision(tool_calls=[ToolCall("wait")]),
+        reflection=Decision(
+            tool_calls=[
+                ToolCall(
+                    "remember",
+                    {"content": "I have made a friend in Mara.", "importance": "high"},
+                )
+            ]
+        ),
+    )
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, memory=memory_store)
+    assert "Mara" not in agent.lifecycle_history[1]["content"]  # not yet remembered
+
+    await agent.reflect()
+
+    assert "friend in Mara" in agent.lifecycle_history[1]["content"]  # now resident
+
+
+async def test_resident_block_nudges_to_recall_when_overflowed(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core import constants
+
+    monkeypatch.setattr(constants, "MEMORY_RESIDENT_CAP", 1)
+    memory_store.append_memory("oldest", Importance.LOW, 0)
+    memory_store.append_memory("the lasting one", Importance.HIGH, 1)
+    memory_store.append_memory("newest", Importance.LOW, 2)
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), memory=memory_store)
+
+    block = agent.lifecycle_history[1]["content"]
+    assert "search your memory" in block.lower()  # overflow -> nudge toward recall
 
 
 async def test_reflection_fires_on_nth_breath_and_persists(
