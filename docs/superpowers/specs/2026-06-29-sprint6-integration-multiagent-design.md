@@ -31,6 +31,14 @@ behavior is observed; the run is reproducible from a seed and replayable from a 
   per CLAUDE.md §4/§8 ("arrives with Sprint 6 / the tooling upgrade").
 
 **Deferred (named debt, not silent):**
+- **Offspring-breathing spawn-watcher — Sprint 7, run-forever #1 (added post-review).**
+  `accept_mating` adds an offspring to the world, but `run_simulation` builds the breathing
+  tasks once at start, so newborns never breathe — they are inert ALIVE entities. Reproduction
+  is the spec's counterweight to lethal combat (§3.3/§8); without breathing offspring the
+  integrated world can only shrink → heat-death. Building a dynamic spawn-watcher is net-new
+  functionality and gets its own review-heavy spec→plan→review cycle. Interim: the collapse-watch
+  reasons about the *breathing set* only, so inert offspring cannot mask a collapse or hang an
+  all-paralyzed run.
 - Enforcing `MATING_MIN_ENERGY_CONTRIBUTION` / `MATING_MIN_MATERIALS_CONTRIBUTION` — wait
   for an F4 tuning signal (cheap reproduction must balance the lethal death model).
 - Cross-restart **state persistence** (WorldState save/restore) — Sprint 7. This is a
