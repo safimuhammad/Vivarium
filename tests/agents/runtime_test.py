@@ -19,6 +19,7 @@ from agents.compaction import estimate_tokens
 from agents.decider import Decision, ToolCall
 from agents.runtime import DECIDE_BACKOFF_SECONDS, Agent
 from bus.event_bus import EventBus
+from bus.events import Event, ScopeType
 from memory.models import Importance
 from memory.store import FileMemoryStore
 from observability.event_log import InMemoryEventLog
@@ -339,11 +340,55 @@ async def test_perceive_contains_self_state_and_region_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# 9.3 Status (paralysis only; death is Sprint 6)
+# 9.3 Status (paralysis is recoverable; only death is terminal -- Sprint 6 T1)
 # ---------------------------------------------------------------------------
 
 
-async def test_breath_into_paralysis_emits_event_and_stops_run(world: WorldState) -> None:
+async def test_paralyzed_agent_loop_continues_and_only_drains(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A PARALYZED agent keeps _can_continue True, takes no action, and drains its inbox."""
+    decider = MockDecider([Decision(tool_calls=[ToolCall("look_around")])])
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
+    # Drive ADA to paralysis directly via the world (sole status writer).
+    world.modify_agent_energy(ADA, -(world.get_agent(ADA).current_energy - 1.0))  # ~1 energy
+    assert world.get_agent(ADA).status is AgentStatus.PARALYZED
+    history_len_before = len(agent.lifecycle_history)
+
+    # Put an event in ADA's inbox; a paralyzed breath should drain (not append) it.
+    await event_bus.publish(Event("speak", BORIS, {"message": "hi"}, scope=ScopeType.LOCAL,
+                                  region=world.get_agent(ADA).current_position))
+    await agent.breathe()
+
+    assert agent._can_continue(None) is True            # paralysis is NOT terminal
+    assert len(agent.lifecycle_history) == history_len_before  # no perceive-append
+    assert event_bus.get_events(ADA) == []              # inbox was drained
+    assert agent.breath_count == 1
+
+
+async def test_dead_agent_loop_terminates(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    world.update_agent_status(ADA, AgentStatus.DEAD)
+    assert agent._can_continue(None) is False
+
+
+async def test_revived_agent_acts_again(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """Fed back above the threshold, a previously-paralyzed agent decides and acts."""
+    decider = MockDecider([Decision(tool_calls=[ToolCall("look_around")]),
+                           Decision(tool_calls=[ToolCall("look_around")])])
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
+    world.modify_agent_energy(ADA, -(world.get_agent(ADA).current_energy - 1.0))
+    await agent.breathe()                                # paralyzed: drains only
+    world.modify_agent_energy(ADA, 50.0)                 # fed -> revives ALIVE
+    await agent.breathe()                                # now acts
+    assert any(m["role"] == "assistant" for m in agent.lifecycle_history)
+
+
+async def test_breath_into_paralysis_emits_event_and_loop_survives(world: WorldState) -> None:
     bus, registry, log = _wired(world, with_log=True)
     assert log is not None
     world.modify_agent_energy(ADA, -94.5)  # 100.0 -> 5.5, still ALIVE (> 5.0)
@@ -354,10 +399,10 @@ async def test_breath_into_paralysis_emits_event_and_stops_run(world: WorldState
     await agent.run(max_breaths=10)
 
     assert _live(world, ADA).status is AgentStatus.PARALYZED  # speak's 0.5 cost: 5.5 -> 5.0
-    assert agent.breath_count == 1  # the loop stopped after paralysis
-    assert not agent.alive
+    assert agent.breath_count == 10  # the loop kept breathing through paralysis (did NOT stop)
+    assert agent._can_continue(None) is True  # paralysis is NOT terminal; the loop survives
     paralyzed = [event for event in log.events if event.type == "agent_paralyzed"]
-    assert len(paralyzed) == 1
+    assert len(paralyzed) == 1  # the transition fires exactly once, not every frozen breath
 
 
 async def test_run_does_not_act_for_dead_agent(
@@ -371,22 +416,6 @@ async def test_run_does_not_act_for_dead_agent(
 
     assert agent.breath_count == 0
     assert not agent.alive
-
-
-async def test_paralyzed_agent_breathe_perceives_but_does_not_act(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
-) -> None:
-    world.modify_agent_energy(ADA, -100.0)  # 100.0 -> 0.0 -> PARALYZED
-    assert _live(world, ADA).status is AgentStatus.PARALYZED
-    decider = MockDecider([Decision(tool_calls=[ToolCall("wait")])])
-    agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
-
-    await agent.breathe()
-
-    assert [m["role"] for m in agent.lifecycle_history] == ["system", "user"]  # perceived only
-    assert decider.history == []  # decide was never called
-    assert agent.breath_count == 1
-    assert "paralyzed" in agent.lifecycle_history[-1]["content"]
 
 
 # ---- Sprint 5: memory + reflection integration --------------------------------

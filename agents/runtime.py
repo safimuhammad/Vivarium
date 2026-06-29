@@ -21,10 +21,10 @@ Two invariants matter for the chat backend the decider talks to:
 
 Liveness is read live from the agent's
 :class:`~world.agents.AgentStatus`: the loop acts only while ``ALIVE``. Paralysis
-is the milestone's failure boundary -- on an ``ALIVE -> PARALYZED`` transition the
+is **recoverable**, not terminal -- on an ``ALIVE -> PARALYZED`` transition the
 agent emits a system ``agent_paralyzed`` event (the agent holds the bus; the world
-does not, per design DD4) and stops acting. ``DEAD`` also stops the loop (death
-itself is Sprint 6).
+does not, per design DD4) but the loop keeps breathing (drain-only) so another
+agent can feed and revive it (Sprint 6). Only ``DEAD`` stops the loop.
 """
 
 from __future__ import annotations
@@ -312,8 +312,9 @@ class Agent:
         Compares the status captured before the breath to the freshly re-read
         status. On an ``ALIVE -> PARALYZED`` transition the agent emits a system
         ``agent_paralyzed`` event (the world cannot -- it has no bus, design DD4)
-        and marks the loop to stop acting (paralysis is this milestone's failure
-        boundary). ``DEAD`` also stops the loop (death is Sprint 6).
+        so nearby beings perceive the collapse. Paralysis is **recoverable**, not
+        terminal: the loop keeps breathing (drain-only) so another agent can feed
+        and revive it (Sprint 6). Only ``DEAD`` stops the loop.
 
         Args:
             previous_status: The agent's status at the start of the breath
@@ -329,7 +330,6 @@ class Agent:
             and current_status is AgentStatus.PARALYZED
             and agent_state is not None
         ):
-            self._stopped = True
             await self._announce_paralysis(agent_state)
         elif current_status is AgentStatus.DEAD:
             self._stopped = True
@@ -754,23 +754,26 @@ class Agent:
     async def breathe(self) -> None:
         """Take one breath: perceive, decide, execute, then refresh status.
 
-        A paralysed (or otherwise non-``ALIVE``) agent still perceives but does
-        not decide or execute. :attr:`breath_count` is incremented exactly once,
-        even if a step raises unexpectedly, so the run loop's budget always makes
-        progress.
+        Only an ``ALIVE`` agent runs the full path (perceive -> budget -> decide ->
+        execute -> reflect). A non-``ALIVE`` (paralysed) breath does **nothing but
+        drain its inbox**: no perceive-append, no Ollama, no compaction. This keeps
+        the loop alive so another agent can feed and revive it (Sprint 6) while
+        spending zero inference on a frozen agent and keeping its queue bounded and
+        its history from growing (which would otherwise create illegal consecutive
+        ``user`` turns). :attr:`breath_count` is incremented exactly once, even if a
+        step raises unexpectedly, so the run loop's budget always makes progress.
 
         Returns:
             None.
         """
         previous_status = self._status()
         try:
-            await self.perceive()
-            # Bound the prompt BEFORE deciding -- the never-overflow guarantee. Runs
-            # even for a non-ALIVE agent so a still-perceiving loop cannot grow without
-            # limit.
-            await self._ensure_context_budget(COMPACTION_TRIGGER_TOKENS)
-            self._last_decide_failed = False
             if previous_status is AgentStatus.ALIVE:
+                await self.perceive()
+                # Bound the prompt BEFORE deciding -- the never-overflow guarantee.
+                # Only ALIVE agents grow their history, so only they need the check.
+                await self._ensure_context_budget(COMPACTION_TRIGGER_TOKENS)
+                self._last_decide_failed = False
                 decision = await self.decide()
                 if decision is None:
                     self._last_decide_failed = True
@@ -785,6 +788,11 @@ class Agent:
                         # Reflection already re-prefilled the cache, so compact harder
                         # now (lower target) while it is "free" -- prefer reflection.
                         await self._ensure_context_budget(COMPACTION_TARGET_TOKENS)
+            else:
+                # Paralyzed: keep the loop alive to be revived; drain the inbox so the
+                # queue stays bounded (events are missed while incapacitated). No
+                # Ollama, no append. A paralyzed breath is not a failed decide.
+                self.event_bus.get_events(self.agent_id)
             await self.refresh_status(previous_status)
         finally:
             self.breath_count += 1
@@ -823,8 +831,12 @@ class Agent:
             await asyncio.sleep(delay)
 
     def _can_continue(self, max_breaths: int | None) -> bool:
-        """Return whether the loop may take another breath."""
-        if self._stopped or not self.alive:
+        """Return whether the loop may take another breath.
+
+        Only death (or an explicit stop) is terminal: a PARALYZED agent keeps
+        breathing (drain-only) so it can be fed and revived (Sprint 6).
+        """
+        if self._stopped or self._status() is AgentStatus.DEAD:
             return False
         return max_breaths is None or self.breath_count < max_breaths
 
