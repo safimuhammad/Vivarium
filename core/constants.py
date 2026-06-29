@@ -310,7 +310,17 @@ LOW (so it OVER-counts tokens and errs toward compacting early); JSON tool schem
 tokenize denser than prose.
 """
 
-COMPACTION_RECAP_RESERVE_TOKENS: Final[int] = 512
+COMPACTION_RECAP_RESERVE_TOKENS: Final[int] = 3000
 """Tokens set aside for the running recap when planning eviction, and the hard cap
-the floor-overflow net truncates the recap to. [design]. Bounds the recap so it
-cannot itself crowd the window."""
+the recap is truncated to at authoring. [design]. Bounds the recap so it cannot
+itself crowd the window.
+
+This is the agent's entire long-term self-narrative -- the cumulative memoir that
+survives every compaction -- so it is kept generous: ~3000 tokens is several rich
+paragraphs, not the single paragraph a tighter cap would allow. The dial pulls
+double duty: it is BOTH the authoring cap AND the eviction reserve
+(``verbatim_budget = TARGET - scaffold - this``), so a larger recap trades a little
+recent-verbatim retention for a fuller memoir. Must stay comfortably below
+``COMPACTION_TARGET_TOKENS`` so eviction always leaves room for recent turns; the
+never-overflow floor net is independent of this dial, so it only shifts that balance,
+never the guarantee."""

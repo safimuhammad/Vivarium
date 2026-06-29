@@ -22,7 +22,7 @@ generation counted together). This doc records the evidence.
 ## Synthetic results (`python -m bench.bench_compaction --mode synthetic`)
 
 Dials: `MODEL_CONTEXT=40960`, `PROMPT_BUDGET=34816`, `TRIGGER=24371`, `TARGET=17408`,
-`KEEP_RECENT=8`, `CHARS_PER_TOKEN=3.5`, `RECAP_RESERVE=512`.
+`KEEP_RECENT=8`, `CHARS_PER_TOKEN=3.5`, `RECAP_RESERVE=3000`.
 
 | breaths | thinking/turn | peak prompt (est) | % of window | mean prompt | final turns | compactions | verdict |
 |--:|--:|--:|--:|--:|--:|--:|--|

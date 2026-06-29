@@ -100,3 +100,6 @@ def test_compaction_dials_present_and_guarantee_headroom() -> None:
     )
     assert constants.COMPACTION_KEEP_RECENT_TURNS >= 1
     assert constants.CHARS_PER_TOKEN > 0
+    # The recap reserve must stay comfortably below the eviction target, or there would
+    # be no room left to keep any recent verbatim turns after reserving for the recap.
+    assert 0 < constants.COMPACTION_RECAP_RESERVE_TOKENS < constants.COMPACTION_TARGET_TOKENS
