@@ -186,9 +186,28 @@ def build_simulation(
     return Simulation(world=world, bus=bus, agents=agents, decider=serialized, feed_log=feed)
 
 
-def _count_alive(world: WorldState) -> int:
-    """Return how many agents are currently ``ALIVE`` (able to act)."""
-    return sum(1 for agent in world.get_all_agents() if agent.status is AgentStatus.ALIVE)
+def _count_alive(world: WorldState, agents: Sequence[Agent]) -> int:
+    """Count how many of the *breathing* ``agents`` are currently ``ALIVE``.
+
+    Reasons about the breathing set (the agents with a running loop), not the whole
+    world population, reading each one's status live from ``world``. Offspring added
+    by ``accept_mating`` do not yet breathe (deferred to the spawn-watcher), so an
+    inert ALIVE offspring must not read as a live, progressing agent -- otherwise it
+    would mask a fully-paralyzed world and hang the collapse-watch.
+
+    Args:
+        world: The live world state (source of each agent's current status).
+        agents: The breathing agents to consider.
+
+    Returns:
+        The number of ``agents`` whose live world status is ``ALIVE``.
+    """
+    alive = 0
+    for agent in agents:
+        state = world.get_agent(agent.agent_id)
+        if state is not None and state.status is AgentStatus.ALIVE:
+            alive += 1
+    return alive
 
 
 async def _watch_agents_done(
@@ -210,15 +229,20 @@ async def _watch_agents_done(
     stop.set()
 
 
-async def _collapse_watch(world: WorldState, stop: asyncio.Event, *, interval: float) -> None:
+async def _collapse_watch(
+    world: WorldState, agents: Sequence[Agent], stop: asyncio.Event, *, interval: float
+) -> None:
     """Set ``stop`` after :data:`COLLAPSE_ZERO_ALIVE_TICKS` zero-ALIVE polls in a row.
 
-    Polls the world every ``interval`` seconds. An all-paralyzed (or all-dead) world
-    can never make progress, so rather than spin forever the run is declared collapsed
-    -- an observable outcome -- and shut down cleanly via ``stop``.
+    Polls the *breathing* ``agents`` every ``interval`` seconds. An all-paralyzed (or
+    all-dead) breathing set can never make progress, so rather than spin forever the
+    run is declared collapsed -- an observable outcome -- and shut down cleanly via
+    ``stop``. Inert offspring (not in ``agents``) are deliberately excluded so they
+    cannot mask a collapse.
 
     Args:
-        world: The world to poll for ALIVE agents (read-only).
+        world: The world to read each breathing agent's status from (read-only).
+        agents: The breathing agents whose liveness defines a collapse.
         stop: The shared stop event to set on a sustained collapse.
         interval: Seconds between polls (aligned with the world-tick interval).
 
@@ -228,7 +252,7 @@ async def _collapse_watch(world: WorldState, stop: asyncio.Event, *, interval: f
     consecutive_zero = 0
     while not stop.is_set():
         await asyncio.sleep(interval)
-        if _count_alive(world) == 0:
+        if _count_alive(world, agents) == 0:
             consecutive_zero += 1
             if consecutive_zero >= COLLAPSE_ZERO_ALIVE_TICKS:
                 logger.warning(
@@ -370,7 +394,8 @@ async def run_simulation(
             name="activity-feed",
         ),
         asyncio.create_task(
-            _collapse_watch(world, stop, interval=world_tick_interval), name="collapse-watch"
+            _collapse_watch(world, sim.agents, stop, interval=world_tick_interval),
+            name="collapse-watch",
         ),
         asyncio.create_task(_watch_agents_done(agent_tasks, stop), name="agents-done"),
     ]
