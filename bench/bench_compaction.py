@@ -253,27 +253,41 @@ def run_live_compaction(breaths: int, model: str, budget: int) -> int:
     try:
         agent = _build_agent(root, make_default_decider(model))
         estimates: list[int] = []
+        recap_versions: list[str] = []  # distinct recap texts, in authoring order
 
         async def _drive() -> None:
             for _ in range(breaths):
                 await agent.breathe()
-                est = estimate_tokens(agent.lifecycle_history, agent._action_schemas())
-                estimates.append(est)
+                estimates.append(estimate_tokens(agent.lifecycle_history, agent._action_schemas()))
+                recap = agent._current_recap_text()
+                if recap is not None and (not recap_versions or recap != recap_versions[-1]):
+                    recap_versions.append(recap)
 
         asyncio.run(_drive())
 
         peak = max(estimates)
         window = constants.MODEL_CONTEXT_TOKENS
+        cap = constants.COMPACTION_RECAP_RESERVE_TOKENS
         ok = peak <= budget
         alive = agent._status() == AgentStatus.ALIVE
         recapped = agent._recap_installed
+        final_recap = recap_versions[-1] if recap_versions else ""
+        recap_tokens = estimate_tokens([{"role": "user", "content": final_recap}], [])
         print(f"## Compaction FIRING live -- qwen3 ({model}, {breaths} breaths)")
         print()
         print(f"- shrunk budget: {budget} tok (trigger {int(0.70 * budget)})")
         print(f"- peak estimate: {peak} tok ({100 * peak / window:.0f}% of real window)")
         print(f"- final history turns: {len(agent.lifecycle_history)}")
-        print(f"- recap installed (real qwen3 authored): {recapped}")
+        print(f"- recap rewrites (compactions qwen3 authored): {len(recap_versions)}")
+        print(f"- final recap size: {recap_tokens} tok of the {cap}-tok cap "
+              f"({100 * recap_tokens / cap:.0f}% filled)")
         print(f"- agent ALIVE at end: {alive}")
+        print()
+        print("### The memoir real qwen3 wrote (final cumulative recap)")
+        print()
+        print("```")
+        print(final_recap if final_recap else "(no recap authored)")
+        print("```")
         print()
         passed = ok and recapped and alive
         print(
