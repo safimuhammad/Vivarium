@@ -1,0 +1,134 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vivarium"
+version = "0.1.0"
+description = "An open-ended multi-agent simulation: a never-ending generative art piece where LLM-powered agents exist, compete, trade, fight, and reproduce."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "Proprietary" }
+authors = [{ name = "Safi" }]
+dependencies = [
+    "ollama",
+    "rich",
+    "pyyaml",
+    "faker",
+    "pydantic>=2",
+    # Embedded vector store (PersistentClient + all-MiniLM-L6-v2) for memory RAG.
+    "chromadb",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+    # Used only by the relocated live-Ollama integration prototype so pytest can
+    # import (collect) it; not a runtime dependency.
+    "requests",
+    # Type stubs for mypy (consumed by config/loader in later phases).
+    "types-PyYAML",
+]
+
+[tool.setuptools.packages.find]
+include = ["world*", "bus*", "tools*", "config*", "core*", "agents*", "observability*", "memory*"]
+exclude = ["tests*"]
+
+# ---------------------------------------------------------------------------
+# Ruff (lint + format)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+# Relocated live-Ollama prototypes kept as-is (legacy style); they are collected
+# by pytest under the `integration` marker but not linted/formatted by this pass.
+extend-exclude = ["tests/integration"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade (modern type syntax, etc.)
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "N",    # pep8-naming
+    "RUF",  # ruff-specific rules
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may use assert and don't need the same naming/annotation rigor.
+"tests/**" = ["N802", "N803", "N806"]
+
+# ---------------------------------------------------------------------------
+# Mypy (strict)
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+strict = true
+# Left off intentionally: the narrow Phase-1 gate (`mypy core tests`) does not
+# exercise every per-module override (those are for the full CI run across
+# world/bus/tools/config), which would otherwise emit "unused section" notes.
+warn_unused_configs = false
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+
+# All first-party packages are now held to the strict bar. Only the relocated
+# live-Ollama integration prototypes/smoke remain relaxed (legacy script style,
+# excluded from the default run).
+[[tool.mypy.overrides]]
+module = [
+    "tests.integration.*",
+]
+ignore_errors = true
+follow_imports = "skip"
+
+# Third-party packages without bundled type information.
+[[tool.mypy.overrides]]
+module = [
+    "ollama.*",
+    "faker.*",
+    "yaml.*",
+    "requests.*",
+    "chromadb.*",
+]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+python_files = "*_test.py"
+asyncio_mode = "auto"
+addopts = "-m 'not integration'"
+testpaths = ["tests"]
+markers = [
+    "integration: live-LLM/Ollama or other external-service tests; excluded from the default run.",
+]
+
+# ---------------------------------------------------------------------------
+# Coverage (core packages, >=90%)
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["world", "bus", "tools", "config", "core", "agents", "observability", "memory"]
+omit = ["tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@(abc\\.)?abstractmethod",
+]
