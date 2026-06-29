@@ -60,7 +60,9 @@ Test: `tests/agents/runtime_test.py`.
 Produces the behavior: a PARALYZED agent's loop continues; only DEAD terminates; a
 paralyzed breath only drains the inbox.
 
-- [ ] **Step 1 — failing tests.** Add to `tests/agents/runtime_test.py`:
+- [ ] **Step 1 — failing tests.** First add `BORIS: str = "wanderer_002"` next to the
+  existing `ADA` constant in `tests/agents/runtime_test.py` (it defines `ADA`/`BORIS`, NOT
+  `BEN`), and ensure the file imports `from bus.events import Event, ScopeType`. Then add:
 ```python
 async def test_paralyzed_agent_loop_continues_and_only_drains(
     world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
@@ -74,7 +76,7 @@ async def test_paralyzed_agent_loop_continues_and_only_drains(
     history_len_before = len(agent.lifecycle_history)
 
     # Put an event in ADA's inbox; a paralyzed breath should drain (not append) it.
-    await event_bus.publish(Event("speak", BEN, {"message": "hi"}, scope=ScopeType.LOCAL,
+    await event_bus.publish(Event("speak", BORIS, {"message": "hi"}, scope=ScopeType.LOCAL,
                                   region=world.get_agent(ADA).current_position))
     await agent.breathe()
 
@@ -135,8 +137,17 @@ finally:
     self.breath_count += 1
 ```
   (Note: `self._last_decide_failed = False` moves inside the ALIVE branch; a paralyzed breath is not a failed decide.)
-- [ ] **Step 4 — run, expect PASS.** Re-run the -k selection, then the whole runtime file.
-- [ ] **Step 5 — commit.** `git add -A && git commit -m "fix(sprint6-T1): paralysis is recoverable — loop survives, only drains while frozen"`
+- [ ] **Step 4 — update the two existing tests this fix breaks** (they encode the OLD
+  paralysis-stops-loop behavior): in `tests/agents/runtime_test.py`,
+  `test_breath_into_paralysis_emits_event_and_stops_run` asserts the loop stops on paralysis
+  (it no longer does) — change it to assert the agent is PARALYZED and `_can_continue` is True
+  and the `agent_paralyzed` event still fires; `test_paralyzed_agent_breathe_perceives_but_does_not_act`
+  asserts a paralyzed breath appends a perception (it no longer does) — replace it with the
+  drain-only assertion (covered by the new `test_paralyzed_agent_loop_continues_and_only_drains`,
+  so delete the stale one). Grep the file for any other assertion of "stops on paralysis".
+- [ ] **Step 5 — run, expect PASS.** Re-run the -k selection, then the WHOLE runtime file
+  (the gate is the whole file green).
+- [ ] **Step 6 — commit.** `git add -A && git commit -m "fix(sprint6-T1): paralysis is recoverable — loop survives, only drains while frozen"`
 
 ---
 
@@ -368,7 +379,9 @@ async def test_execute_aborts_remaining_calls_when_paralyzed_midbreath(
   (If `get_events_all_regions` doesn't exist, drop that line — assert only on the tool messages.)
 - [ ] **Step 2 — run, expect FAIL.**
 - [ ] **Step 3 — implement:**
-  - `speak`: after fetching `agent_state`, add `if agent_state.status is not AgentStatus.ALIVE: return "Invalid: You are paralyzed and cannot speak."` (before mutation/publish).
+  - `speak`: add `from world.agents import AgentStatus` to `communication.py` imports, then
+    after fetching `agent_state`, add `if agent_state.status is not AgentStatus.ALIVE: return
+    "Invalid: You are paralyzed and cannot speak."` (before mutation/publish).
   - `_render_perception`: after the energy line, when `agent_state.status is AgentStatus.ALIVE and agent_state.current_energy < ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD`, append a warning line: `f"- ⚠️ Your energy is {agent_state.current_energy}; attacking costs {ATTACK_ENERGY_COST} — you would be paralyzed."`.
   - `execute`: at the top of the loop, if the agent is no longer ALIVE, append a skipped-`tool` message for the remaining call and `continue` (don't invoke):
 ```python
@@ -561,18 +574,31 @@ class SerializingDecider:
 
 ### Task 9 — Runner `scripts/run.py`
 
-**Files:** Create `scripts/run.py`, `scripts/__init__.py` (if needed). Test:
+**Files:** Create `scripts/run.py`, `scripts/__init__.py` (REQUIRED for `from scripts.run import …`),
+`tests/scripts/__init__.py` (REQUIRED for test discovery — it does not exist). Test:
 `tests/scripts/run_test.py`.
-**Interfaces:** `build_simulation(config_path, *, seed, model, memory_root, run_dir, decider=None)
--> Simulation` (a dataclass bundling world, bus, agents, feed_log, decider); `run_simulation(
-sim, *, pace, duration, world_tick_interval, refresh_interval) -> None`; `main(argv=None) -> int`.
+**Interfaces:** `build_simulation(config_path, *, seed, model, memory_root, run_dir, decider=None,
+vector_store_factory=None) -> Simulation`; `run_simulation(sim, *, pace, duration,
+world_tick_interval, refresh_interval) -> None`; `main(argv=None) -> int`.
+
+Define the bundle as a typed dataclass at module top (mypy --strict needs it):
+```python
+@dataclass(slots=True)
+class Simulation:
+    world: WorldState
+    bus: EventBus
+    agents: list[Agent]
+    decider: Decider
+    feed_log: FeedEventLog
+```
 
 - [ ] **Step 1 — failing tests** (mocked decider; no live model; tiny duration):
 ```python
 async def test_runner_smoke_runs_and_shuts_down(tmp_path) -> None:
     sim = build_simulation("config/world.yaml", seed=7, model="mock",
                            memory_root=tmp_path/"mem", run_dir=tmp_path/"runs",
-                           decider=MockDecider([Decision(tool_calls=[ToolCall("look_around")])]*200))
+                           decider=MockDecider([Decision(tool_calls=[ToolCall("look_around")])]*200),
+                           vector_store_factory=lambda aid: FakeVectorStore(FakeEmbeddingFunction()))
     await run_simulation(sim, pace=0.0, duration=0.3, world_tick_interval=0.05,
                          refresh_interval=0.05)
     assert any(a.breath_count > 0 for a in sim.agents)        # agents breathed
@@ -583,7 +609,8 @@ async def test_runner_smoke_runs_and_shuts_down(tmp_path) -> None:
 async def test_runner_stops_when_all_dead(tmp_path) -> None:
     sim = build_simulation("config/world.yaml", seed=7, model="mock",
                            memory_root=tmp_path/"mem", run_dir=tmp_path/"runs",
-                           decider=MockDecider([Decision()]*50))
+                           decider=MockDecider([Decision()]*50),
+                           vector_store_factory=lambda aid: FakeVectorStore(FakeEmbeddingFunction()))
     for a in sim.agents:                                      # pre-kill everyone
         sim.world.kill_agent(a.agent_id)
     await run_simulation(sim, pace=0.0, duration=5.0, world_tick_interval=0.05,
@@ -592,12 +619,28 @@ async def test_runner_stops_when_all_dead(tmp_path) -> None:
 - [ ] **Step 2 — run, expect FAIL.**
 - [ ] **Step 3 — implement** `scripts/run.py`:
   - `build_simulation`: `world = load_config(config_path, seed=seed)`; `feed = FeedEventLog()`;
-    `jsonl = JsonlEventLog(run_dir / f"run_{seed}.jsonl")`; `bus = EventBus(world,
+    `jsonl = JsonlEventLog(Path(run_dir) / f"run_{seed}.jsonl")`; `bus = EventBus(world,
     event_log=CompositeEventLog(jsonl, feed))`; `registry = ToolRegistry(world, bus);
-    register_builtins(registry)`; `inner = decider or make_default_decider(model)`;
-    `decider = inner if isinstance(inner, SerializingDecider) else SerializingDecider(inner)`;
-    build one `Agent` per `world.get_all_agents()` with `FileMemoryStore(id, memory_root, ...)`;
-    return the `Simulation` bundle. (Agents subscribe to the bus in `Agent.__init__`.)
+    register_builtins(registry)`. Decider (use a NEW variable to satisfy mypy --strict — do
+    not reassign the `decider` param to a different type):
+    `inner: Decider = decider if decider is not None else make_default_decider(model)`;
+    `serialized = inner if isinstance(inner, SerializingDecider) else SerializingDecider(inner)`.
+    Memory per agent — `FileMemoryStore` appends `/agent_id` to `root` internally, so pass
+    `root=memory_root` (NOT `memory_root/agent_id`):
+```python
+def _real_vs(agent_id: str) -> VectorStore:  # default factory
+    return ChromaVectorStore(agent_id, default_embedding_function(),
+                             path=Path(memory_root) / agent_id / "chroma")
+vs_factory = vector_store_factory or _real_vs
+agents = []
+for state in world.get_all_agents():
+    memory = FileMemoryStore(state.id, Path(memory_root), persona=state.persona,
+                             vector_store=vs_factory(state.id), clock=world.now)
+    agents.append(Agent(state.id, world, bus, registry, serialized, pace=0.0, memory=memory))
+```
+    Return `Simulation(world, bus, agents, serialized, feed)`. (Agents subscribe to the bus in
+    `Agent.__init__` — the runner must NOT re-subscribe.) Tests pass
+    `vector_store_factory=lambda aid: FakeVectorStore(FakeEmbeddingFunction())` to stay fast.
   - `run_simulation`: create tasks: `run_agent(a)` per agent (awaits `a.run(pace=pace)`, then
     `bus.unsubscribe(a.agent_id)` in a `finally`); `run_world_tick(world, bus,
     interval=world_tick_interval)`; `run_activity_feed(feed, world, console, refresh_interval,
@@ -615,24 +658,23 @@ async def test_runner_stops_when_all_dead(tmp_path) -> None:
 
 ---
 
-### Task 10 — `pyproject.toml` tooling migration
+### Task 10 — `pyproject.toml` tooling touch-ups
 
-**Files:** Create `pyproject.toml`; keep `requirements.txt` (or note it as generated). Update
-`CLAUDE.md §8` commands if needed.
-**Interfaces:** none (tooling). Declares `rich` as a runtime dep.
+**Files:** UPDATE the existing `pyproject.toml` (it already exists with `requires-python`,
+`rich`, ruff/mypy config, `[tool.pytest.ini_options]` incl. `asyncio_mode = "auto"`,
+`testpaths`, and the `integration` marker — do NOT recreate it). Create `.pre-commit-config.yaml`.
+**Interfaces:** none (tooling).
 
-- [ ] **Step 1 — write `pyproject.toml`** with: `[project]` (name, version, `requires-python =
-  ">=3.13"`, runtime deps incl. `ollama`, `chromadb`, `pyyaml`, `pydantic`, `rich`),
-  `[project.optional-dependencies] dev` (pytest, pytest-asyncio, pytest-cov, mypy, ruff,
-  pre-commit), `[tool.pytest.ini_options]` (`python_files = "*_test.py"`, `asyncio_mode =
-  "auto"`, `markers = ["integration: live-model tests"]`, `addopts = "-m 'not integration'"`),
-  `[tool.ruff]` (line-length 100, lint rules matching current), `[tool.mypy]` (`strict = true`,
-  the packages), `[tool.coverage.run]`.
-- [ ] **Step 2 — verify the gates run via pyproject:** `python -m pytest -q` (fast subset via
-  addopts), `mypy --strict agents core world bus tools observability config scripts`,
-  `ruff check .`. Expected: all green.
-- [ ] **Step 3 — add a `.pre-commit-config.yaml`** running ruff + mypy + fast pytest.
-- [ ] **Step 4 — commit.** `git commit -am "build(sprint6-T10): pyproject.toml tooling migration + rich dep + pre-commit"`
+- [ ] **Step 1 — read the current `pyproject.toml`** to see what's already configured.
+- [ ] **Step 2 — additive edits only:** add `pre-commit` to the dev optional-deps; add
+  `"scripts"` to `[tool.coverage.run] source` (and to the mypy packages list if it enumerates
+  them) so the new runner is covered/type-checked. Confirm `rich` is present as a runtime dep
+  (add if missing). Do not change existing rules.
+- [ ] **Step 3 — verify gates run via pyproject:** `python -m pytest -q` (fast subset),
+  `mypy --strict agents core world bus tools observability config scripts`, `ruff check .`.
+  Expected: all green.
+- [ ] **Step 4 — add `.pre-commit-config.yaml`** running ruff + mypy + fast pytest.
+- [ ] **Step 5 — commit.** `git commit -am "build(sprint6-T10): pyproject touch-ups (pre-commit, scripts coverage)"`
 
 ---
 
