@@ -340,6 +340,39 @@ async def test_perceive_contains_self_state_and_region_snapshot(
 
 
 # ---------------------------------------------------------------------------
+# Sprint 6 T5: revisit items (low-energy attack warning; abort-on-paralyze)
+# ---------------------------------------------------------------------------
+
+
+def test_low_energy_attack_warning_in_perception(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """Below ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD, perception warns of paralysis."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 8.0))  # 8 energy
+    text = agent._render_perception([])
+    assert "⚠" in text and "paralyzed" in text.lower()
+
+
+async def test_execute_aborts_remaining_calls_when_paralyzed_midbreath(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """If a tool call paralyzes the agent, later calls in the same breath are skipped."""
+    # speak costs 0.5; drive ADA to 5.5 so the first speak -> 5.0 => PARALYZED.
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 5.5))
+    await agent.execute(
+        [ToolCall("speak", {"message": "one"}), ToolCall("speak", {"message": "two"})]
+    )
+    # The second call must produce a skipped tool message (not a real action).
+    tool_msgs = [m for m in agent.lifecycle_history if m["role"] == "tool"]
+    assert any(
+        "could not act" in m["content"].lower() or "paralyzed" in m["content"].lower()
+        for m in tool_msgs
+    )
+
+
+# ---------------------------------------------------------------------------
 # 9.3 Status (paralysis is recoverable; only death is terminal -- Sprint 6 T1)
 # ---------------------------------------------------------------------------
 

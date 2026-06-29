@@ -46,12 +46,14 @@ from agents.tool_schemas import schemas_for
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
+    ATTACK_ENERGY_COST,
     COMPACTION_HARD_SAFETY_TOKENS,
     COMPACTION_KEEP_RECENT_TURNS,
     COMPACTION_RECAP_RESERVE_TOKENS,
     COMPACTION_TARGET_TOKENS,
     COMPACTION_TRIGGER_TOKENS,
     DECIDE_BACKOFF_SECONDS,
+    PARALYSIS_ENERGY_THRESHOLD,
     PROMPT_BUDGET_TOKENS,
     RECALL_K,
     REFLECT_EVERY_N_BREATHS,
@@ -276,6 +278,12 @@ class Agent:
         caught, logged, and fed back as a ``tool`` message so the loop never
         crashes and the assistant turn never dangles without its results.
 
+        Abort-on-paralyse (Sprint 6 T5): if an earlier call in the same breath
+        leaves the agent no longer ``ALIVE`` (e.g. a ``speak`` that drops it to the
+        paralysis threshold), the remaining calls are **not** invoked -- each still
+        gets a paired ``tool`` turn (so the assistant turn never dangles) reporting
+        that the agent could not act.
+
         Args:
             tool_calls: The tool calls from the decision (possibly empty).
 
@@ -284,7 +292,9 @@ class Agent:
         """
         for index, tool_call in enumerate(tool_calls):
             call_id = self._call_id(tool_call, index)
-            if tool_call.name == RECALL_TOOL_NAME:
+            if self._status() is not AgentStatus.ALIVE:
+                result = f"You could not act ({tool_call.name!r}): you are no longer able to."
+            elif tool_call.name == RECALL_TOOL_NAME:
                 result = self._recall(tool_call.params)
             else:
                 params = self._coerce_params(tool_call.params)
@@ -940,6 +950,17 @@ class Agent:
 
         lines: list[str] = ["You take stock of yourself and your surroundings.", "", "Within you:"]
         lines.append(f"- Energy: {agent_state.current_energy}")
+        # Low-energy attack warning (Sprint 6 T5): if an attack would drop the agent
+        # to/below the paralysis threshold, surface it so the model can decide
+        # knowingly. Only meaningful while the agent is still able to act.
+        if (
+            agent_state.status is AgentStatus.ALIVE
+            and agent_state.current_energy < ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD
+        ):
+            lines.append(
+                f"- ⚠️ Your energy is {agent_state.current_energy}; attacking costs "
+                f"{ATTACK_ENERGY_COST} — you would be paralyzed."
+            )
         lines.append(f"- Materials: {agent_state.current_materials}")
         lines.append(f"- Where you stand: {agent_state.current_position}")
         lines.append(f"- Condition: {agent_state.status.value}")
