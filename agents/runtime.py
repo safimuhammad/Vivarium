@@ -533,7 +533,12 @@ class Agent:
         over_estimate = estimate_tokens(self.lifecycle_history, tools) > target
         over_actual = self._last_prompt_tokens > COMPACTION_HARD_SAFETY_TOKENS
         if over_estimate or over_actual:
-            await self.compact()
+            try:
+                await self.compact()
+            except Exception:
+                # compact() is best-effort; the floor net below still bounds the prompt
+                # mechanically, so a failure here must never skip enforcement.
+                logger.exception("compact() failed for agent %r; enforcing budget", self.agent_id)
         self._enforce_prompt_budget(tools)
 
     async def compact(self) -> None:
@@ -556,8 +561,10 @@ class Agent:
         prefix = self._prefix_len()
         verbatim = self.lifecycle_history[prefix:]
         cut = self._eviction_cut(verbatim)
-        if cut <= 0:
-            return  # nothing safe to evict (scaffolding alone is the weight)
+        if cut <= 0 or cut >= len(verbatim):
+            # Nothing safe to evict, or the cut would drop the most-recent perception
+            # too (would leave the agent acting blind). The floor net handles the rest.
+            return
         prior_recap = self._current_recap_text()
         evicted = verbatim[:cut]
         del self.lifecycle_history[prefix : prefix + cut]  # unconditional trim
@@ -695,6 +702,26 @@ class Agent:
                 and self.lifecycle_history[prefix].get("role") != "user"
             ):
                 del self.lifecycle_history[prefix]
+        # Final safeguard (the absolute never-overflow guarantee): after dropping whole
+        # groups, a lone surviving turn -- or the scaffolding itself -- can still exceed
+        # the budget. A huge perception is NOT bounded by the generation reserve, and an
+        # over-large identity/memory-block is not bounded at all. Shrink turns newest
+        # first (the system turn, which carries identity, is shrunk LAST and only as an
+        # absolute last resort), returning the instant the whole prompt fits.
+        for index in range(len(self.lifecycle_history) - 1, -1, -1):
+            if estimate_tokens(self.lifecycle_history, tools) <= PROMPT_BUDGET_TOKENS:
+                return
+            self._shrink_to_fit(index, tools)
+        # Only the tool schemas are unshrinkable. If they alone exceed the budget the
+        # prompt cannot be made to fit -- a gross misconfiguration we log loudly rather
+        # than silently overflow.
+        if estimate_tokens(self.lifecycle_history, tools) > PROMPT_BUDGET_TOKENS:
+            logger.critical(
+                "Agent %r: tool schemas alone exceed PROMPT_BUDGET_TOKENS=%d; the prompt "
+                "cannot be made to fit. Reduce the number or size of action schemas.",
+                self.agent_id,
+                PROMPT_BUDGET_TOKENS,
+            )
 
     def _shrink_to_fit(self, index: int, tools: list[dict[str, Any]]) -> bool:
         """Halve the ``content`` of turn ``index`` until the whole prompt fits the budget.

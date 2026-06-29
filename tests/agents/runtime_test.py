@@ -9,6 +9,7 @@ seeded ``world`` fixture, and ``pace=0`` so no test sleeps for real (see
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -1028,6 +1029,88 @@ async def test_live_turns_excludes_recap_scaffolding(
     assert agent._recap_installed
     live = agent._live_turns()
     assert all("UNIQUE_RECAP_MARKER" not in str(m.get("content", "")) for m in live)
+
+
+def test_floor_net_shrinks_a_single_oversized_turn(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lone surviving turn bigger than the budget (e.g. a huge perception, which the
+    generation reserve does NOT bound) must still be shrunk to fit (review finding C1)."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider())  # NULL memory
+    agent.lifecycle_history.append({"role": "user", "content": "x" * 200_000})
+    tools = agent._action_schemas()
+    fixed = estimate_tokens([agent.lifecycle_history[0]], tools)
+    monkeypatch.setattr(runtime_module, "PROMPT_BUDGET_TOKENS", fixed + 500)
+    assert estimate_tokens(agent.lifecycle_history, tools) > runtime_module.PROMPT_BUDGET_TOKENS
+
+    agent._enforce_prompt_budget(tools)
+
+    assert estimate_tokens(agent.lifecycle_history, tools) <= runtime_module.PROMPT_BUDGET_TOKENS
+
+
+def test_floor_net_logs_critical_when_tools_alone_exceed_budget(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The irreducible floor: tool schemas are unshrinkable, so if they alone exceed the
+    budget no truncation can make the prompt fit. The loop empties every turn, logs
+    CRITICAL (observable, not silent), and returns without crashing -- the honest floor."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider())
+    agent.lifecycle_history.append({"role": "user", "content": "a perception " * 50})
+    tools = agent._action_schemas()
+    monkeypatch.setattr(runtime_module, "PROMPT_BUDGET_TOKENS", 1)  # below even the schemas
+
+    with caplog.at_level(logging.CRITICAL):
+        agent._enforce_prompt_budget(tools)
+
+    assert any("tool schemas alone exceed" in r.message for r in caplog.records)
+    assert all(m["content"] == "" for m in agent.lifecycle_history)  # every turn emptied trying
+
+
+def test_floor_net_shrinks_scaffolding_when_it_alone_exceeds_budget(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even when the system prompt + tools alone exceed the budget (a misconfiguration),
+    the prompt is STILL forced to fit -- the system turn is shrunk as the absolute last
+    resort rather than the loop returning silently over budget (review finding)."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider())  # NULL memory
+    tools = agent._action_schemas()
+    # A budget below the system turn but above the (tiny, unshrinkable) tool schemas, so a
+    # fit is reachable only by shrinking the system turn itself.
+    tools_floor = estimate_tokens([{"role": "system", "content": ""}], tools)
+    monkeypatch.setattr(runtime_module, "PROMPT_BUDGET_TOKENS", tools_floor + 50)
+    assert estimate_tokens(agent.lifecycle_history, tools) > runtime_module.PROMPT_BUDGET_TOKENS
+
+    agent._enforce_prompt_budget(tools)
+
+    assert estimate_tokens(agent.lifecycle_history, tools) <= runtime_module.PROMPT_BUDGET_TOKENS
+
+
+def test_floor_net_drops_oldest_breath_groups_as_last_resort(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no recap/block to shrink, the oldest whole breath-groups are dropped, always
+    leaving the tail starting on a user turn (the last-resort never-overflow strategy)."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider())  # NULL: no block
+    for i in range(4):
+        perception = f"perception {i}: " + "road " * 300
+        agent.lifecycle_history.append({"role": "user", "content": perception})
+        agent.lifecycle_history.append({"role": "assistant", "content": f"act {i}"})
+    tools = agent._action_schemas()
+    # A budget that fits the system prefix plus only the final group -> older groups out.
+    final_group = [agent.lifecycle_history[0], *agent.lifecycle_history[-2:]]
+    budget = estimate_tokens(final_group, tools) + 50
+    monkeypatch.setattr(runtime_module, "PROMPT_BUDGET_TOKENS", budget)
+    assert estimate_tokens(agent.lifecycle_history, tools) > budget
+
+    agent._enforce_prompt_budget(tools)
+
+    assert estimate_tokens(agent.lifecycle_history, tools) <= budget
+    assert agent.lifecycle_history[1]["role"] == "user"  # tail begins on a user turn
+    assert _no_double_user(agent.lifecycle_history)
 
 
 def test_floor_overflow_net_truncates_block_to_fit(

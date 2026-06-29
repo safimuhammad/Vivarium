@@ -17,6 +17,7 @@ import pytest
 
 from agents.decider import (
     DECIDE_NUM_CTX,
+    DECIDE_NUM_PREDICT,
     Decision,
     OllamaDecider,
     ToolCall,
@@ -171,8 +172,9 @@ async def test_ollama_decider_forwards_request_and_parses_injected_client() -> N
     assert captured["tools"] == [{"name": "move"}]
     assert captured["stream"] is False
     # The context window is requested explicitly (Ollama defaults to a cramped 4096
-    # regardless of the model's true capacity).
-    assert captured["options"] == {"num_ctx": DECIDE_NUM_CTX}
+    # regardless of the model's true capacity), and generation is capped so
+    # ``prompt + generation`` cannot exceed the window (Sprint 5.5 never-overflow).
+    assert captured["options"] == {"num_ctx": DECIDE_NUM_CTX, "num_predict": DECIDE_NUM_PREDICT}
 
 
 async def test_ollama_decider_forwards_custom_num_ctx() -> None:
@@ -186,7 +188,26 @@ async def test_ollama_decider_forwards_custom_num_ctx() -> None:
 
     decider = OllamaDecider("test-model", num_ctx=8192, client=_FakeClient())
     await decider.decide([], [])
-    assert captured["options"] == {"num_ctx": 8192}
+    assert captured["options"] == {"num_ctx": 8192, "num_predict": DECIDE_NUM_PREDICT}
+
+
+async def test_ollama_decider_caps_generation_with_num_predict() -> None:
+    """Generation is bounded so ``prompt + generation`` stays within the window.
+
+    Capping the prompt alone (compaction) is only half the never-overflow math; the
+    model could still generate past the window. ``num_predict`` is the output-side
+    cap, defaulting to :data:`DECIDE_NUM_PREDICT` and overridable per instance.
+    """
+    captured: dict[str, Any] = {}
+
+    class _FakeClient:
+        async def chat(self, **kwargs: Any) -> SimpleNamespace:
+            captured.update(kwargs)
+            return _fake_response(content="ok", thinking=None, tool_calls=[])
+
+    decider = OllamaDecider("test-model", num_predict=256, client=_FakeClient())
+    await decider.decide([], [])
+    assert captured["options"]["num_predict"] == 256
 
 
 async def test_ollama_decider_times_out_on_a_hung_client() -> None:

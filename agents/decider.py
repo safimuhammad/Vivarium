@@ -23,6 +23,8 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
+from core.constants import GENERATION_RESERVE_TOKENS
+
 #: Per-decision wall-clock budget for the live Ollama call (seconds). A local
 #: model must load (cold start) and then generate with the tool schemas attached,
 #: so this is generous; its job is to bound a *wedged* model, not a slow-but-
@@ -40,6 +42,16 @@ DECIDE_TIMEOUT_SECONDS: float = 120.0
 #: This buys runway, not forever: unbounded history is ultimately Sprint 5's job
 #: (episodic memory + identity summary instead of the full transcript in-context).
 DECIDE_NUM_CTX: int = 65536
+
+#: Hard cap on tokens GENERATED per decision (Ollama ``num_predict``). The window
+#: counts prompt + generation together, so to keep ``prompt + generation <= window``
+#: the generation side must be bounded -- not just the prompt (Sprint 5.5 compaction
+#: bounds the prompt to ``window - GENERATION_RESERVE_TOKENS``; this guarantees the
+#: model never spends more than that reserve, closing the other half of the window
+#: math). Generous enough for qwen3's thinking + a tool call; a runaway generation is
+#: cut off rather than allowed to overflow the context and silently evict the system
+#: prompt. Mirrors ``core.constants.GENERATION_RESERVE_TOKENS``.
+DECIDE_NUM_PREDICT: int = GENERATION_RESERVE_TOKENS
 
 
 @dataclass(slots=True)
@@ -183,6 +195,7 @@ class OllamaDecider:
         *,
         timeout: float = DECIDE_TIMEOUT_SECONDS,
         num_ctx: int = DECIDE_NUM_CTX,
+        num_predict: int = DECIDE_NUM_PREDICT,
         client: _ChatClient | None = None,
     ) -> None:
         """Initialise the decider.
@@ -193,6 +206,9 @@ class OllamaDecider:
                 :meth:`decide` raises ``TimeoutError``.
             num_ctx: Context window (tokens) to request, overriding Ollama's
                 cramped 4096 default.
+            num_predict: Hard cap on tokens generated per decision, so
+                ``prompt + generation`` stays within the window (the other half of
+                the never-overflow guarantee; see :data:`DECIDE_NUM_PREDICT`).
             client: Chat client to use. Defaults to ``None``, which lazily
                 constructs an ``ollama.AsyncClient`` on first call; tests inject a
                 double to avoid the network.
@@ -200,6 +216,7 @@ class OllamaDecider:
         self.model: str = model
         self.timeout: float = timeout
         self.num_ctx: int = num_ctx
+        self.num_predict: int = num_predict
         self._client: _ChatClient | None = client
 
     async def decide(
@@ -232,7 +249,7 @@ class OllamaDecider:
                 messages=messages,
                 tools=tools,
                 stream=False,
-                options={"num_ctx": self.num_ctx},
+                options={"num_ctx": self.num_ctx, "num_predict": self.num_predict},
             ),
             self.timeout,
         )
