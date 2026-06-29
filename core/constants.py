@@ -204,6 +204,27 @@ top-k. Benchmark (2026-06-28) showed equal-weight scoring buried such a memory; 
 reserved slot fixes it robustly, independent of how many distractors exist.
 """
 
+MEMORY_RESIDENT_CAP: Final[int] = 400
+"""Max memories kept in the always-resident memory block. [design: Sprint 5.1].
+
+Under the cap the WHOLE memory is in context (nothing can be missed); over it, all
+HIGH-importance memories are always kept and the remaining slots filled by salience,
+with the overflow reachable on demand via the ``recall`` tool. ~1 memory per line.
+"""
+
+RECALL_K: Final[int] = 5
+"""Memories returned by an agent-initiated ``recall`` search (overflow access). [design: 5.1]."""
+
+RECALL_W_RELEVANCE: Final[float] = 1.0
+"""Recall weights relevance dominantly: a ``recall`` is a search, so the query match
+leads, unlike the resident block's equal-weight full-salience scoring. [design: 5.1]."""
+
+RECALL_W_RECENCY: Final[float] = 0.15
+"""Light recency tiebreak between similarly-relevant recalled memories. [design: 5.1]."""
+
+RECALL_W_IMPORTANCE: Final[float] = 0.15
+"""Light importance tiebreak between similarly-relevant recalled memories. [design: 5.1]."""
+
 RECENCY_DECAY: Final[float] = 0.97
 """Per-breath exponential decay base for the recency term (subjective time). [design].
 

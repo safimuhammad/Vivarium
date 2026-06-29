@@ -47,6 +47,18 @@ class MemoryStore(Protocol):
         """Return the top-``k`` memories for ``query`` by salience score."""
         ...
 
+    def resident_block(self, query: str, current_breath: int) -> list[MemoryItem]:
+        """Return the memories to keep resident in context (whole memory up to the cap)."""
+        ...
+
+    def recall(self, query: str, current_breath: int, k: int) -> list[MemoryItem]:
+        """Search ALL memories (incl. overflow) and return the top-``k`` by relevance."""
+        ...
+
+    def memory_count(self) -> int:
+        """Return the number of stored memories (lets the runtime detect overflow)."""
+        ...
+
 
 class FileMemoryStore:
     """File-backed memory: ``seed.md`` + ``identity.md`` + ``memory.jsonl`` + a vector store.
@@ -165,6 +177,80 @@ class FileMemoryStore:
             importance_weights=constants.IMPORTANCE_WEIGHTS,
         )
 
+    def resident_block(self, query: str, current_breath: int) -> list[MemoryItem]:
+        """Return the memories to keep resident in the always-present memory block.
+
+        At or below :data:`~core.constants.MEMORY_RESIDENT_CAP` the WHOLE memory is
+        returned in chronological order -- nothing can be missed. Above the cap, every
+        HIGH-importance memory is kept (reserved slots) and the remaining slots are
+        filled by full salience score (recency x importance x relevance to ``query``,
+        the perception at the last reflection); the result is returned chronologically
+        so the block reads as a timeline. The HIGH-importance guarantee holds whenever
+        the HIGH count does not itself exceed the cap.
+
+        Args:
+            query: The current perception, used to rank the over-cap fill by relevance.
+            current_breath: The agent's ``breath_count`` for the recency term.
+
+        Returns:
+            The resident memories, chronologically ordered, of length
+            ``min(memory_count, MEMORY_RESIDENT_CAP)``.
+        """
+        cap = constants.MEMORY_RESIDENT_CAP
+        if len(self._items) <= cap:
+            return list(self._items)
+        high_count = sum(1 for item in self._items if item.importance is Importance.HIGH)
+        distances = self._vector_store.distances(query, [item.id for item in self._items])
+        selected = select_memories(
+            self._items,
+            distances,
+            current_breath,
+            cap,
+            reserved=min(high_count, cap),
+            w_recency=constants.W_RECENCY,
+            w_importance=constants.W_IMPORTANCE,
+            w_relevance=constants.W_RELEVANCE,
+            recency_decay=constants.RECENCY_DECAY,
+            importance_weights=constants.IMPORTANCE_WEIGHTS,
+        )
+        return sorted(selected, key=lambda item: item.created_breath)
+
+    def recall(self, query: str, current_breath: int, k: int) -> list[MemoryItem]:
+        """Search ALL memories (including overflow beyond the resident cap) by relevance.
+
+        Unlike :meth:`resident_block`, this is a query-driven search: it weights
+        relevance dominantly (:data:`~core.constants.RECALL_W_RELEVANCE`) with light
+        recency/importance tiebreaks, and reserves no salience slots, so the agent can
+        pull back an old, low-importance memory that the resident block dropped.
+
+        Args:
+            query: What the agent is searching for.
+            current_breath: The agent's ``breath_count`` for the recency tiebreak.
+            k: Maximum number of memories to return.
+
+        Returns:
+            Up to ``k`` memories, most relevant first; empty if nothing is stored.
+        """
+        if not self._items:
+            return []
+        distances = self._vector_store.distances(query, [item.id for item in self._items])
+        return select_memories(
+            self._items,
+            distances,
+            current_breath,
+            k,
+            reserved=0,
+            w_recency=constants.RECALL_W_RECENCY,
+            w_importance=constants.RECALL_W_IMPORTANCE,
+            w_relevance=constants.RECALL_W_RELEVANCE,
+            recency_decay=constants.RECENCY_DECAY,
+            importance_weights=constants.IMPORTANCE_WEIGHTS,
+        )
+
+    def memory_count(self) -> int:
+        """Return the number of stored memories (the runtime uses this to detect overflow)."""
+        return len(self._items)
+
     def _load_items(self) -> list[MemoryItem]:
         """Load all complete memories from ``memory.jsonl``; discard a corrupt final line."""
         if not self._jsonl_path.exists():
@@ -203,6 +289,18 @@ class NullMemoryStore:
     def retrieve(self, query: str, current_breath: int, k: int) -> list[MemoryItem]:
         """Return no memories."""
         return []
+
+    def resident_block(self, query: str, current_breath: int) -> list[MemoryItem]:
+        """Return an empty resident block (the agent carries no memory)."""
+        return []
+
+    def recall(self, query: str, current_breath: int, k: int) -> list[MemoryItem]:
+        """Return no memories."""
+        return []
+
+    def memory_count(self) -> int:
+        """Return zero (nothing is stored)."""
+        return 0
 
 
 NULL_MEMORY: MemoryStore = NullMemoryStore()

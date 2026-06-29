@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from core import constants
 from core.exceptions import MemoryStoreError
 from memory.embedding import FakeEmbeddingFunction
 from memory.models import Importance
@@ -159,3 +160,87 @@ def test_null_store_is_inert() -> None:
     assert null.retrieve("q", 0, 5) == []
     item = null.append_memory("dropped", Importance.HIGH, 0)
     assert item.content == "dropped"  # returns a transient value, persists nothing
+
+
+# --- Sprint 5.1: resident block + recall + count ---------------------------
+
+
+def test_memory_count_tracks_appends(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    assert store.memory_count() == 0
+    store.append_memory("a", Importance.LOW, 1)
+    store.append_memory("b", Importance.LOW, 2)
+    assert store.memory_count() == 2
+
+
+def test_resident_block_under_cap_returns_all_in_order(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.append_memory("first", Importance.LOW, 1)
+    store.append_memory("second", Importance.MEDIUM, 2)
+    store.append_memory("third", Importance.HIGH, 3)
+    block = store.resident_block("anything", current_breath=4)
+    assert [m.content for m in block] == ["first", "second", "third"]  # whole memory, chronological
+
+
+def test_resident_block_empty_store_returns_empty(tmp_path: Path) -> None:
+    assert _store(tmp_path).resident_block("q", current_breath=0) == []
+
+
+def test_resident_block_over_cap_keeps_all_high_and_caps_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(constants, "MEMORY_RESIDENT_CAP", 3)
+    store = _store(tmp_path)
+    store.append_memory("grudge against Kai", Importance.HIGH, 1)
+    store.append_memory("bond with Mara", Importance.HIGH, 2)
+    for i in range(5):  # five LOW notes competing for the single remaining slot
+        store.append_memory(f"trivial note {i}", Importance.LOW, 3 + i)
+    block = store.resident_block("anything", current_breath=20)
+    contents = [m.content for m in block]
+    assert len(block) == 3  # capped
+    assert "grudge against Kai" in contents  # HIGH always resident regardless of N
+    assert "bond with Mara" in contents
+
+
+def test_resident_block_over_cap_is_chronological(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(constants, "MEMORY_RESIDENT_CAP", 2)
+    store = _store(tmp_path)
+    store.append_memory("early high", Importance.HIGH, 1)
+    store.append_memory("late high", Importance.HIGH, 9)
+    store.append_memory("noise", Importance.LOW, 5)
+    block = store.resident_block("anything", current_breath=20)
+    breaths = [m.created_breath for m in block]
+    assert breaths == sorted(breaths)  # the block reads as a timeline
+
+
+def test_recall_on_empty_store_returns_empty(tmp_path: Path) -> None:
+    assert _store(tmp_path).recall("q", current_breath=0, k=5) == []
+
+
+def test_recall_searches_overflow_and_ranks_by_relevance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(constants, "MEMORY_RESIDENT_CAP", 1)
+    store = _store(tmp_path)
+    overflow = "the hidden spring lies east of the dead oak"
+    store.append_memory(overflow, Importance.LOW, 1)  # old + low -> not resident
+    store.append_memory("a recent unrelated thought", Importance.LOW, 2)
+    found = store.recall(overflow, current_breath=10, k=5)
+    # Exact-query match -> distance 0 -> relevance-dominant scoring ranks it first,
+    # and recall reaches it even though it is beyond the resident cap.
+    assert found[0].content == overflow
+
+
+def test_recall_blank_query_returns_without_error(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.append_memory("something", Importance.LOW, 1)
+    assert isinstance(store.recall("", current_breath=2, k=5), list)
+
+
+def test_null_store_resident_recall_count_are_inert() -> None:
+    null = NullMemoryStore()
+    assert null.resident_block("q", 0) == []
+    assert null.recall("q", 0, 5) == []
+    assert null.memory_count() == 0
