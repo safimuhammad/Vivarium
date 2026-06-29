@@ -872,6 +872,34 @@ async def test_compaction_fires_over_trigger_and_installs_recap(
     assert "Lately, life happened." in recap["content"]
 
 
+async def test_recap_stays_bounded_across_many_compactions(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verbose recap model must not grow the recap turn without bound."""
+    _shrink_budget(monkeypatch)
+    # A decider whose recap text is huge every time -> tests the authoring-time bound.
+    verbose = "and then more happened, " * 500
+
+    class VerboseRecapDecider(CompactionScriptDecider):
+        async def decide(
+            self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        ) -> Decision:
+            if not tools:
+                return Decision(text=verbose)
+            return await super().decide(messages, tools)
+
+    agent = Agent(ADA, world, event_bus, populated_registry, VerboseRecapDecider(1500))
+
+    for _ in range(20):
+        await agent.breathe()
+
+    assert agent._recap_installed
+    recap_tokens = estimate_tokens([agent.lifecycle_history[agent._recap_index()]], [])
+    # Bounded by the reserve (+ small framing/marker overhead), not the verbose text.
+    assert recap_tokens <= runtime_module.COMPACTION_RECAP_RESERVE_TOKENS + 50
+
+
 async def test_prompt_never_exceeds_budget_over_many_breaths(
     world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,

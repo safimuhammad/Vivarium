@@ -622,8 +622,12 @@ class Agent:
             decision = await self.decider.decide(messages, [])  # no tools -> narrative
         except Exception:
             logger.exception("Compaction decider failed for agent %r", self.agent_id)
-            return prior_recap or ""
-        return decision.text.strip() or (prior_recap or "")
+            recap = prior_recap or ""
+        else:
+            recap = decision.text.strip() or (prior_recap or "")
+        # Bound the cumulative recap at authoring so a verbose model cannot grow it
+        # across compactions; keeps the eviction budget math honest and overflow-safe.
+        return truncate_to_tokens(recap, COMPACTION_RECAP_RESERVE_TOKENS)
 
     def _set_recap(self, text: str) -> None:
         """Install or replace the running-recap pair at ``[recap_index]`` / ``+1``.
