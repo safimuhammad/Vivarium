@@ -249,10 +249,7 @@ async def transfer_resource(
         # credit no-ops (energy destroyed) or strand materials on the dead; reject
         # before any mutation. PARALYZED receivers are allowed -- that is the revival
         # path -- so only DEAD is blocked.
-        return (
-            f"Invalid: {receiver_agent.name} is dead; you cannot transfer "
-            f"resources to a corpse."
-        )
+        return f"Invalid: {receiver_agent.name} is dead; you cannot transfer resources to a corpse."
 
     if sender_agent.current_position != receiver_agent.current_position:
         return (
@@ -275,8 +272,7 @@ async def transfer_resource(
         if was_paralyzed and receiver_agent.status is AgentStatus.ALIVE:
             recover_payload = {
                 "message": (
-                    f"{sender_agent.name} revived {receiver_agent.name} "
-                    f"(ID:{receiver_agent.id})."
+                    f"{sender_agent.name} revived {receiver_agent.name} (ID:{receiver_agent.id})."
                 )
             }
             await event_bus.publish(

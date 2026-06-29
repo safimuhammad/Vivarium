@@ -173,8 +173,7 @@ class ToolRegistry:
             pname: p
             for pname, p in signature.parameters.items()
             if pname not in _INJECTED_PARAMS
-            and p.kind
-            in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
         }
         filtered = {
             key: value

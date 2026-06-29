@@ -70,9 +70,17 @@ from world.world import WorldState
 
 logger = get_logger(__name__)
 
-# DECIDE_BACKOFF_SECONDS is re-exported from core.constants (its one tuned home);
-# imported here because the breathing loop applies it and tests reference it.
-__all__ = ["DECIDE_BACKOFF_SECONDS", "Agent"]
+# These names are re-exported from core.constants (their one tuned home); they are
+# imported here because the breathing loop applies them and the compaction tests
+# monkeypatch them on this module (so they must be reachable as runtime attributes,
+# which under mypy strict's implicit_reexport=False requires listing them in __all__).
+__all__ = [
+    "COMPACTION_HARD_SAFETY_TOKENS",
+    "COMPACTION_RECAP_RESERVE_TOKENS",
+    "DECIDE_BACKOFF_SECONDS",
+    "PROMPT_BUDGET_TOKENS",
+    "Agent",
+]
 
 #: The agent's own (assistant-voice) acknowledgement of its resident memory block.
 #: It sits at ``lifecycle_history[2]`` so the block (a ``user`` turn at ``[1]``) is
@@ -429,9 +437,7 @@ class Agent:
         (perception/decision/tool) always begin at this index.
         """
         return (
-            1
-            + (2 if self._resident_block_installed else 0)
-            + (2 if self._recap_installed else 0)
+            1 + (2 if self._resident_block_installed else 0) + (2 if self._recap_installed else 0)
         )
 
     def _recap_index(self) -> int:

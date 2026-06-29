@@ -543,23 +543,27 @@ def test_regenerate_resources_floors_at_zero(world: WorldState) -> None:
 def test_kill_agent_sets_dead(world: WorldState) -> None:
     """Killing an existing agent sets DEAD and returns True; a missing one False."""
     assert world.kill_agent("wanderer_001") is True
-    assert world.get_agent("wanderer_001").status is AgentStatus.DEAD
+    dead = world.get_agent("wanderer_001")
+    assert dead is not None and dead.status is AgentStatus.DEAD
     assert world.kill_agent("nope") is False
 
 
 def test_kill_initiator_abandons_escrow_and_removes_proposal(world: WorldState) -> None:
     """Killing a proposal initiator drops the proposal and abandons its escrow."""
     world.add_proposal("wanderer_001", "wanderer_002", {ResourceTypes.ENERGY: 50.0})
-    before = world.get_agent("wanderer_002").current_energy
+    target = world.get_agent("wanderer_002")
+    assert target is not None
+    before = target.current_energy
     world.kill_agent("wanderer_001")
     assert world.get_agent_proposals("wanderer_001", "wanderer_002") == {}
     assert "wanderer_002" not in world.get_proposed_targets("wanderer_001")
-    assert world.get_agent("wanderer_002").current_energy == before  # nobody refunded
+    assert target.current_energy == before  # nobody refunded
 
 
 def test_kill_target_refunds_live_initiator(world: WorldState) -> None:
     """Killing a proposal target drops the proposal and refunds the live initiator."""
     initiator = world.get_agent("wanderer_001")
+    assert initiator is not None
     world.add_proposal(
         "wanderer_001",
         "wanderer_002",

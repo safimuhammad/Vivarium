@@ -202,6 +202,4 @@ async def test_attack_nonlethal_no_flip_no_agent_paralyzed(
 ) -> None:
     """A non-lethal hit that leaves the target ALIVE emits no ``agent_paralyzed``."""
     await attack(world, event_bus, "wanderer_001", target="wanderer_002")  # 100 -> 70, ALIVE
-    assert not any(
-        e.type == "agent_paralyzed" for e in event_bus.get_events("wanderer_002")
-    )
+    assert not any(e.type == "agent_paralyzed" for e in event_bus.get_events("wanderer_002"))

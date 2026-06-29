@@ -111,9 +111,7 @@ def test_parse_ollama_response_plain_text_has_no_tool_calls() -> None:
 
 
 def test_parse_ollama_response_reads_prompt_eval_count() -> None:
-    resp = _fake_response(
-        content="ok", thinking=None, tool_calls=[], prompt_eval_count=1234
-    )
+    resp = _fake_response(content="ok", thinking=None, tool_calls=[], prompt_eval_count=1234)
     decision = parse_ollama_response(resp)
     assert decision.prompt_tokens == 1234  # the real prompt size, for the safety net
 

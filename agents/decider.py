@@ -219,9 +219,7 @@ class OllamaDecider:
         self.num_predict: int = num_predict
         self._client: _ChatClient | None = client
 
-    async def decide(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> Decision:
+    async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
         """Query the model once (non-streaming, time-bounded) and parse the result.
 
         Args:
@@ -289,9 +287,7 @@ class SerializingDecider:
         self._inner: Decider = inner
         self._lock: asyncio.Lock = lock or asyncio.Lock()
 
-    async def decide(
-        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
-    ) -> Decision:
+    async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
         """Acquire the lock, delegate to the inner decider, then release.
 
         Args:

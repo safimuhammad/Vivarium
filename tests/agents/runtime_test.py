@@ -390,18 +390,25 @@ async def test_paralyzed_agent_loop_continues_and_only_drains(
     decider = MockDecider([Decision(tool_calls=[ToolCall("look_around")])])
     agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
     # Drive ADA to paralysis directly via the world (sole status writer).
-    world.modify_agent_energy(ADA, -(world.get_agent(ADA).current_energy - 1.0))  # ~1 energy
-    assert world.get_agent(ADA).status is AgentStatus.PARALYZED
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 1.0))  # ~1 energy
+    assert _live(world, ADA).status is AgentStatus.PARALYZED
     history_len_before = len(agent.lifecycle_history)
 
     # Put an event in ADA's inbox; a paralyzed breath should drain (not append) it.
-    await event_bus.publish(Event("speak", BORIS, {"message": "hi"}, scope=ScopeType.LOCAL,
-                                  region=world.get_agent(ADA).current_position))
+    await event_bus.publish(
+        Event(
+            "speak",
+            BORIS,
+            {"message": "hi"},
+            scope=ScopeType.LOCAL,
+            region=_live(world, ADA).current_position,
+        )
+    )
     await agent.breathe()
 
-    assert agent._can_continue(None) is True            # paralysis is NOT terminal
+    assert agent._can_continue(None) is True  # paralysis is NOT terminal
     assert len(agent.lifecycle_history) == history_len_before  # no perceive-append
-    assert event_bus.get_events(ADA) == []              # inbox was drained
+    assert event_bus.get_events(ADA) == []  # inbox was drained
     assert agent.breath_count == 1
 
 
@@ -417,13 +424,17 @@ async def test_revived_agent_acts_again(
     world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
 ) -> None:
     """Fed back above the threshold, a previously-paralyzed agent decides and acts."""
-    decider = MockDecider([Decision(tool_calls=[ToolCall("look_around")]),
-                           Decision(tool_calls=[ToolCall("look_around")])])
+    decider = MockDecider(
+        [
+            Decision(tool_calls=[ToolCall("look_around")]),
+            Decision(tool_calls=[ToolCall("look_around")]),
+        ]
+    )
     agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
-    world.modify_agent_energy(ADA, -(world.get_agent(ADA).current_energy - 1.0))
-    await agent.breathe()                                # paralyzed: drains only
-    world.modify_agent_energy(ADA, 50.0)                 # fed -> revives ALIVE
-    await agent.breathe()                                # now acts
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 1.0))
+    await agent.breathe()  # paralyzed: drains only
+    world.modify_agent_energy(ADA, 50.0)  # fed -> revives ALIVE
+    await agent.breathe()  # now acts
     assert any(m["role"] == "assistant" for m in agent.lifecycle_history)
 
 
@@ -1023,7 +1034,9 @@ def _shrink_budget(monkeypatch: pytest.MonkeyPatch, **overrides: int) -> None:
 
 
 async def test_compaction_fires_over_trigger_and_installs_recap(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _shrink_budget(monkeypatch)
@@ -1040,7 +1053,9 @@ async def test_compaction_fires_over_trigger_and_installs_recap(
 
 
 async def test_recap_stays_bounded_across_many_compactions(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A verbose recap model must not grow the recap turn without bound."""
@@ -1068,7 +1083,9 @@ async def test_recap_stays_bounded_across_many_compactions(
 
 
 async def test_prompt_never_exceeds_budget_over_many_breaths(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The headline guarantee: the assembled prompt never exceeds PROMPT_BUDGET."""
@@ -1086,7 +1103,9 @@ async def test_prompt_never_exceeds_budget_over_many_breaths(
 
 
 async def test_compaction_keeps_tail_on_user_turn(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _shrink_budget(monkeypatch)
@@ -1103,7 +1122,9 @@ async def test_compaction_keeps_tail_on_user_turn(
 
 
 async def test_compaction_passes_no_tools_to_the_recap_call(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _shrink_budget(monkeypatch)
@@ -1117,7 +1138,9 @@ async def test_compaction_passes_no_tools_to_the_recap_call(
 
 
 async def test_compaction_is_mechanical_when_decider_fails(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """C2: even if the recap LLM call fails, the oldest turns are still evicted."""
@@ -1142,7 +1165,9 @@ async def test_compaction_is_mechanical_when_decider_fails(
 
 
 async def test_hard_safety_net_forces_compaction(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Even when the estimate is under target, a too-large ACTUAL last prompt compacts."""
@@ -1162,8 +1187,11 @@ async def test_hard_safety_net_forces_compaction(
 
 
 async def test_recap_pair_sits_after_memory_block(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
-    memory_store: FileMemoryStore, monkeypatch: pytest.MonkeyPatch,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _shrink_budget(monkeypatch)
     memory_store.append_memory("I carry a vow.", Importance.HIGH, breath=0)
@@ -1182,7 +1210,9 @@ async def test_recap_pair_sits_after_memory_block(
 
 
 async def test_live_turns_excludes_recap_scaffolding(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _shrink_budget(monkeypatch)
@@ -1198,7 +1228,9 @@ async def test_live_turns_excludes_recap_scaffolding(
 
 
 def test_floor_net_shrinks_a_single_oversized_turn(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A lone surviving turn bigger than the budget (e.g. a huge perception, which the
@@ -1216,8 +1248,11 @@ def test_floor_net_shrinks_a_single_oversized_turn(
 
 
 def test_floor_net_logs_critical_when_tools_alone_exceed_budget(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The irreducible floor: tool schemas are unshrinkable, so if they alone exceed the
     budget no truncation can make the prompt fit. The loop empties every turn, logs
@@ -1235,7 +1270,9 @@ def test_floor_net_logs_critical_when_tools_alone_exceed_budget(
 
 
 def test_floor_net_shrinks_scaffolding_when_it_alone_exceeds_budget(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Even when the system prompt + tools alone exceed the budget (a misconfiguration),
@@ -1255,7 +1292,9 @@ def test_floor_net_shrinks_scaffolding_when_it_alone_exceeds_budget(
 
 
 def test_floor_net_drops_oldest_breath_groups_as_last_resort(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """With no recap/block to shrink, the oldest whole breath-groups are dropped, always
@@ -1280,8 +1319,11 @@ def test_floor_net_drops_oldest_breath_groups_as_last_resort(
 
 
 def test_floor_overflow_net_truncates_block_to_fit(
-    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
-    memory_store: FileMemoryStore, monkeypatch: pytest.MonkeyPatch,
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When system+block alone exceed budget, the in-context block is truncated to fit."""
     for i in range(120):  # a large resident block

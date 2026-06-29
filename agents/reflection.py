@@ -84,8 +84,7 @@ def render_recap(history: list[dict[str, Any]], turns: int) -> str:
     body = [message for message in history if message.get("role") != "system"]
     recent = body[-turns:] if turns > 0 else []
     lines = [
-        f"[{message.get('role')}] {str(message.get('content') or '').strip()}"
-        for message in recent
+        f"[{message.get('role')}] {str(message.get('content') or '').strip()}" for message in recent
     ]
     return "\n".join(lines) if lines else "Nothing of note has happened yet."
 
@@ -105,8 +104,7 @@ def build_reflection_messages(identity: str, recap: str) -> list[dict[str, Any]]
         {
             "role": "user",
             "content": (
-                f"Here is what has recently happened in your life:\n{recap}\n\n"
-                f"{_REFLECTIVE_PROMPT}"
+                f"Here is what has recently happened in your life:\n{recap}\n\n{_REFLECTIVE_PROMPT}"
             ),
         },
     ]
