@@ -27,9 +27,10 @@ import argparse
 import asyncio
 import contextlib
 import signal
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
@@ -46,7 +47,7 @@ from observability.activity_feed import render_world_table, run_activity_feed
 from observability.event_log import CompositeEventLog, FeedEventLog, JsonlEventLog
 from tools.builtin import register_builtins
 from tools.registry import ToolRegistry
-from world.agents import AgentStatus
+from world.agents import AgentState, AgentStatus
 from world.tick import run_world_tick
 from world.world import WorldState
 
@@ -86,6 +87,11 @@ class Simulation:
         agents: The breathing agents (already subscribed to ``bus`` at construction).
         decider: The shared, serialized decider (one agent thinks at a time).
         feed_log: The bounded ring-buffer sink the live activity feed polls.
+        spawn_agent: Factory that builds a breathing :class:`~agents.runtime.Agent` for an
+            :class:`~world.agents.AgentState` (same registry / decider / per-agent memory
+            wiring as the initial agents). Used by the spawn-watcher to start offspring
+            breathing mid-run; the built agent is already bus-subscribed (via its
+            constructor) but not yet running.
     """
 
     world: WorldState
@@ -93,6 +99,7 @@ class Simulation:
     agents: list[Agent]
     decider: Decider
     feed_log: FeedEventLog
+    spawn_agent: Callable[[AgentState], Agent]
 
 
 def build_simulation(
@@ -166,8 +173,14 @@ def build_simulation(
 
     make_vector_store = vector_store_factory or _real_vector_store
 
-    agents: list[Agent] = []
-    for state in world.get_all_agents():
+    def spawn_agent(state: AgentState) -> Agent:
+        """Build one breathing agent (the single place that knows the wiring).
+
+        Used both for the initial roster and by the runner's spawn-watcher for
+        offspring born mid-run, so an offspring is wired identically to a founder.
+        ``Agent.__init__`` subscribes it to the bus; ``pace=0.0`` is overridden by
+        ``agent.run(pace=...)`` at launch.
+        """
         memory = FileMemoryStore(
             state.id,
             Path(memory_root),
@@ -175,7 +188,9 @@ def build_simulation(
             vector_store=make_vector_store(state.id),
             clock=world.now,
         )
-        agents.append(Agent(state.id, world, bus, registry, serialized, pace=0.0, memory=memory))
+        return Agent(state.id, world, bus, registry, serialized, pace=0.0, memory=memory)
+
+    agents: list[Agent] = [spawn_agent(state) for state in world.get_all_agents()]
 
     logger.info(
         "Built simulation: %d agents, %d regions (seed=%s).",
@@ -183,7 +198,14 @@ def build_simulation(
         len(world.get_all_regions()),
         seed,
     )
-    return Simulation(world=world, bus=bus, agents=agents, decider=serialized, feed_log=feed)
+    return Simulation(
+        world=world,
+        bus=bus,
+        agents=agents,
+        decider=serialized,
+        feed_log=feed,
+        spawn_agent=spawn_agent,
+    )
 
 
 def _count_alive(world: WorldState, agents: Sequence[Agent]) -> int:
@@ -210,59 +232,152 @@ def _count_alive(world: WorldState, agents: Sequence[Agent]) -> int:
     return alive
 
 
-async def _watch_agents_done(
-    agent_tasks: Sequence[asyncio.Task[None]], stop: asyncio.Event
-) -> None:
-    """Set ``stop`` once every agent's run task has finished (a fully-DEAD world).
+def _count_present(world: WorldState) -> int:
+    """Count agents in the WORLD that are not ``DEAD`` (ALIVE or PARALYZED).
 
-    Each agent's ``run()`` exits naturally on DEAD, so when all of them complete the
-    world has ended; signalling ``stop`` funnels that into the single shutdown path.
+    "Present" means at least one being can still act or be revived. This is scanned over
+    the whole world -- not just the breathing set -- on purpose: an offspring added by
+    ``accept_mating`` is ALIVE in the world a poll *before* the spawn-watcher adopts it
+    into the breathing set. Counting only the breathing set would let the run end at the
+    instant of a birth where both parents died in the same mating transaction (a real
+    path: commit all energy, mate, die in the trade -- the newborn would be lost). Since
+    the spawn-watcher makes every live world agent breathe imminently, a non-DEAD world
+    agent legitimately means the world has not ended. (The *collapse* check below stays on
+    the breathing set, so an all-paralyzed breathing set still collapses; a transiently
+    un-adopted offspring is counted there within a poll or two.)
 
     Args:
-        agent_tasks: The per-agent run tasks to await.
-        stop: The shared stop event to set when all tasks are done.
+        world: The world to scan (read-only).
 
     Returns:
-        None.
+        The number of world agents whose status is not ``DEAD``.
     """
-    await asyncio.gather(*agent_tasks, return_exceptions=True)
-    stop.set()
+    return sum(1 for agent in world.get_all_agents() if agent.status is not AgentStatus.DEAD)
 
 
-async def _collapse_watch(
+async def _liveness_watch(
     world: WorldState, agents: Sequence[Agent], stop: asyncio.Event, *, interval: float
 ) -> None:
-    """Set ``stop`` after :data:`COLLAPSE_ZERO_ALIVE_TICKS` zero-ALIVE polls in a row.
+    """Poll the breathing set and ``stop`` the run when the world has truly ended.
 
-    Polls the *breathing* ``agents`` every ``interval`` seconds. An all-paralyzed (or
-    all-dead) breathing set can never make progress, so rather than spin forever the
-    run is declared collapsed -- an observable outcome -- and shut down cleanly via
-    ``stop``. Inert offspring (not in ``agents``) are deliberately excluded so they
-    cannot mask a collapse.
+    Replaces the old fixed-list ``gather`` (which could not see offspring) with a poll
+    over the *dynamic* breathing ``agents`` list, so a living lineage keeps the run
+    going while a dead or wedged world still terminates. Two stop conditions:
+
+    * **World ended** -- :func:`_count_present` is 0: every agent in the *world* is DEAD
+      (scanned world-wide, not just the breathing set, so a just-born offspring not yet
+      adopted by the spawn-watcher still counts). Stop immediately. (Polling adds up to
+      one ``interval`` of latency vs the old event-driven path -- intentional, so the
+      dynamic set is handled uniformly.)
+    * **Collapse** -- :func:`_count_alive` is 0 for :data:`COLLAPSE_ZERO_ALIVE_TICKS`
+      consecutive polls while some agents are still PARALYZED (present but unable to act
+      and with no one left to feed them). An observable outcome, not a hang.
 
     Args:
         world: The world to read each breathing agent's status from (read-only).
-        agents: The breathing agents whose liveness defines a collapse.
-        stop: The shared stop event to set on a sustained collapse.
+        agents: The breathing agents (grows as offspring are spawned).
+        stop: The shared stop event funnelling into the single shutdown path.
         interval: Seconds between polls (aligned with the world-tick interval).
 
     Returns:
         None.
     """
-    consecutive_zero = 0
+    consecutive_zero_alive = 0
     while not stop.is_set():
         await asyncio.sleep(interval)
+        if _count_present(world) == 0:
+            logger.info("Every agent in the world is dead; the world has ended. Stopping.")
+            stop.set()
+            return
         if _count_alive(world, agents) == 0:
-            consecutive_zero += 1
-            if consecutive_zero >= COLLAPSE_ZERO_ALIVE_TICKS:
+            consecutive_zero_alive += 1
+            if consecutive_zero_alive >= COLLAPSE_ZERO_ALIVE_TICKS:
                 logger.warning(
                     "Ecology collapsed: no ALIVE agents for %d consecutive ticks; stopping.",
-                    consecutive_zero,
+                    consecutive_zero_alive,
                 )
                 stop.set()
                 return
         else:
-            consecutive_zero = 0
+            consecutive_zero_alive = 0
+
+
+def _spawn_new_agents(
+    world: WorldState,
+    sim: Simulation,
+    run_agent: Callable[[Agent], Coroutine[Any, Any, None]],
+    agent_tasks: list[asyncio.Task[None]],
+    known: set[str],
+) -> None:
+    """Detect agents in the world not yet breathing and launch their loops (one pass).
+
+    For each world agent whose id is not in ``known`` (an offspring born via
+    ``accept_mating``), builds it through :attr:`Simulation.spawn_agent` (which
+    subscribes it to the bus), appends it to the breathing set ``sim.agents`` and to the
+    shared ``agent_tasks`` list, and starts its ``run`` task. The mutations contain no
+    ``await``, so they are atomic with respect to other cooperatively-scheduled readers
+    (the liveness watch, the shutdown loop).
+
+    Args:
+        world: The live world state to scan for new agents.
+        sim: The simulation bundle (its ``agents`` list and ``spawn_agent`` factory).
+        run_agent: The runner's per-agent driver (unsubscribes the inbox on exit).
+        agent_tasks: The shared, growing list of agent run tasks (mutated in place).
+        known: The set of agent ids already breathing (mutated in place).
+
+    Returns:
+        None.
+    """
+    for state in world.get_all_agents():
+        if state.id in known:
+            continue
+        agent = sim.spawn_agent(state)  # Agent.__init__ subscribes it to the bus
+        sim.agents.append(agent)
+        agent_tasks.append(asyncio.create_task(run_agent(agent), name=f"agent:{state.id}"))
+        known.add(state.id)
+        logger.info("New agent %r was born and began breathing.", state.id)
+
+
+async def _spawn_watch(
+    world: WorldState,
+    sim: Simulation,
+    run_agent: Callable[[Agent], Coroutine[Any, Any, None]],
+    agent_tasks: list[asyncio.Task[None]],
+    known: set[str],
+    stop: asyncio.Event,
+    *,
+    interval: float,
+) -> None:
+    """Poll for newborn agents every ``interval`` and start them breathing.
+
+    The single place reproduction becomes real: offspring added to the world by
+    ``accept_mating`` would otherwise never breathe. Re-checks ``stop`` after the sleep
+    so it never spawns a task during teardown (the spawned tasks are folded into the
+    shutdown via the shared ``agent_tasks``/``sim.agents``).
+
+    Args:
+        world: The live world state to scan.
+        sim: The simulation bundle.
+        run_agent: The runner's per-agent driver.
+        agent_tasks: The shared agent-task list (new tasks are appended here).
+        known: Ids already breathing (seeded with the initial roster).
+        stop: The shared stop event; the loop exits and never spawns once it is set.
+        interval: Seconds between detection passes.
+
+    Returns:
+        None.
+    """
+    while not stop.is_set():
+        await asyncio.sleep(interval)
+        if stop.is_set():  # do not spawn during teardown
+            return
+        try:
+            _spawn_new_agents(world, sim, run_agent, agent_tasks, known)
+        except Exception:
+            # Isolate a bad detection pass (e.g. building one offspring's memory store
+            # raises) so a transient error can't permanently stop ALL future
+            # reproduction -- the same crash-resistance the world-tick/feed drivers use.
+            logger.exception("spawn-watch pass failed; skipping it to keep adopting newborns")
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> Callable[[], None]:
@@ -375,6 +490,9 @@ async def run_simulation(
         )
     )
 
+    # The breathing set + its task list GROW as offspring are spawned; both are shared
+    # with the spawn-watch (which appends) and the shutdown (which cancels/unsubscribes).
+    known: set[str] = {agent.agent_id for agent in sim.agents}
     agent_tasks: list[asyncio.Task[None]] = [
         asyncio.create_task(run_agent(agent), name=f"agent:{agent.agent_id}")
         for agent in sim.agents
@@ -394,10 +512,15 @@ async def run_simulation(
             name="activity-feed",
         ),
         asyncio.create_task(
-            _collapse_watch(world, sim.agents, stop, interval=world_tick_interval),
-            name="collapse-watch",
+            _liveness_watch(world, sim.agents, stop, interval=world_tick_interval),
+            name="liveness-watch",
         ),
-        asyncio.create_task(_watch_agents_done(agent_tasks, stop), name="agents-done"),
+        asyncio.create_task(
+            _spawn_watch(
+                world, sim, run_agent, agent_tasks, known, stop, interval=world_tick_interval
+            ),
+            name="spawn-watch",
+        ),
     ]
 
     remove_signal_handlers = _install_signal_handlers(stop)
@@ -407,6 +530,12 @@ async def run_simulation(
     except TimeoutError:
         logger.info("Run duration (%.1fs) elapsed; shutting down.", duration)
     finally:
+        # `stop.set()` (no await before the cancels) is what actually prevents the
+        # spawn-watch from creating new tasks during teardown -- its `stop.is_set()`
+        # guard is the real mechanism, not cancellation order -- so cancelling all tasks
+        # together here is safe. `agent_tasks`/`sim.agents` already include any offspring
+        # the spawn-watch appended. The per-agent `run_agent` finally also unsubscribes,
+        # so the loop below is an idempotent belt-and-suspenders.
         stop.set()
         for task in (*agent_tasks, *background_tasks):
             task.cancel()

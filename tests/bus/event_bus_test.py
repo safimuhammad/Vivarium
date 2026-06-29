@@ -173,6 +173,20 @@ def test_subscribe_unknown_agent_returns_false_and_creates_no_inbox(
     assert "ghost" not in event_bus.agent_queues
 
 
+async def test_subscribe_is_idempotent_keeps_queued_events(bus_world: WorldState) -> None:
+    """Re-subscribing an already-subscribed agent is a no-op that keeps its inbox.
+
+    A stray double-subscribe must not reset the queue and silently drop pending events.
+    """
+    event_bus = EventBus(bus_world)
+    assert event_bus.subscribe("a1") is True
+    event = Event(type="x", source="a1", payload={}, scope=ScopeType.GLOBAL)
+    await event_bus.publish(event)
+
+    assert event_bus.subscribe("a1") is True  # idempotent: does not reset the inbox
+    assert event_bus.get_events("a1") == [event]  # the queued event survived
+
+
 async def test_publish_before_subscribe_is_not_received_but_after_is(
     bus_world: WorldState,
 ) -> None:

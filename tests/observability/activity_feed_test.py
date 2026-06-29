@@ -36,3 +36,24 @@ def test_render_world_table_lists_agents_and_regions(world: WorldState) -> None:
 
     text = "".join(seg.text for seg in Console().render(table))
     assert "wanderer_001" in text
+
+
+def test_render_world_table_shows_population_summary(world: WorldState) -> None:
+    """The agents table title surfaces total + per-status counts (throughput diagnosis)."""
+    from rich.console import Console
+
+    from world.agents import AgentStatus
+
+    # world fixture has 2 ALIVE agents; paralyze one so all three buckets are non-trivial.
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    world.modify_agent_energy("wanderer_002", -(boris.current_energy - 1.0))  # -> PARALYZED
+    assert boris.status is AgentStatus.PARALYZED
+
+    table = render_world_table(world)
+    text = "".join(seg.text for seg in Console(width=200).render(table))
+
+    assert "2 total" in text
+    assert "1 alive" in text
+    assert "1 fallen" in text
+    assert "0 dead" in text
