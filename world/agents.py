@@ -43,6 +43,12 @@ class AgentState:
         current_energy: Current energy reserve (floored at 0.0 by the world).
         current_materials: Current materials reserve (floored at 0.0).
         status: Lifecycle status; see :class:`AgentStatus`.
+        last_mated_at: World-clock time (seconds) of this agent's last *completed*
+            mating, or ``None`` if it has never mated. Drives the mating cooldown.
+            Written only via :meth:`~world.world.WorldState.record_mating`.
+        offspring_count: Number of offspring this agent has parented. Bounded by
+            the design-doc per-agent cap (``MATING_MAX_OFFSPRING``). Written only
+            via :meth:`~world.world.WorldState.record_mating`.
     """
 
     # identity
@@ -56,3 +62,6 @@ class AgentState:
     current_materials: float
     # lifecycle
     status: AgentStatus
+    # mating bookkeeping (defaulted so existing construction sites are unchanged)
+    last_mated_at: float | None = None
+    offspring_count: int = 0
