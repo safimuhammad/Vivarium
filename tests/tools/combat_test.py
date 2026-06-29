@@ -132,3 +132,42 @@ async def test_attack_with_insufficient_energy_is_invalid(
     assert target is not None and target.current_energy == 100.0  # undamaged
     assert result.startswith("Invalid:")
     assert event_bus.get_events("wanderer_002") == []
+
+
+async def test_attack_kills_paralyzed_target(world: WorldState, event_bus: EventBus) -> None:
+    """A finishing blow on an already-PARALYZED target kills it + emits ``agent_died`` GLOBAL."""
+    world.modify_agent_energy("wanderer_002", -96.0)  # 100 -> 4.0 => PARALYZED
+    paralyzed = world.get_agent("wanderer_002")
+    assert paralyzed is not None and paralyzed.status is AgentStatus.PARALYZED
+
+    await attack(world, event_bus, "wanderer_001", target="wanderer_002")
+
+    slain = world.get_agent("wanderer_002")
+    assert slain is not None and slain.status is AgentStatus.DEAD
+    died = [e for e in event_bus.get_events("wanderer_001") if e.type == "agent_died"]
+    assert died and died[0].scope is ScopeType.GLOBAL and died[0].source == "wanderer_002"
+
+
+async def test_attack_overshoot_kills(world: WorldState, event_bus: EventBus) -> None:
+    """A hit that overshoots below the kill threshold kills outright (20 - 30 < 0)."""
+    world.modify_agent_energy("wanderer_002", -80.0)  # 100 -> 20.0; 20 - 30 < 0 => DEAD
+    await attack(world, event_bus, "wanderer_001", target="wanderer_002")
+    slain = world.get_agent("wanderer_002")
+    assert slain is not None and slain.status is AgentStatus.DEAD
+
+
+async def test_attack_exact_zero_paralyzes_not_kills(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A hit landing exactly at 0.0 paralyses but does NOT kill (30 - 30 == 0.0, not < 0)."""
+    world.modify_agent_energy("wanderer_002", -70.0)  # 100 -> 30.0; 30 - 30 == 0.0, NOT < 0
+    await attack(world, event_bus, "wanderer_001", target="wanderer_002")
+    t = world.get_agent("wanderer_002")
+    assert t is not None and t.status is AgentStatus.PARALYZED and t.current_energy == 0.0
+
+
+async def test_attack_nonlethal_damages_only(world: WorldState, event_bus: EventBus) -> None:
+    """A non-lethal hit on a healthy target only damages it (100 -> 70, still ALIVE)."""
+    await attack(world, event_bus, "wanderer_001", target="wanderer_002")  # 100 -> 70
+    t = world.get_agent("wanderer_002")
+    assert t is not None and t.status is AgentStatus.ALIVE
