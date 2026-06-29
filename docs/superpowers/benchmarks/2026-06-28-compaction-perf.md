@@ -113,6 +113,26 @@ the estimate stayed under the shrunk budget on every breath, the transcript pinn
 20 turns, and the agent never died. The mandate — *compaction firing on the real model
 without ever overflowing* — holds end-to-end.
 
+## Recap richness is set by the PROMPT, not the cap
+
+Raising `COMPACTION_RECAP_RESERVE_TOKENS` 512 → 3000 did **not** make the recap richer:
+a forced-compaction live run showed real qwen3 filling only ~4% of the new cap (132
+tok, one terse paragraph), because the authoring prompt told it to "keep it brief". The
+cap is a *ceiling*; the prompt decides how much the model *chooses* to write. Rewriting
+the instruction (`agents/compaction.py::_RECAP_INSTRUCTION`) to ask for a fuller,
+multi-paragraph memoir — places, others met and how they treated the agent, gains and
+losses, choices, lessons — produced a **5× richer recap** on the identical model/config:
+
+| prompt | recap fill | shape | never-overflow |
+|--|--:|--|--|
+| "keep it brief" | 132 tok (4% of cap) | 1 paragraph | PASS (peak 10,305 ≤ 14,000) |
+| fuller memoir | 680 tok (23% of cap) | 4 paragraphs | PASS (peak 10,383 ≤ 14,000) |
+
+The richer memoir stays in-world (DD9; no meta language) and concrete — it narrated the
+agent's birth in the meadow, another agent (Ada) taking half its materials, the move to
+the grove, coexistence, and the lessons drawn, even citing live world-state. **Lesson:
+recap length/quality is a prompt-engineering lever; the cap only bounds the worst case.**
+
 ## The never-overflow guarantee is now closed on BOTH sides
 
 The window counts prompt + generation together. This sprint bounds **both**:
