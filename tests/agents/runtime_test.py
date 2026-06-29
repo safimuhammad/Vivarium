@@ -17,9 +17,15 @@ import pytest
 import agents.runtime as runtime_module
 from agents.compaction import estimate_tokens
 from agents.decider import Decision, ToolCall
+from agents.recall import RECALL_TOOL_NAME
 from agents.runtime import DECIDE_BACKOFF_SECONDS, Agent
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
+from core.constants import (
+    ATTACK_ENERGY_COST,
+    PARALYSIS_ENERGY_THRESHOLD,
+    REFLECT_EVERY_N_BREATHS,
+)
 from memory.models import Importance
 from memory.store import FileMemoryStore
 from observability.event_log import InMemoryEventLog
@@ -449,6 +455,104 @@ async def test_run_does_not_act_for_dead_agent(
 
     assert agent.breath_count == 0
     assert not agent.alive
+
+
+# ---------------------------------------------------------------------------
+# Sprint 6 review fixes: runtime robustness
+# ---------------------------------------------------------------------------
+
+
+async def test_execute_recall_that_raises_is_caught_and_paired(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recall whose backend raises still produces a paired tool turn, never dangling.
+
+    In production ``recall`` hits a real vector store that can raise; the assistant
+    turn must never be left with an unpaired tool call (which would corrupt history).
+    """
+
+    def boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("vector store unavailable")
+
+    monkeypatch.setattr(memory_store, "recall", boom)
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), memory=memory_store)
+
+    await agent.execute([ToolCall(RECALL_TOOL_NAME, {"query": "anything"})])
+
+    tool_msgs = [m for m in agent.lifecycle_history if m["role"] == "tool"]
+    assert len(tool_msgs) == 1  # the call is paired, not dangling
+    assert "could not" in tool_msgs[0]["content"].lower()
+
+
+async def test_reflection_skipped_when_paralyzed_midbreath(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    """A reflection-cadence breath that paralyzes the agent mid-breath spends no Ollama on it."""
+    reflection = Decision(
+        tool_calls=[ToolCall("remember", {"content": "I reflected.", "importance": "high"})]
+    )
+    decider = ReflectAwareDecider(
+        action=Decision(tool_calls=[ToolCall("speak", {"message": "Fading..."})]),
+        reflection=reflection,
+    )
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, memory=memory_store)
+    # 5.5 energy: the speak action costs 0.5 -> 5.0 => PARALYZED mid-breath.
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 5.5))
+    agent.breath_count = REFLECT_EVERY_N_BREATHS - 1  # next breath is a reflection breath
+
+    await agent.breathe()
+
+    assert _live(world, ADA).status is AgentStatus.PARALYZED
+    assert reflection not in decider.history  # reflection never ran on the frozen agent
+    assert memory_store.memory_count() == 0  # nothing was authored
+
+
+async def test_paralyzed_breath_resets_last_decide_failed(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A drain-only paralyzed breath clears the stale decide-failed backoff flag."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - 1.0))  # PARALYZED
+    agent._last_decide_failed = True  # left over from a prior failed decide
+
+    await agent.breathe()
+
+    assert agent._last_decide_failed is False  # a paralyzed breath performs no decide
+
+
+def test_perception_annotates_non_alive_neighbors(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """Corpses / fallen agents in the region are labelled, not shown as normal neighbours."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    assert world.kill_agent(BORIS) is True
+
+    text = agent._render_perception([])
+
+    assert "Boris" in text
+    assert "(dead)" in text  # marked as a corpse, not an ordinary neighbour
+
+
+def test_low_energy_attack_warning_fires_at_exact_threshold(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """At exactly ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD the warning still fires.
+
+    Attacking from 15.0 lands at 5.0, which is <= the paralysis threshold and DOES
+    paralyse, so the advisory must include the boundary (a ``<`` would miss it).
+    """
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), pace=0.0)
+    threshold = ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD
+    world.modify_agent_energy(ADA, -(_live(world, ADA).current_energy - threshold))
+    text = agent._render_perception([])
+    assert "⚠" in text and "paralyzed" in text.lower()
 
 
 # ---- Sprint 5: memory + reflection integration --------------------------------

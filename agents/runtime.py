@@ -295,7 +295,14 @@ class Agent:
             if self._status() is not AgentStatus.ALIVE:
                 result = f"You could not act ({tool_call.name!r}): you are no longer able to."
             elif tool_call.name == RECALL_TOOL_NAME:
-                result = self._recall(tool_call.params)
+                try:
+                    result = self._recall(tool_call.params)
+                except Exception:
+                    # In production recall hits a real vector store that can raise;
+                    # feed the failure back as a paired tool turn so the assistant
+                    # turn never dangles (mirrors the ToolError path below).
+                    logger.exception("recall failed for agent %r", self.agent_id)
+                    result = "Nothing surfaced; your memory could not be searched just now."
             else:
                 params = self._coerce_params(tool_call.params)
                 try:
@@ -793,7 +800,10 @@ class Agent:
                     # breath_count is incremented in the finally below, so during
                     # the k-th (1-indexed) breath it still holds k-1; +1 makes the
                     # reflection fire on breaths N, 2N, ... and never on the first.
-                    if (self.breath_count + 1) % REFLECT_EVERY_N_BREATHS == 0:
+                    # Gate on liveness too: a tool call may have paralysed the agent
+                    # mid-breath, and a frozen agent must spend no Ollama (neither the
+                    # reflection decide nor the recap-authoring one).
+                    if self.alive and (self.breath_count + 1) % REFLECT_EVERY_N_BREATHS == 0:
                         await self.reflect()
                         # Reflection already re-prefilled the cache, so compact harder
                         # now (lower target) while it is "free" -- prefer reflection.
@@ -801,7 +811,10 @@ class Agent:
             else:
                 # Paralyzed: keep the loop alive to be revived; drain the inbox so the
                 # queue stays bounded (events are missed while incapacitated). No
-                # Ollama, no append. A paralyzed breath is not a failed decide.
+                # Ollama, no append. A paralyzed breath is not a failed decide, so clear
+                # any stale flag from an earlier failed decide -- else run() would apply
+                # the decide-backoff to every drain-only breath and starve inbox draining.
+                self._last_decide_failed = False
                 self.event_bus.get_events(self.agent_id)
             await self.refresh_status(previous_status)
         finally:
@@ -955,7 +968,7 @@ class Agent:
         # knowingly. Only meaningful while the agent is still able to act.
         if (
             agent_state.status is AgentStatus.ALIVE
-            and agent_state.current_energy < ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD
+            and agent_state.current_energy <= ATTACK_ENERGY_COST + PARALYSIS_ENERGY_THRESHOLD
         ):
             lines.append(
                 f"- ⚠️ Your energy is {agent_state.current_energy}; attacking costs "
@@ -972,7 +985,7 @@ class Agent:
             paths = ", ".join(region.connections) if region.connections else "nowhere from here"
             lines.append(f"- Paths lead to: {paths}")
             others = [
-                other.name
+                self._describe_neighbor(other)
                 for other in self.world.get_agents_in_region(region.name)
                 if other.id != self.agent_id
             ]
@@ -995,6 +1008,28 @@ class Agent:
         """Render a single perceived event as a plain-narrative line."""
         message = event.payload.get("message") if isinstance(event.payload, dict) else None
         return str(message) if message else f"Something shifted nearby ({event.type})."
+
+    @staticmethod
+    def _describe_neighbor(other: AgentState) -> str:
+        """Name a co-located agent, labelling the fallen and the dead.
+
+        Corpses and paralysed agents are kept in the region (Sprint 6), so the
+        perception must mark them rather than list them as ordinary neighbours -- a
+        plain name invites the model to speak to the dead or feed a corpse.
+
+        Args:
+            other: A co-located agent (not the perceiving agent itself).
+
+        Returns:
+            The agent's name, suffixed ``(fallen)`` if PARALYZED or ``(dead)`` if DEAD.
+        """
+        match other.status:
+            case AgentStatus.PARALYZED:
+                return f"{other.name} (fallen)"
+            case AgentStatus.DEAD:
+                return f"{other.name} (dead)"
+            case _:
+                return other.name
 
     async def _announce_paralysis(self, agent_state: AgentState) -> None:
         """Emit the system ``agent_paralyzed`` event for an ``ALIVE -> PARALYZED`` flip.
