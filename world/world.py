@@ -408,6 +408,57 @@ class WorldState:
             return True
         return False
 
+    # ---- Mating bookkeeping (cooldown + offspring cap) ----
+
+    def record_mating(self, agent_id: str, when: float) -> bool:
+        """Stamp an agent's last-mating time and increment its offspring count.
+
+        Called for **both** parents on a *completed* mating (see
+        :func:`tools.builtin.mating.accept_mating`). This is the sole writer of
+        :attr:`~world.agents.AgentState.last_mated_at` and
+        :attr:`~world.agents.AgentState.offspring_count`, keeping the explosion-guard
+        bookkeeping inside ``WorldState`` per the architecture's mutation rule.
+
+        Mutates the agent's ``last_mated_at`` (set to ``when``) and
+        ``offspring_count`` (incremented by one).
+
+        Args:
+            agent_id: Id of the parent to record.
+            when: World-clock time (seconds) of the completed mating, typically
+                :meth:`now`.
+
+        Returns:
+            ``True`` if the agent exists and was recorded; ``False`` otherwise.
+        """
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return False
+        agent.last_mated_at = when
+        agent.offspring_count += 1
+        return True
+
+    def is_on_mating_cooldown(self, agent_id: str, now: float, cooldown: float) -> bool:
+        """Return whether an agent mated within the last ``cooldown`` seconds.
+
+        Pure read (no mutation). An agent that has never mated
+        (``last_mated_at is None``) or that does not exist is never on cooldown.
+        The boundary is exclusive: at exactly ``last_mated_at + cooldown`` the
+        agent is free again.
+
+        Args:
+            agent_id: Id of the agent to check.
+            now: Current world-clock time (seconds), typically :meth:`now`.
+            cooldown: Cooldown window in seconds (``MATING_COOLDOWN_SECONDS``).
+
+        Returns:
+            ``True`` if the agent exists, has mated, and ``now`` is within
+            ``cooldown`` seconds of its last mating; ``False`` otherwise.
+        """
+        agent = self.agents.get(agent_id)
+        if agent is None or agent.last_mated_at is None:
+            return False
+        return now - agent.last_mated_at < cooldown
+
     # ---- Region methods ----
 
     def add_region(self, region: Region) -> bool:

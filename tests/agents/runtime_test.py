@@ -293,7 +293,9 @@ async def test_resource_keys_are_coerced_to_enum_before_tool_use(
                 {
                     "target": BORIS,
                     "message": "Will you join me?",
-                    "resources": {"energy": 10.0, "materials": 5.0},
+                    # Meets the mating minimums so the escrow is actually stored; the
+                    # point of this test is the string-key -> enum coercion, not the rule.
+                    "resources": {"energy": 50.0, "materials": 30.0},
                 },
             )
         ]
@@ -307,7 +309,7 @@ async def test_resource_keys_are_coerced_to_enum_before_tool_use(
     proposal = world.get_agent_proposals(ADA, BORIS)
     assert proposal  # the escrow was actually stored
     assert set(proposal["resources"].keys()) == {ResourceTypes.ENERGY, ResourceTypes.MATERIALS}
-    assert _live(world, ADA).current_energy == energy_before - 10.0
+    assert _live(world, ADA).current_energy == energy_before - 50.0
 
 
 # ---------------------------------------------------------------------------

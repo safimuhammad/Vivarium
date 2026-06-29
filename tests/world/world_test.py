@@ -414,6 +414,70 @@ def test_remove_proposal_missing(world: WorldState) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Mating bookkeeping (cooldown + offspring count)
+# ---------------------------------------------------------------------------
+
+
+def test_agent_starts_with_clean_mating_bookkeeping(world: WorldState) -> None:
+    """A fresh agent has never mated and has no offspring (the field defaults)."""
+    agent = world.get_agent("wanderer_001")
+    assert agent is not None
+    assert agent.last_mated_at is None
+    assert agent.offspring_count == 0
+
+
+def test_record_mating_stamps_time_and_increments_count(world: WorldState) -> None:
+    """``record_mating`` stamps the mating time and bumps the offspring count."""
+    assert world.record_mating("wanderer_001", world.now()) is True
+    agent = world.get_agent("wanderer_001")
+    assert agent is not None
+    assert agent.last_mated_at == world.now()
+    assert agent.offspring_count == 1
+    # A second mating increments again from the same agent.
+    assert world.record_mating("wanderer_001", world.now() + 5.0) is True
+    assert agent.last_mated_at == world.now() + 5.0
+    assert agent.offspring_count == 2
+
+
+def test_record_mating_missing_agent_returns_false(world: WorldState) -> None:
+    """Recording a mating for an unknown agent fails without side effects."""
+    assert world.record_mating("ghost", world.now()) is False
+
+
+def test_is_on_mating_cooldown_never_mated_is_false(world: WorldState) -> None:
+    """An agent that has never mated is never on cooldown."""
+    assert world.is_on_mating_cooldown("wanderer_001", world.now(), 300.0) is False
+
+
+def test_is_on_mating_cooldown_just_mated_is_true(world: WorldState) -> None:
+    """An agent that just mated is on cooldown for the configured window."""
+    world.record_mating("wanderer_001", world.now())
+    assert world.is_on_mating_cooldown("wanderer_001", world.now(), 300.0) is True
+
+
+def test_is_on_mating_cooldown_expires_after_window(
+    world: WorldState, fake_clock: FakeClock
+) -> None:
+    """Cooldown clears once more than the window has elapsed since the last mating."""
+    mated_at = world.now()
+    world.record_mating("wanderer_001", mated_at)
+    fake_clock.advance(300.1)  # just past the 300s window
+    assert world.is_on_mating_cooldown("wanderer_001", world.now(), 300.0) is False
+
+
+def test_is_on_mating_cooldown_at_exact_boundary_is_false(world: WorldState) -> None:
+    """At exactly the window boundary the agent is free to mate again (inclusive edge)."""
+    mated_at = world.now()
+    world.record_mating("wanderer_001", mated_at)
+    assert world.is_on_mating_cooldown("wanderer_001", mated_at + 300.0, 300.0) is False
+
+
+def test_is_on_mating_cooldown_missing_agent_is_false(world: WorldState) -> None:
+    """An unknown agent is treated as not on cooldown (no record to gate on)."""
+    assert world.is_on_mating_cooldown("ghost", world.now(), 300.0) is False
+
+
+# ---------------------------------------------------------------------------
 # Region add / modify
 # ---------------------------------------------------------------------------
 
