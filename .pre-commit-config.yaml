@@ -3,6 +3,10 @@
 # Run on demand: pre-commit run --all-files
 #
 # Config for all tools lives in pyproject.toml (single source of truth).
+# ruff runs from its pinned mirror; mypy and the fast pytest run as `local`
+# hooks against the project venv (language: system) so they see the full
+# first-party + third-party dependency graph exactly as the CI gates do — an
+# isolated environment cannot replicate the strict-typed import graph.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.8.6
@@ -12,15 +16,18 @@ repos:
         args: ["--fix"]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.14.1
+  - repo: local
     hooks:
       - id: mypy
-        # Type-check the production-bar code only for now. Phase 2/3 add their
-        # packages here as they are brought up to strict typing.
-        files: ^(core|tests)/
-        args: ["--config-file=pyproject.toml"]
-        additional_dependencies:
-          - pydantic>=2
-          - pytest
-          - types-PyYAML
+        name: mypy --strict (production packages)
+        entry: mypy --strict agents core world bus tools observability config scripts
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: pytest-fast
+        name: pytest (fast suite, excludes integration)
+        entry: python -m pytest -q -m "not integration"
+        language: system
+        types: [python]
+        pass_filenames: false

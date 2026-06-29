@@ -27,6 +27,9 @@ dev = [
     "pytest-cov",
     "ruff",
     "mypy",
+    # Git pre-commit hook runner (ruff + mypy + fast pytest); see
+    # `.pre-commit-config.yaml`.
+    "pre-commit",
     # Used only by the relocated live-Ollama integration prototype so pytest can
     # import (collect) it; not a runtime dependency.
     "requests",
@@ -118,7 +121,7 @@ markers = [
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
 branch = true
-source = ["world", "bus", "tools", "config", "core", "agents", "observability", "memory"]
+source = ["world", "bus", "tools", "config", "core", "agents", "observability", "memory", "scripts"]
 omit = ["tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]
