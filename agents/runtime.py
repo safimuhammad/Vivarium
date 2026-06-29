@@ -32,6 +32,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from agents.compaction import (
+    RECAP_ACK,
+    build_compaction_messages,
+    estimate_tokens,
+    truncate_to_tokens,
+)
 from agents.decider import Decider, Decision, ToolCall
 from agents.prompt import build_system_prompt
 from agents.recall import RECALL_TOOL_NAME, RECALL_TOOL_SCHEMA, render_recall
@@ -40,7 +46,13 @@ from agents.tool_schemas import schemas_for
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
+    COMPACTION_HARD_SAFETY_TOKENS,
+    COMPACTION_KEEP_RECENT_TURNS,
+    COMPACTION_RECAP_RESERVE_TOKENS,
+    COMPACTION_TARGET_TOKENS,
+    COMPACTION_TRIGGER_TOKENS,
     DECIDE_BACKOFF_SECONDS,
+    PROMPT_BUDGET_TOKENS,
     RECALL_K,
     REFLECT_EVERY_N_BREATHS,
     REFLECT_RECAP_TURNS,
@@ -130,6 +142,8 @@ class Agent:
         self._stopped: bool = False
         self._last_decide_failed: bool = False
         self._resident_block_installed: bool = False
+        self._recap_installed: bool = False
+        self._last_prompt_tokens: int = 0  # actual prompt size of the last decide (safety net)
 
         self.event_bus.subscribe(self.agent_id)
         self._load_system_prompt()
@@ -390,19 +404,35 @@ class Agent:
         self.memory.write_identity(identity.strip())
         self.lifecycle_history[0] = {"role": "system", "content": self._system_prompt()}
 
-    def _live_turns(self) -> list[dict[str, Any]]:
-        """Return the live conversational turns, excluding the resident scaffolding.
+    def _prefix_len(self) -> int:
+        """Number of leading scaffolding turns before the live verbatim region.
 
-        The system prompt (``[0]``) and, when installed, the resident block +
-        acknowledgement (``[1]`` / ``[2]``) are fixed scaffolding, not lived events.
-        Excluding them keeps the reflection recap focused on what has actually
-        happened (perceptions, decisions, actions).
+        The prefix is the system turn plus the optional resident-memory pair
+        (``[1]``/``[2]``) plus the optional running-recap pair. The verbatim turns
+        (perception/decision/tool) always begin at this index.
+        """
+        return (
+            1
+            + (2 if self._resident_block_installed else 0)
+            + (2 if self._recap_installed else 0)
+        )
+
+    def _recap_index(self) -> int:
+        """Index where the recap pair lives (or would be inserted): after system+block."""
+        return 1 + (2 if self._resident_block_installed else 0)
+
+    def _live_turns(self) -> list[dict[str, Any]]:
+        """Return the live conversational turns, excluding ALL scaffolding.
+
+        The system turn, the resident-memory pair, and the running-recap pair are
+        fixed scaffolding, not lived events. Excluding them keeps the reflection recap
+        focused on what actually happened -- and, crucially, stops reflection from
+        reading the running recap back to itself as if it were a fresh experience.
 
         Returns:
             ``lifecycle_history`` with the leading scaffolding turns dropped.
         """
-        start = 3 if self._resident_block_installed else 1
-        return self.lifecycle_history[start:]
+        return self.lifecycle_history[self._prefix_len() :]
 
     def _set_resident_block(self, query: str) -> None:
         """Install or refresh the resident memory block at ``[1]`` / ``[2]``.
@@ -473,6 +503,221 @@ class Agent:
         memories = self.memory.recall(query, self.breath_count, RECALL_K)
         return render_recall(memories)
 
+    # ---- transcript compaction (Sprint 5.5) ------------------------------
+
+    async def _ensure_context_budget(self, target: int) -> None:
+        """Keep the assembled prompt within budget; the never-overflow guarantee.
+
+        Runs before each ``decide`` (and opportunistically at reflection). If the
+        estimated prompt exceeds ``target`` -- or the last REAL prompt exceeded the
+        hard-safety threshold (the self-correcting net against estimator drift) --
+        the transcript is compacted. A floor-overflow net then guarantees the prompt
+        is under :data:`~core.constants.PROMPT_BUDGET_TOKENS` no matter what.
+
+        Args:
+            target: The token target to compact down to (lower at reflection,
+                higher between reflections).
+
+        Returns:
+            None.
+        """
+        try:
+            tools = self._action_schemas()
+        except Exception:
+            # A misconfigured tool (no schema) cannot be sized; skip the best-effort
+            # budget check -- decide() will surface and roll back the real failure.
+            logger.exception(
+                "Cannot build action schemas for the budget check for agent %r", self.agent_id
+            )
+            return
+        over_estimate = estimate_tokens(self.lifecycle_history, tools) > target
+        over_actual = self._last_prompt_tokens > COMPACTION_HARD_SAFETY_TOKENS
+        if over_estimate or over_actual:
+            await self.compact()
+        self._enforce_prompt_budget(tools)
+
+    async def compact(self) -> None:
+        """Fold the oldest verbatim turns into the running recap; keep the rest.
+
+        Eviction is **mechanical and unconditional, done before any model call**: the
+        oldest whole breath-groups are dropped immediately so the transcript is bound
+        regardless of the decider. Only *then* is the decider asked (with NO tools, so
+        it returns narrative not a tool call) to author the new cumulative recap from
+        the previous recap plus the evicted turns; on any failure the prior recap is
+        kept. The result is installed as the recap pair at ``[recap_index]``.
+
+        Side effects:
+            Mutates :attr:`lifecycle_history` (drops evicted turns, installs/replaces
+            the recap pair). One isolated decider call (best-effort).
+
+        Returns:
+            None.
+        """
+        prefix = self._prefix_len()
+        verbatim = self.lifecycle_history[prefix:]
+        cut = self._eviction_cut(verbatim)
+        if cut <= 0:
+            return  # nothing safe to evict (scaffolding alone is the weight)
+        prior_recap = self._current_recap_text()
+        evicted = verbatim[:cut]
+        del self.lifecycle_history[prefix : prefix + cut]  # unconditional trim
+        recap_text = await self._author_recap(prior_recap, evicted)
+        self._set_recap(recap_text)
+
+    def _eviction_cut(self, verbatim: list[dict[str, Any]]) -> int:
+        """Choose how many of the OLDEST verbatim turns to evict.
+
+        Keeps the most-recent turns that fit a verbatim budget (target minus the
+        measured scaffolding minus a recap reserve), but never fewer than
+        :data:`~core.constants.COMPACTION_KEEP_RECENT_TURNS`. The cut is snapped
+        forward to a ``user`` turn so the kept tail begins on a perception and whole
+        breath-groups (assistant tool calls with their paired ``tool`` results) are
+        never split.
+
+        Args:
+            verbatim: The live turns after the scaffolding prefix.
+
+        Returns:
+            The number of leading turns to evict (0 if none).
+        """
+        prefix_no_recap = 1 + (2 if self._resident_block_installed else 0)
+        scaffold = self.lifecycle_history[:prefix_no_recap]
+        scaffold_tokens = estimate_tokens(scaffold, self._action_schemas())
+        verbatim_budget = max(
+            0, COMPACTION_TARGET_TOKENS - scaffold_tokens - COMPACTION_RECAP_RESERVE_TOKENS
+        )
+        # Keep the largest recent suffix within budget, floored at KEEP_RECENT.
+        kept = 0
+        total = 0
+        for turn in reversed(verbatim):
+            total += estimate_tokens([turn], [])
+            if total > verbatim_budget and kept >= COMPACTION_KEEP_RECENT_TURNS:
+                break
+            kept += 1
+        cut = len(verbatim) - min(kept, len(verbatim))
+        # Snap forward so the kept tail starts on a user (perception) turn.
+        while cut < len(verbatim) and verbatim[cut].get("role") != "user":
+            cut += 1
+        return cut
+
+    def _current_recap_text(self) -> str | None:
+        """Return the existing running-recap narrative, or ``None`` if not installed."""
+        if not self._recap_installed:
+            return None
+        content = self.lifecycle_history[self._recap_index()].get("content", "")
+        return content if isinstance(content, str) else None
+
+    async def _author_recap(self, prior_recap: str | None, evicted: list[dict[str, Any]]) -> str:
+        """Ask the decider (no tools) to narrate the new cumulative recap; best-effort.
+
+        Args:
+            prior_recap: The previous recap (folded in), or ``None`` on the first.
+            evicted: The turns being folded away.
+
+        Returns:
+            The new recap text; falls back to ``prior_recap`` (or empty) on failure.
+        """
+        messages = build_compaction_messages(prior_recap, evicted)
+        try:
+            decision = await self.decider.decide(messages, [])  # no tools -> narrative
+        except Exception:
+            logger.exception("Compaction decider failed for agent %r", self.agent_id)
+            return prior_recap or ""
+        return decision.text.strip() or (prior_recap or "")
+
+    def _set_recap(self, text: str) -> None:
+        """Install or replace the running-recap pair at ``[recap_index]`` / ``+1``.
+
+        The recap is a ``user`` turn (an in-world 'looking back' surfacing) followed
+        by the agent's :data:`~agents.compaction.RECAP_ACK` (``assistant``) so the
+        pair never creates two consecutive ``user`` turns. Inserted right after the
+        memory pair (or after the system turn for a memory-less agent).
+
+        Args:
+            text: The recap narrative.
+        """
+        recap = {"role": "user", "content": self._render_recap_turn(text)}
+        ack = {"role": "assistant", "content": RECAP_ACK}
+        index = self._recap_index()
+        if self._recap_installed:
+            self.lifecycle_history[index] = recap
+            self.lifecycle_history[index + 1] = ack
+        else:
+            self.lifecycle_history[index:index] = [recap, ack]
+            self._recap_installed = True
+
+    @staticmethod
+    def _render_recap_turn(text: str) -> str:
+        """Frame the recap narrative as an in-world 'looking back' turn (no meta)."""
+        body = text.strip() if text.strip() else "The recent past is a blur, but you carry on."
+        return f"Looking back on how you came to be here:\n{body}"
+
+    def _enforce_prompt_budget(self, tools: list[dict[str, Any]]) -> None:
+        """Floor-overflow net: guarantee the prompt fits ``PROMPT_BUDGET_TOKENS``.
+
+        Only reachable when the scaffolding (system + memory block) alone is large.
+        Degrades in order: truncate the recap, then the in-context memory-block turn
+        (keeping its HIGH-importance head), then drop the oldest whole breath-groups
+        as a last resort. The durable memory store is never touched -- only the
+        rendered in-context copies -- so the prompt is *always* made to fit.
+
+        Args:
+            tools: The action schemas (counted in the estimate).
+        """
+        if estimate_tokens(self.lifecycle_history, tools) <= PROMPT_BUDGET_TOKENS:
+            return
+        # 1. Shrink the recap turn until the whole prompt fits.
+        if self._recap_installed and self._shrink_to_fit(self._recap_index(), tools):
+            return
+        # 2. Shrink the in-context memory-block turn (HIGH-importance lines lead).
+        if self._resident_block_installed:
+            fits = self._shrink_to_fit(1, tools)
+            logger.critical(
+                "Agent %r: in-context memory block truncated to fit the context window; "
+                "consider lowering MEMORY_RESIDENT_CAP for this model",
+                self.agent_id,
+            )
+            if fits:
+                return
+        # 3. Last resort: drop the oldest whole breath-groups (keep the tail on a user turn).
+        prefix = self._prefix_len()
+        while (
+            estimate_tokens(self.lifecycle_history, tools) > PROMPT_BUDGET_TOKENS
+            and len(self.lifecycle_history) > prefix + 1
+        ):
+            del self.lifecycle_history[prefix]
+            while (
+                len(self.lifecycle_history) > prefix
+                and self.lifecycle_history[prefix].get("role") != "user"
+            ):
+                del self.lifecycle_history[prefix]
+
+    def _shrink_to_fit(self, index: int, tools: list[dict[str, Any]]) -> bool:
+        """Halve the ``content`` of turn ``index`` until the whole prompt fits the budget.
+
+        Geometric shrink (re-measuring the *whole* prompt each round, so JSON overhead
+        and rounding are accounted for) converges fast and always terminates -- once a
+        truncation stops making progress the field is dropped entirely.
+
+        Args:
+            index: The turn whose content to shrink.
+            tools: The action schemas (counted in the estimate).
+
+        Returns:
+            ``True`` if the whole prompt now fits ``PROMPT_BUDGET_TOKENS``.
+        """
+        message = self.lifecycle_history[index]
+        while estimate_tokens(self.lifecycle_history, tools) > PROMPT_BUDGET_TOKENS:
+            content = str(message["content"])
+            if not content:
+                return False
+            shrunk = truncate_to_tokens(content, max(0, estimate_tokens([message], []) // 2))
+            if len(shrunk) >= len(content):  # no further progress -> drop it entirely
+                message["content"] = ""
+                return estimate_tokens(self.lifecycle_history, tools) <= PROMPT_BUDGET_TOKENS
+            message["content"] = shrunk
+        return True
+
     # ---- the breath & the loop -------------------------------------------
 
     async def breathe(self) -> None:
@@ -489,18 +734,26 @@ class Agent:
         previous_status = self._status()
         try:
             await self.perceive()
+            # Bound the prompt BEFORE deciding -- the never-overflow guarantee. Runs
+            # even for a non-ALIVE agent so a still-perceiving loop cannot grow without
+            # limit.
+            await self._ensure_context_budget(COMPACTION_TRIGGER_TOKENS)
             self._last_decide_failed = False
             if previous_status is AgentStatus.ALIVE:
                 decision = await self.decide()
                 if decision is None:
                     self._last_decide_failed = True
                 else:
+                    self._last_prompt_tokens = decision.prompt_tokens  # actual-token net
                     await self.execute(decision.tool_calls)
                     # breath_count is incremented in the finally below, so during
                     # the k-th (1-indexed) breath it still holds k-1; +1 makes the
                     # reflection fire on breaths N, 2N, ... and never on the first.
                     if (self.breath_count + 1) % REFLECT_EVERY_N_BREATHS == 0:
                         await self.reflect()
+                        # Reflection already re-prefilled the cache, so compact harder
+                        # now (lower target) while it is "free" -- prefer reflection.
+                        await self._ensure_context_budget(COMPACTION_TARGET_TOKENS)
             await self.refresh_status(previous_status)
         finally:
             self.breath_count += 1

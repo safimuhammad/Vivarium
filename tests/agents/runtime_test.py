@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+import agents.runtime as runtime_module
+from agents.compaction import estimate_tokens
 from agents.decider import Decision, ToolCall
 from agents.runtime import DECIDE_BACKOFF_SECONDS, Agent
 from bus.event_bus import EventBus
@@ -813,3 +815,208 @@ async def test_execute_recall_tolerates_missing_query(
     last = agent.lifecycle_history[-1]
     assert last["role"] == "tool"
     assert last["tool_name"] == "recall"
+
+
+# ---- Sprint 5.5: transcript compaction ----------------------------------------
+
+
+class CompactionScriptDecider:
+    """Branches by the offered tools: compaction (no tools) -> recap text; reflection
+    (has 'remember') -> nothing; otherwise an action with large hidden thinking that
+    grows the transcript fast. Records every tools list it was offered."""
+
+    def __init__(self, thinking_chars: int = 0, recap_text: str = "Lately, life happened.") -> None:
+        self.thinking = "t" * thinking_chars
+        self.recap_text = recap_text
+        self.tools_seen: list[list[dict[str, Any]]] = []
+
+    async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
+        self.tools_seen.append(tools)
+        names = {t["function"]["name"] for t in tools}
+        if not tools:  # the compaction call passes tools=[]
+            return Decision(text=self.recap_text)
+        if "remember" in names:  # the reflection call
+            return Decision()
+        return Decision(text="I wait.", thinking=self.thinking, tool_calls=[ToolCall("wait")])
+
+
+def _shrink_budget(monkeypatch: pytest.MonkeyPatch, **overrides: int) -> None:
+    """Patch the compaction budget constants in the runtime module to test-sized values."""
+    defaults = {
+        "PROMPT_BUDGET_TOKENS": 8000,
+        "COMPACTION_HARD_SAFETY_TOKENS": 7000,
+        "COMPACTION_TRIGGER_TOKENS": 4000,
+        "COMPACTION_TARGET_TOKENS": 2000,
+        "COMPACTION_KEEP_RECENT_TURNS": 4,
+        "COMPACTION_RECAP_RESERVE_TOKENS": 100,
+    }
+    defaults.update(overrides)
+    for name, value in defaults.items():
+        monkeypatch.setattr(runtime_module, name, value)
+
+
+async def test_compaction_fires_over_trigger_and_installs_recap(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _shrink_budget(monkeypatch)
+    decider = CompactionScriptDecider(thinking_chars=1200)  # ~340 tok/breath
+    agent = Agent(ADA, world, event_bus, populated_registry, decider)  # NULL memory
+
+    for _ in range(12):
+        await agent.breathe()
+
+    assert agent._recap_installed  # the transcript grew past the trigger and compacted
+    recap = agent.lifecycle_history[agent._recap_index()]
+    assert recap["role"] == "user"
+    assert "Lately, life happened." in recap["content"]
+
+
+async def test_prompt_never_exceeds_budget_over_many_breaths(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The headline guarantee: the assembled prompt never exceeds PROMPT_BUDGET."""
+    _shrink_budget(monkeypatch)
+    decider = CompactionScriptDecider(thinking_chars=1500)
+    agent = Agent(ADA, world, event_bus, populated_registry, decider)
+
+    for breath in range(40):
+        await agent.breathe()
+        estimate = estimate_tokens(agent.lifecycle_history, agent._action_schemas())
+        assert estimate <= runtime_module.PROMPT_BUDGET_TOKENS, (
+            f"breath {breath}: estimate {estimate} exceeded budget"
+        )
+        assert _no_double_user(agent.lifecycle_history)
+
+
+async def test_compaction_keeps_tail_on_user_turn(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _shrink_budget(monkeypatch)
+    decider = CompactionScriptDecider(thinking_chars=1500)
+    agent = Agent(ADA, world, event_bus, populated_registry, decider)
+
+    for _ in range(12):
+        await agent.breathe()
+
+    # The first verbatim turn after the recap pair must be a perception (user).
+    first_verbatim = agent.lifecycle_history[agent._prefix_len()]
+    assert first_verbatim["role"] == "user"
+    assert _no_double_user(agent.lifecycle_history)
+
+
+async def test_compaction_passes_no_tools_to_the_recap_call(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _shrink_budget(monkeypatch)
+    decider = CompactionScriptDecider(thinking_chars=1500)
+    agent = Agent(ADA, world, event_bus, populated_registry, decider)
+
+    for _ in range(12):
+        await agent.breathe()
+
+    assert any(tools == [] for tools in decider.tools_seen)  # H3: recap call gets no tools
+
+
+async def test_compaction_is_mechanical_when_decider_fails(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C2: even if the recap LLM call fails, the oldest turns are still evicted."""
+    _shrink_budget(monkeypatch)
+
+    class FailingRecapDecider(CompactionScriptDecider):
+        async def decide(
+            self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        ) -> Decision:
+            if not tools:  # the compaction call -> blow up
+                raise RuntimeError("recap model down")
+            return await super().decide(messages, tools)
+
+    decider = FailingRecapDecider(thinking_chars=1500)
+    agent = Agent(ADA, world, event_bus, populated_registry, decider)
+
+    for _ in range(20):
+        await agent.breathe()  # must never raise despite recap failures
+
+    estimate = estimate_tokens(agent.lifecycle_history, agent._action_schemas())
+    assert estimate <= runtime_module.PROMPT_BUDGET_TOKENS  # bounded by mechanical eviction alone
+
+
+async def test_hard_safety_net_forces_compaction(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even when the estimate is under target, a too-large ACTUAL last prompt compacts."""
+    _shrink_budget(monkeypatch, COMPACTION_TRIGGER_TOKENS=10_000)  # estimate never trips it
+    decider = CompactionScriptDecider(thinking_chars=400)
+    agent = Agent(ADA, world, event_bus, populated_registry, decider)
+
+    # Seed several verbatim turns, then pretend the real prompt came back huge.
+    for _ in range(4):
+        await agent.breathe()
+    assert not agent._recap_installed  # estimate-trigger was raised out of reach
+    agent._last_prompt_tokens = runtime_module.COMPACTION_HARD_SAFETY_TOKENS + 1
+
+    await agent.breathe()
+
+    assert agent._recap_installed  # the actual-token net forced a compaction
+
+
+async def test_recap_pair_sits_after_memory_block(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _shrink_budget(monkeypatch)
+    memory_store.append_memory("I carry a vow.", Importance.HIGH, breath=0)
+    decider = CompactionScriptDecider(thinking_chars=1500)
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, memory=memory_store)
+
+    for _ in range(12):
+        await agent.breathe()
+
+    # [0]=system [1]=block(user) [2]=block-ack [3]=recap(user) [4]=recap-ack
+    assert agent._recap_installed and agent._recap_index() == 3
+    assert agent.lifecycle_history[1]["role"] == "user"  # memory block
+    assert agent.lifecycle_history[3]["role"] == "user"  # recap
+    assert "I carry a vow." in agent.lifecycle_history[1]["content"]  # block intact
+    assert _no_double_user(agent.lifecycle_history)
+
+
+async def test_live_turns_excludes_recap_scaffolding(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _shrink_budget(monkeypatch)
+    decider = CompactionScriptDecider(thinking_chars=1500, recap_text="UNIQUE_RECAP_MARKER")
+    agent = Agent(ADA, world, event_bus, populated_registry, decider)
+
+    for _ in range(12):
+        await agent.breathe()
+
+    assert agent._recap_installed
+    live = agent._live_turns()
+    assert all("UNIQUE_RECAP_MARKER" not in str(m.get("content", "")) for m in live)
+
+
+def test_floor_overflow_net_truncates_block_to_fit(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When system+block alone exceed budget, the in-context block is truncated to fit."""
+    for i in range(120):  # a large resident block
+        memory_store.append_memory(f"memory number {i} about the road and trust", Importance.LOW, i)
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider(), memory=memory_store)
+
+    tools = agent._action_schemas()
+    fixed = estimate_tokens([agent.lifecycle_history[0]], tools)  # system + tools
+    monkeypatch.setattr(runtime_module, "PROMPT_BUDGET_TOKENS", fixed + 600)
+    monkeypatch.setattr(runtime_module, "COMPACTION_RECAP_RESERVE_TOKENS", 50)
+    assert estimate_tokens(agent.lifecycle_history, tools) > runtime_module.PROMPT_BUDGET_TOKENS
+
+    agent._enforce_prompt_budget(tools)
+
+    assert estimate_tokens(agent.lifecycle_history, tools) <= runtime_module.PROMPT_BUDGET_TOKENS

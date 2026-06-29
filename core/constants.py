@@ -309,3 +309,8 @@ No pre-call tokenizer is available, so the estimate is heuristic. Deliberately
 LOW (so it OVER-counts tokens and errs toward compacting early); JSON tool schemas
 tokenize denser than prose.
 """
+
+COMPACTION_RECAP_RESERVE_TOKENS: Final[int] = 512
+"""Tokens set aside for the running recap when planning eviction, and the hard cap
+the floor-overflow net truncates the recap to. [design]. Bounds the recap so it
+cannot itself crowd the window."""
