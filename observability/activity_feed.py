@@ -30,6 +30,7 @@ from rich.table import Table
 
 from bus.events import Event
 from core.logging import get_logger
+from world.agents import AgentStatus
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -97,13 +98,22 @@ def render_world_table(world: WorldState) -> Table:
     Returns:
         A ``rich.table.Table`` (a grid stacking the agent and region tables).
     """
-    agents_table = Table(title="Agents", expand=True)
+    roster = world.get_all_agents()
+    alive = sum(1 for a in roster if a.status is AgentStatus.ALIVE)
+    fallen = sum(1 for a in roster if a.status is AgentStatus.PARALYZED)
+    dead = sum(1 for a in roster if a.status is AgentStatus.DEAD)
+    # Population summary in the title so an observer can SEE growth and diagnose Ollama
+    # throughput degradation as the lineage grows (perception is the product).
+    agents_table = Table(
+        title=f"Agents — {len(roster)} total · {alive} alive · {fallen} fallen · {dead} dead",
+        expand=True,
+    )
     agents_table.add_column("ID")
     agents_table.add_column("Status")
     agents_table.add_column("Energy", justify="right")
     agents_table.add_column("Materials", justify="right")
     agents_table.add_column("Region")
-    for agent in world.get_all_agents():
+    for agent in roster:
         agents_table.add_row(
             agent.id,
             agent.status.value,
