@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from agents.decider import Decision, ToolCall
+from agents.decider import Decision, SerializingDecider, ToolCall
 from agents.runtime import Agent
 from memory.embedding import FakeEmbeddingFunction
 from memory.vector_store import FakeVectorStore, VectorStore
@@ -67,6 +67,33 @@ async def test_runner_stops_when_all_dead(tmp_path: Path) -> None:
         sim, pace=0.0, duration=5.0, world_tick_interval=0.05, refresh_interval=0.05
     )
     assert time.perf_counter() - started < 4.0  # returned fast, not at duration
+
+
+def test_build_simulation_serializes_the_ollama_provider_by_default(tmp_path: Path) -> None:
+    """The default (Ollama) path wraps the decider in a SerializingDecider (one at a time)."""
+    sim = _build(tmp_path, MockDecider([Decision()]))
+    assert isinstance(sim.decider, SerializingDecider)
+
+
+def test_build_simulation_gemini_provider_runs_unserialized(tmp_path: Path) -> None:
+    """The Gemini path is concurrent: the decider is NOT wrapped in a SerializingDecider.
+
+    A hosted API serves requests in parallel, so serializing would throw away the whole
+    point of moving off local Ollama. The injected decider is used as-is.
+    """
+    mock = MockDecider([Decision()])
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=7,
+        model="gemini-3.1-flash-lite",
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=mock,
+        vector_store_factory=_fake_factory,
+        provider="gemini",
+    )
+    assert sim.decider is mock
+    assert not isinstance(sim.decider, SerializingDecider)
 
 
 def _build(tmp_path: Path, decider: MockDecider) -> Simulation:

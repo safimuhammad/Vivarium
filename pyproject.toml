@@ -18,6 +18,15 @@ dependencies = [
     "pydantic>=2",
     # Embedded vector store (PersistentClient + all-MiniLM-L6-v2) for memory RAG.
     "chromadb",
+    # Hosted decider backend (the optional "gemini" provider; imported lazily so the
+    # local Ollama-only path never requires it).
+    "google-genai",
+    # Async transport for the Gemini client: we pin to httpx (google-genai 2.10.0 +
+    # aiohttp 3.14.x trips an internal connector assertion). Always present via
+    # google-genai, declared directly because agents.gemini_decider imports it.
+    "httpx",
+    # Loads the gitignored .env so a hosted provider's key (GEMINI_API_KEY) is present.
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]
