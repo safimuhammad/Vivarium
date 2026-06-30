@@ -1,7 +1,8 @@
 # ARTIFICIAL SCARCITY (2026-06-29, Safi): the land is deliberately tightened — low
 # caps, low starting stock, slow regen — so it cannot feed everyone. Total land supply
 # (~185 energy, ~150 materials) is LESS than what the founders already carry, and regen
-# (~1/tick per region) lags consumption, so resources deplete and beings must compete.
+# is deliberately slow (~0.05-0.25/tick per region) and lags consumption, so resources
+# deplete and beings must compete.
 # Paired with combat loot (a kill transfers the victim's stock to the killer), the
 # pressure points two ways: harvest a thinning land, or take from each other. We added
 # this to see whether the peaceful "Nirvana" convergence holds under want — or fractures
@@ -11,8 +12,8 @@ regions:
   - name: "nirvana"
     description: "a once-heavenly landscape, now thinning and picked-over"
     connections: ["warm_springs", "nirvana_east","nirvana_west"]
-    energy_rate: 0.4
-    materials_rate: 0.4
+    energy_rate: 0.2
+    materials_rate: 0.2
     current_energy: 60
     current_materials: 60
     max_energy: 120
@@ -21,8 +22,8 @@ regions:
   - name: "nirvana_east"
     description: "a struggling, near-barren stretch"
     connections: ["warm_springs","nirvana"]
-    energy_rate: 0.2
-    materials_rate: 0.2
+    energy_rate: 0.1
+    materials_rate: 0.1
     current_energy: 20
     current_materials: 15
     max_energy: 70
@@ -31,8 +32,8 @@ regions:
   - name: "warm_springs"
     description: "hot spring lakes — the least-poor refuge, but no longer plentiful"
     connections: ["nirvana_west", "nirvana_east", "nirvana"]
-    energy_rate: 0.5
-    materials_rate: 0.4
+    energy_rate: 0.25
+    materials_rate: 0.2
     current_energy: 90
     current_materials: 80
     max_energy: 130
@@ -41,7 +42,7 @@ regions:
   - name: "nirvana_west"
     description: "a nuclear wasteland, all but dead"
     connections: ["warm_springs","nirvana"]
-    energy_rate: 0.1
+    energy_rate: 0.05
     materials_rate: 0.0
     current_energy: 15
     current_materials: 0.0
