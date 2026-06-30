@@ -11,6 +11,12 @@ from __future__ import annotations
 from typing import Any
 
 from agents.tool_schemas import TOOL_SCHEMAS, schemas_for
+from core.constants import (
+    ATTACK_DAMAGE,
+    ATTACK_ENERGY_COST,
+    MOVE_ENERGY_COST,
+    SPEAK_ENERGY_COST,
+)
 from tools.builtin import BUILTIN_TOOLS
 from world.regions import ResourceTypes
 
@@ -46,3 +52,21 @@ def test_schemas_for_returns_requested_schemas_in_order() -> None:
     names = ["wait", "move"]
     result: list[dict[str, Any]] = schemas_for(names)
     assert [schema["function"]["name"] for schema in result] == names
+
+
+def test_costed_action_schemas_state_their_energy_cost() -> None:
+    """move/speak/attack surface their real energy costs at the decision point (Finding 7).
+
+    The figures are sourced from ``core.constants`` (not hand-typed) so the cost the
+    model reasons against always matches the rule the tool actually enforces. harvest
+    and transfer carry no per-action energy cost, so they advertise none.
+    """
+    move_desc = TOOL_SCHEMAS["move"]["function"]["description"]
+    assert f"{MOVE_ENERGY_COST:.0f}" in move_desc
+
+    speak_desc = TOOL_SCHEMAS["speak"]["function"]["description"]
+    assert f"{SPEAK_ENERGY_COST:g}" in speak_desc
+
+    attack_desc = TOOL_SCHEMAS["attack"]["function"]["description"]
+    assert f"{ATTACK_DAMAGE:.0f}" in attack_desc
+    assert f"{ATTACK_ENERGY_COST:.0f}" in attack_desc

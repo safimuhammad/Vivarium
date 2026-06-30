@@ -362,6 +362,27 @@ class WorldState:
         """
         return self.pending_proposal_targets.get(agent_id, [])
 
+    def get_incoming_proposals(self, agent_id: str) -> list[tuple[str, dict[str, Any]]]:
+        """Return the pending proposals addressed TO an agent (it is the target).
+
+        Lets perception surface a *standing* mating offer every breath until the agent
+        answers it, instead of only the one-shot ``mating_initiated`` event delivered at
+        arrival (which the inbox drains immediately).
+
+        Args:
+            agent_id: The target agent id whose incoming offers to collect.
+
+        Returns:
+            A list of ``(initiator_id, proposal)`` pairs (empty if none); each
+            ``proposal`` dict carries the ``"target"``, ``"timestamp"`` and
+            ``"resources"`` keys recorded by :meth:`add_proposal`.
+        """
+        return [
+            (initiator_id, proposal)
+            for (initiator_id, target_id), proposal in self.pending_proposals.items()
+            if target_id == agent_id
+        ]
+
     def add_proposal(
         self, agent_id: str, target: str, resources: dict[ResourceTypes, float]
     ) -> bool:
