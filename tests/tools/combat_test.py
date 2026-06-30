@@ -181,6 +181,35 @@ async def test_death_is_heard_only_in_its_region(world: WorldState, event_bus: E
     assert afar_inbox == []
 
 
+async def test_attack_kill_loots_victim_resources_to_killer(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A lethal blow transfers the victim's energy + materials to the killer (loot).
+
+    Scarcity + loot is the incentive to fight: killing the weak refills the killer.
+    """
+    world.modify_agent_energy("wanderer_002", -85.0)  # 100 -> 15; 15 - 20 < 0 => DEAD
+    victim = world.get_agent("wanderer_002")
+    attacker = world.get_agent("wanderer_001")
+    assert victim is not None and attacker is not None
+    looted_energy = victim.current_energy  # 15.0
+    looted_materials = victim.current_materials  # 50.0 (from the fixture)
+
+    await attack(world, event_bus, "wanderer_001", target="wanderer_002")
+
+    assert victim.status is AgentStatus.DEAD
+    # The corpse is emptied; nothing is double-counted.
+    assert victim.current_energy == 0.0 and victim.current_materials == 0.0
+    # The killer gains the loot (its energy is post-attack-cost + the victim's energy).
+    assert attacker.current_energy == 100.0 - ATTACK_ENERGY_COST + looted_energy
+    assert attacker.current_materials == 50.0 + looted_materials  # 100.0
+    # The death is announced with what was taken.
+    died = [e for e in event_bus.get_events("wanderer_001") if e.type == "agent_died"]
+    assert died
+    assert died[0].payload.get("looted_materials") == looted_materials
+    assert died[0].payload.get("looted_energy") == looted_energy
+
+
 async def test_attack_overshoot_kills(world: WorldState, event_bus: EventBus) -> None:
     """A hit that overshoots below the kill threshold kills outright (15 - 20 < 0)."""
     world.modify_agent_energy("wanderer_002", -85.0)  # 100 -> 15.0; 15 - 20 < 0 => DEAD

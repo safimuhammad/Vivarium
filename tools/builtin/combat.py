@@ -33,9 +33,11 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
     Mutates world state:
         * Subtracts :data:`~core.constants.ATTACK_ENERGY_COST` from the
           attacker's energy.
-        * On a **lethal** hit: calls :meth:`~world.world.WorldState.kill_agent`
-          on the target (sets it ``DEAD`` and sweeps its mating escrow); the
-          target's energy is *not* further drained.
+        * On a **lethal** hit: transfers all of the target's energy and materials to
+          the attacker (loot), emptying the corpse, then calls
+          :meth:`~world.world.WorldState.kill_agent` on the target (sets it ``DEAD``
+          and sweeps its mating escrow); the target's energy is *not* further drained
+          beyond the looting.
         * On a **non-lethal** hit: subtracts
           :data:`~core.constants.ATTACK_DAMAGE` from the target's energy (floored
           at 0.0 by the world; the world paralyses the target if it reaches the
@@ -91,13 +93,29 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
         # Capture the region before the kill so the death is routed to the place it
         # happened (kill_agent does not move the body, but be explicit).
         death_region = target_agent.current_position
+        # Loot: the killer takes everything the victim was carrying. Empty the victim
+        # *before* kill_agent (a DEAD agent's resources are frozen by the world), then
+        # credit the killer -- so resources are conserved, not duplicated, and the
+        # corpse left to decay holds nothing. This is the incentive to fight under
+        # scarcity: killing the weak refills you.
+        looted_energy = max(0.0, target_agent.current_energy)
+        looted_materials = max(0.0, target_agent.current_materials)
+        if looted_energy:
+            world.modify_agent_energy(target_agent.id, -looted_energy)
+        if looted_materials:
+            world.modify_agent_materials(target_agent.id, -looted_materials)
         world.kill_agent(target_agent.id)
+        world.modify_agent_energy(attacker_agent.id, looted_energy)
+        world.modify_agent_materials(attacker_agent.id, looted_materials)
         death_payload: dict[str, Any] = {
             "message": (
                 f"{target_agent.name} (ID:{target_agent.id}) was slain by "
-                f"{attacker_agent.name} (ID:{attacker_agent.id})."
+                f"{attacker_agent.name} (ID:{attacker_agent.id}), who took "
+                f"{looted_energy} energy and {looted_materials} materials as loot."
             ),
             "killer": attacker_agent.id,
+            "looted_energy": looted_energy,
+            "looted_materials": looted_materials,
         }
         await event_bus.publish(
             Event(
@@ -110,8 +128,10 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
             )
         )
         return (
-            f"You struck down {target_agent.name}|ID{target_agent.id}.\n"
-            f" Energy remaining: {attacker_agent.current_energy}"
+            f"You struck down {target_agent.name}|ID{target_agent.id} and took "
+            f"{looted_energy} energy and {looted_materials} materials from them as loot.\n"
+            f" Energy: {attacker_agent.current_energy}|"
+            f"Materials: {attacker_agent.current_materials}"
         )
 
     world.modify_agent_energy(target_agent.id, -ATTACK_DAMAGE)
