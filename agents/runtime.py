@@ -60,6 +60,7 @@ from core.constants import (
     RECALL_K,
     REFLECT_EVERY_N_BREATHS,
     REFLECT_RECAP_TURNS,
+    compaction_budgets,
 )
 from core.exceptions import EventBusError, ToolError
 from core.logging import get_logger
@@ -125,6 +126,7 @@ class Agent:
         memory: MemoryStore | None = None,
         usage_log: UsageLog | None = None,
         model: str = "unknown",
+        context_window: int | None = None,
     ) -> None:
         """Initialise the agent and seed its system prompt.
 
@@ -148,6 +150,12 @@ class Agent:
             model: Name of the model serving this agent's decisions, stamped on each
                 usage record so cost can be attributed per model. Defaults to
                 ``"unknown"``; only meaningful when ``usage_log`` is set.
+            context_window: The model's usable context window in tokens. Defaults to
+                ``None``, meaning "use the module-level compaction dials" (the local /
+                Ollama default, and what the compaction tests monkeypatch). The hosted
+                Gemini path passes its much larger window so the agent keeps far more
+                lived history before compacting (its budgets are derived per-agent via
+                :func:`~core.constants.compaction_budgets`).
         """
         self.agent_id: str = agent_id
         self.world: WorldState = world
@@ -158,6 +166,12 @@ class Agent:
         self.memory: MemoryStore = memory if memory is not None else NULL_MEMORY
         self.usage_log: UsageLog | None = usage_log
         self.model: str = model
+        # Per-agent compaction budgets. None -> fall back to the (monkeypatchable)
+        # module-level dials live, so the never-overflow tests are unaffected; a set
+        # window precomputes (prompt_budget, trigger, target, hard_safety).
+        self._budgets: tuple[int, int, int, int] | None = (
+            None if context_window is None else compaction_budgets(context_window)
+        )
 
         # Renamed from "chat_history": these are the turns of a living being.
         self.lifecycle_history: list[dict[str, Any]] = []
@@ -170,6 +184,32 @@ class Agent:
 
         self.event_bus.subscribe(self.agent_id)
         self._load_system_prompt()
+
+    # ---- compaction budgets (per-agent, fall back to the module dials) -----
+    #
+    # When no context_window was given (``self._budgets is None``) these read the
+    # module-level constants LIVE, so the never-overflow tests' monkeypatching still
+    # takes effect; otherwise they return the per-window precomputed values.
+
+    @property
+    def _prompt_budget(self) -> int:
+        """Max tokens the assembled prompt may occupy (the never-overflow ceiling)."""
+        return PROMPT_BUDGET_TOKENS if self._budgets is None else self._budgets[0]
+
+    @property
+    def _compaction_trigger(self) -> int:
+        """Estimated-prompt size above which a breath compacts before deciding."""
+        return COMPACTION_TRIGGER_TOKENS if self._budgets is None else self._budgets[1]
+
+    @property
+    def _compaction_target(self) -> int:
+        """Token target compaction evicts down to."""
+        return COMPACTION_TARGET_TOKENS if self._budgets is None else self._budgets[2]
+
+    @property
+    def _compaction_hard_safety(self) -> int:
+        """Last-real-prompt size that forces a compaction next breath."""
+        return COMPACTION_HARD_SAFETY_TOKENS if self._budgets is None else self._budgets[3]
 
     # ---- liveness ---------------------------------------------------------
 
@@ -602,7 +642,7 @@ class Agent:
             )
             return
         over_estimate = estimate_tokens(self.lifecycle_history, tools) > target
-        over_actual = self._last_prompt_tokens > COMPACTION_HARD_SAFETY_TOKENS
+        over_actual = self._last_prompt_tokens > self._compaction_hard_safety
         if over_estimate or over_actual:
             try:
                 await self.compact()
@@ -662,7 +702,7 @@ class Agent:
         scaffold = self.lifecycle_history[:prefix_no_recap]
         scaffold_tokens = estimate_tokens(scaffold, self._action_schemas())
         verbatim_budget = max(
-            0, COMPACTION_TARGET_TOKENS - scaffold_tokens - COMPACTION_RECAP_RESERVE_TOKENS
+            0, self._compaction_target - scaffold_tokens - COMPACTION_RECAP_RESERVE_TOKENS
         )
         # Keep the largest recent suffix within budget, floored at KEEP_RECENT.
         kept = 0
@@ -746,7 +786,7 @@ class Agent:
         Args:
             tools: The action schemas (counted in the estimate).
         """
-        if estimate_tokens(self.lifecycle_history, tools) <= PROMPT_BUDGET_TOKENS:
+        if estimate_tokens(self.lifecycle_history, tools) <= self._prompt_budget:
             return
         # 1. Shrink the recap turn until the whole prompt fits.
         if self._recap_installed and self._shrink_to_fit(self._recap_index(), tools):
@@ -764,7 +804,7 @@ class Agent:
         # 3. Last resort: drop the oldest whole breath-groups (keep the tail on a user turn).
         prefix = self._prefix_len()
         while (
-            estimate_tokens(self.lifecycle_history, tools) > PROMPT_BUDGET_TOKENS
+            estimate_tokens(self.lifecycle_history, tools) > self._prompt_budget
             and len(self.lifecycle_history) > prefix + 1
         ):
             del self.lifecycle_history[prefix]
@@ -780,18 +820,18 @@ class Agent:
         # first (the system turn, which carries identity, is shrunk LAST and only as an
         # absolute last resort), returning the instant the whole prompt fits.
         for index in range(len(self.lifecycle_history) - 1, -1, -1):
-            if estimate_tokens(self.lifecycle_history, tools) <= PROMPT_BUDGET_TOKENS:
+            if estimate_tokens(self.lifecycle_history, tools) <= self._prompt_budget:
                 return
             self._shrink_to_fit(index, tools)
         # Only the tool schemas are unshrinkable. If they alone exceed the budget the
         # prompt cannot be made to fit -- a gross misconfiguration we log loudly rather
         # than silently overflow.
-        if estimate_tokens(self.lifecycle_history, tools) > PROMPT_BUDGET_TOKENS:
+        if estimate_tokens(self.lifecycle_history, tools) > self._prompt_budget:
             logger.critical(
                 "Agent %r: tool schemas alone exceed PROMPT_BUDGET_TOKENS=%d; the prompt "
                 "cannot be made to fit. Reduce the number or size of action schemas.",
                 self.agent_id,
-                PROMPT_BUDGET_TOKENS,
+                self._prompt_budget,
             )
 
     def _shrink_to_fit(self, index: int, tools: list[dict[str, Any]]) -> bool:
@@ -809,14 +849,14 @@ class Agent:
             ``True`` if the whole prompt now fits ``PROMPT_BUDGET_TOKENS``.
         """
         message = self.lifecycle_history[index]
-        while estimate_tokens(self.lifecycle_history, tools) > PROMPT_BUDGET_TOKENS:
+        while estimate_tokens(self.lifecycle_history, tools) > self._prompt_budget:
             content = str(message["content"])
             if not content:
                 return False
             shrunk = truncate_to_tokens(content, max(0, estimate_tokens([message], []) // 2))
             if len(shrunk) >= len(content):  # no further progress -> drop it entirely
                 message["content"] = ""
-                return estimate_tokens(self.lifecycle_history, tools) <= PROMPT_BUDGET_TOKENS
+                return estimate_tokens(self.lifecycle_history, tools) <= self._prompt_budget
             message["content"] = shrunk
         return True
 
@@ -843,7 +883,7 @@ class Agent:
                 await self.perceive()
                 # Bound the prompt BEFORE deciding -- the never-overflow guarantee.
                 # Only ALIVE agents grow their history, so only they need the check.
-                await self._ensure_context_budget(COMPACTION_TRIGGER_TOKENS)
+                await self._ensure_context_budget(self._compaction_trigger)
                 self._last_decide_failed = False
                 decision = await self.decide()
                 if decision is None:
@@ -861,7 +901,7 @@ class Agent:
                         await self.reflect()
                         # Reflection already re-prefilled the cache, so compact harder
                         # now (lower target) while it is "free" -- prefer reflection.
-                        await self._ensure_context_budget(COMPACTION_TARGET_TOKENS)
+                        await self._ensure_context_budget(self._compaction_target)
             else:
                 # Paralyzed: keep the loop alive to be revived; drain the inbox so the
                 # queue stays bounded (events are missed while incapacitated). No

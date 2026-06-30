@@ -23,9 +23,11 @@ from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
     ATTACK_ENERGY_COST,
+    COMPACTION_TRIGGER_TOKENS,
     GENESIS_SEED,
     MATING_MAX_OFFSPRING,
     PARALYSIS_ENERGY_THRESHOLD,
+    PROMPT_BUDGET_TOKENS,
     REFLECT_EVERY_N_BREATHS,
 )
 from memory.models import Importance
@@ -110,6 +112,24 @@ async def test_init_seeds_system_prompt_with_persona_and_tools(
     assert "Curious and careful." in system  # the agent's persona, verbatim
     for name in populated_registry.list_tools():
         assert name in system
+
+
+def test_agent_derives_compaction_budgets_from_context_window(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """An agent computes its compaction budgets from its own context window.
+
+    Default window reproduces the module dials; a large (Gemini) window scales them up
+    so compaction triggers near 500K tokens instead of ~24K.
+    """
+    default = Agent(ADA, world, event_bus, populated_registry, MockDecider())
+    assert default._compaction_trigger == COMPACTION_TRIGGER_TOKENS
+    assert default._prompt_budget == PROMPT_BUDGET_TOKENS
+
+    big = Agent(BORIS, world, event_bus, populated_registry, MockDecider(), context_window=720_000)
+    assert 480_000 < big._compaction_trigger < 520_000  # ~500K
+    assert big._prompt_budget > default._prompt_budget
+    assert big._compaction_target < big._compaction_trigger < big._compaction_hard_safety
 
 
 async def test_breathe_records_token_usage(
