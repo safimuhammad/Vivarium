@@ -50,6 +50,7 @@ _EVENT_VERBS: dict[str, str] = {
     "speak": "spoke",
     "attack": "attacked someone",
     "agent_died": "died",
+    "agent_decayed": "returned to the earth",
     "agent_recovered": "recovered",
     "agent_paralyzed": "was paralyzed",
     "agent_born": "was born",

@@ -9,11 +9,16 @@ breathing loops. Each step does two jobs:
 #. **Sweep timed-out mating proposals** -- any proposal whose escrow has sat
    unanswered longer than :data:`~core.constants.MATING_PROPOSAL_TIMEOUT_SECONDS`
    is refunded to its initiator and removed, then a timeout event is published.
+#. **Sweep decayed corpses** -- any slain body older than
+   :data:`~core.constants.CORPSE_DECAY_SECONDS` is removed from the world and its
+   passing announced with a LOCAL ``agent_decayed`` event in its region. A body
+   lingers (locally perceivable) so an away being can return and find it, then
+   returns to the earth as a heard beat -- and corpses never pile up (run-forever).
 
 This lives as a *module function* taking both the world and the bus (NOT a
-:class:`~world.world.WorldState` method): the proposal sweep must publish events,
-and making it a world method would invert the ``EventBus -> WorldState``
-dependency direction.
+:class:`~world.world.WorldState` method): the sweeps must publish events, and
+making them world methods would invert the ``EventBus -> WorldState`` dependency
+direction.
 
 Concurrency contract (avoids dict-changed-during-iteration and double-refund):
 :func:`tick` first *snapshots* the pending proposals, then refunds and removes
@@ -30,8 +35,9 @@ import asyncio
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from core.constants import MATING_PROPOSAL_TIMEOUT_SECONDS
+from core.constants import CORPSE_DECAY_SECONDS, MATING_PROPOSAL_TIMEOUT_SECONDS
 from core.logging import get_logger
+from world.agents import AgentStatus
 from world.regions import ResourceTypes
 from world.world import WorldState
 
@@ -48,12 +54,19 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
           initiator's escrowed resources and removes the proposal (keeping
           :attr:`~world.world.WorldState.pending_proposals` and
           :attr:`~world.world.WorldState.pending_proposal_targets` in sync).
+        * For each DEAD agent whose ``died_at`` is older than
+          :data:`~core.constants.CORPSE_DECAY_SECONDS`, removes the body via
+          :meth:`~world.world.WorldState.remove_agent`.
 
     Emits events:
         * One ``"mating_proposal_timeout"`` event
           (:attr:`~bus.events.ScopeType.TARGETED` to the refunded initiator,
-          stamped with ``world.now()``) per swept proposal, published only after
-          all refunds/removals are complete.
+          stamped with ``world.now()``) per swept proposal.
+        * One ``"agent_decayed"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, stamped with the corpse's region and
+          ``world.now()``, ``source`` = the removed agent) per decayed body, so a
+          co-located being perceives the remains return to the earth.
+        All events are published only after every refund/removal is complete.
 
     Args:
         world: The live world state.
@@ -97,8 +110,33 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
             )
         )
 
+    # Sweep decayed corpses. A slain body lingers (perceivable) until it is older
+    # than CORPSE_DECAY_SECONDS, then it is removed and its passing announced LOCALLY
+    # in its region -- so the body's return to the earth is a heard, observed beat
+    # (not a silent cleanup) and corpses never accumulate without bound. Same
+    # snapshot-then-mutate discipline: capture each corpse's region/name, remove it
+    # synchronously, defer the publish.
+    decay_events: list[Event] = []
+    for agent in list(world.get_all_agents()):
+        if agent.status is not AgentStatus.DEAD or agent.died_at is None:
+            continue
+        if now - agent.died_at < CORPSE_DECAY_SECONDS:
+            continue
+        region, name, agent_id = agent.current_position, agent.name, agent.id
+        world.remove_agent(agent)
+        decay_events.append(
+            Event(
+                type="agent_decayed",
+                source=agent_id,
+                payload={"message": f"The remains of {name} return to the earth."},
+                scope=ScopeType.LOCAL,
+                region=region,
+                timestamp=now,
+            )
+        )
+
     # All refunds/removals are done; publishing (the only ``await``) is safe now.
-    for event in timed_out_events:
+    for event in (*timed_out_events, *decay_events):
         await event_bus.publish(event)
 
 

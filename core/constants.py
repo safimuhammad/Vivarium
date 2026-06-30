@@ -100,6 +100,26 @@ PARALYZED agent only when ``energy > 5.0``; a DEAD agent is left untouched.
 """
 
 # ---------------------------------------------------------------------------
+# Death / corpse decay
+# ---------------------------------------------------------------------------
+
+CORPSE_DECAY_SECONDS: Final[float] = 120.0
+"""How long a slain agent's body lingers, perceivable in its region, before the
+world-tick removes it and announces its passing. [design -- 2026-06-29].
+
+Death is a *local* event (see ``combat.py``): only beings present where it happens
+perceive it directly. A being who was away discovers the death by returning and
+finding the body -- which is why the corpse must linger rather than vanish. After
+this window the world-tick removes the body (via ``WorldState.remove_agent``) and
+publishes a LOCAL ``"agent_decayed"`` event in that region, so the body's passing is
+*also* a heard, observed beat -- not a silent cleanup -- and so corpses never
+accumulate without bound (a run-forever requirement). Tracks the same breath cadence
+as the other timing dials: long enough that a wandering partner can plausibly return
+within it, short enough that the world stays uncluttered. A world-rule dial; retune
+by observation.
+"""
+
+# ---------------------------------------------------------------------------
 # Mating
 # ---------------------------------------------------------------------------
 

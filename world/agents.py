@@ -49,6 +49,11 @@ class AgentState:
         offspring_count: Number of offspring this agent has parented. Bounded by
             the design-doc per-agent cap (``MATING_MAX_OFFSPRING``). Written only
             via :meth:`~world.world.WorldState.record_mating`.
+        died_at: World-clock time (seconds) the agent was killed, or ``None`` while
+            it lives. Set by :meth:`~world.world.WorldState.kill_agent`; read by the
+            world-tick corpse-decay sweep to remove the body after
+            ``CORPSE_DECAY_SECONDS`` (so a dead body lingers, is locally
+            perceivable, then returns to the earth).
     """
 
     # identity
@@ -65,6 +70,8 @@ class AgentState:
     # mating bookkeeping (defaulted so existing construction sites are unchanged)
     last_mated_at: float | None = None
     offspring_count: int = 0
+    # death bookkeeping (set by kill_agent; drives corpse decay)
+    died_at: float | None = None
 
 
 def describe_agent_brief(agent: AgentState) -> str:

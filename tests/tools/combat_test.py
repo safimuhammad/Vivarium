@@ -135,7 +135,7 @@ async def test_attack_with_insufficient_energy_is_invalid(
 
 
 async def test_attack_kills_paralyzed_target(world: WorldState, event_bus: EventBus) -> None:
-    """A finishing blow on an already-PARALYZED target kills it + emits ``agent_died`` GLOBAL."""
+    """A finishing blow on a PARALYZED target kills it + emits ``agent_died`` LOCAL."""
     world.modify_agent_energy("wanderer_002", -96.0)  # 100 -> 4.0 => PARALYZED
     paralyzed = world.get_agent("wanderer_002")
     assert paralyzed is not None and paralyzed.status is AgentStatus.PARALYZED
@@ -144,8 +144,41 @@ async def test_attack_kills_paralyzed_target(world: WorldState, event_bus: Event
 
     slain = world.get_agent("wanderer_002")
     assert slain is not None and slain.status is AgentStatus.DEAD
+    # Death is heard only in the region where it happened (no longer a global broadcast).
     died = [e for e in event_bus.get_events("wanderer_001") if e.type == "agent_died"]
-    assert died and died[0].scope is ScopeType.GLOBAL and died[0].source == "wanderer_002"
+    assert died and died[0].scope is ScopeType.LOCAL
+    assert died[0].region == "alpha" and died[0].source == "wanderer_002"
+
+
+async def test_death_is_heard_only_in_its_region(world: WorldState, event_bus: EventBus) -> None:
+    """A co-located witness hears the death; a being in another region does not.
+
+    This is the perception model that lets an away partner *discover* a death by
+    coming home (find-the-body) rather than being told instantly and everywhere.
+    """
+    from world.agents import AgentState
+
+    afar = AgentState(
+        id="wanderer_009",
+        name="Distant",
+        persona="Far away.",
+        current_position="beta",
+        current_energy=100.0,
+        current_materials=50.0,
+        status=AgentStatus.ALIVE,
+    )
+    assert world.add_agent(afar) is True
+    assert event_bus.subscribe("wanderer_009") is True
+    world.modify_agent_energy("wanderer_002", -85.0)  # 100 -> 15.0; 15 - 20 < 0 => DEAD
+
+    await attack(world, event_bus, "wanderer_001", target="wanderer_002")
+
+    # The attacker, co-located in alpha, hears the death.
+    here = [e for e in event_bus.get_events("wanderer_001") if e.type == "agent_died"]
+    assert here and here[0].region == "alpha"
+    # The distant being in beta hears nothing of it.
+    afar_inbox = [e for e in event_bus.get_events("wanderer_009") if e.type == "agent_died"]
+    assert afar_inbox == []
 
 
 async def test_attack_overshoot_kills(world: WorldState, event_bus: EventBus) -> None:

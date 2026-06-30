@@ -56,6 +56,12 @@ def test_mating_proposal_timeout_is_present_and_distinct() -> None:
     assert constants.MATING_PROPOSAL_TIMEOUT_SECONDS != constants.MATING_COOLDOWN_SECONDS
 
 
+def test_corpse_decay_present_and_sane() -> None:
+    """The corpse-decay window exists and is a positive float (a body lingers, briefly)."""
+    assert isinstance(constants.CORPSE_DECAY_SECONDS, float)
+    assert constants.CORPSE_DECAY_SECONDS > 0.0
+
+
 def test_child_share_and_multiplier_are_consistent() -> None:
     """The code multiplier equals the doc share applied to two equal parents."""
     assert constants.MATING_OFFSPRING_MULTIPLIER == constants.MATING_CHILD_SHARE * 2
