@@ -60,17 +60,30 @@ SPEAK_ENERGY_COST: Final[float] = 0.5
 """Energy cost to speak. [code: communication.py ``modify_agent_energy(-0.5)``]
 and [doc] (both agree)."""
 
-ATTACK_ENERGY_COST: Final[float] = 10.0
-"""Energy the attacker spends per attack. [code: combat.py ``ATTACK_ENERGY``]
-and [doc] (both agree)."""
+ATTACK_ENERGY_COST: Final[float] = 15.0
+"""Energy the attacker spends per attack. [code: combat.py ``ATTACK_ENERGY``;
+softened 2026-06-29 from 10.0].
+
+**Why raised.** Aggression must self-limit, or a single well-fed agent snowballs
+into a massacre (the F4 Gemini run: one hoarder killed 5 of 6). At 15/hit and
+:data:`ATTACK_DAMAGE` 20, a kill costs the attacker ~60 energy (4 hits), so a serial
+killer drains itself and must keep harvesting -- which, with hoarding now visible,
+makes it a target others can react to. A world-rule dial; retune by observation.
+"""
 
 # ---------------------------------------------------------------------------
 # Combat
 # ---------------------------------------------------------------------------
 
-ATTACK_DAMAGE: Final[float] = 30.0
-"""Energy drained from the target per attack. [code: combat.py
-``ATTACK_DAMAGE``] and [doc] (both agree)."""
+ATTACK_DAMAGE: Final[float] = 20.0
+"""Energy drained from the target per attack. [code: combat.py ``ATTACK_DAMAGE``;
+softened 2026-06-29 from 30.0].
+
+**Why lowered.** Makes kills less swingy: a healthy (100-energy) target now survives
+~4 hits instead of ~3, giving it breaths to flee, feed, or call for help before a
+finishing blow. Pairs with the raised :data:`ATTACK_ENERGY_COST` so sustained
+aggression burns the aggressor out. A world-rule dial; retune by observation.
+"""
 
 KILL_ENERGY_THRESHOLD: Final[float] = 0.0
 """At or below this energy an agent dies. [doc].

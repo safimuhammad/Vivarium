@@ -12,9 +12,9 @@ from core import constants
 
 def test_values_extracted_from_code_are_preserved() -> None:
     """Constants pulled from tool source keep their current values."""
-    # combat.py
-    assert constants.ATTACK_ENERGY_COST == 10.0
-    assert constants.ATTACK_DAMAGE == 30.0
+    # combat.py (softened 2026-06-29: aggression self-limits, kills less swingy)
+    assert constants.ATTACK_ENERGY_COST == 15.0
+    assert constants.ATTACK_DAMAGE == 20.0
     # communication.py
     assert constants.SPEAK_ENERGY_COST == 0.5
     # mating.py
