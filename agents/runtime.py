@@ -65,6 +65,7 @@ from core.exceptions import EventBusError, ToolError
 from core.logging import get_logger
 from memory.models import Importance, MemoryItem
 from memory.store import NULL_MEMORY, MemoryStore
+from observability.usage import UsageLog, UsageRecord
 from tools.registry import ToolRegistry
 from world.agents import AgentState, AgentStatus, describe_agent_brief
 from world.regions import ResourceTypes
@@ -122,6 +123,8 @@ class Agent:
         decider: Decider,
         pace: float = 0.0,
         memory: MemoryStore | None = None,
+        usage_log: UsageLog | None = None,
+        model: str = "unknown",
     ) -> None:
         """Initialise the agent and seed its system prompt.
 
@@ -139,6 +142,12 @@ class Agent:
             memory: The injected memory store (Sprint 5). Defaults to the inert
                 :data:`~memory.store.NULL_MEMORY`, so an agent runs identically
                 with or without durable memory.
+            usage_log: Optional token-usage sink (observability). When provided, each
+                decision's token counts are recorded for cost accounting; defaults to
+                ``None`` (no recording), so an agent runs identically without it.
+            model: Name of the model serving this agent's decisions, stamped on each
+                usage record so cost can be attributed per model. Defaults to
+                ``"unknown"``; only meaningful when ``usage_log`` is set.
         """
         self.agent_id: str = agent_id
         self.world: WorldState = world
@@ -147,6 +156,8 @@ class Agent:
         self.decider: Decider = decider
         self.pace: float = pace
         self.memory: MemoryStore = memory if memory is not None else NULL_MEMORY
+        self.usage_log: UsageLog | None = usage_log
+        self.model: str = model
 
         # Renamed from "chat_history": these are the turns of a living being.
         self.lifecycle_history: list[dict[str, Any]] = []
@@ -277,7 +288,41 @@ class Agent:
             self._rollback_perception()
             return None
         self.lifecycle_history.append(self._assistant_message(decision))
+        self._record_usage("breath", decision)
         return decision
+
+    def _record_usage(self, kind: str, decision: Decision) -> None:
+        """Record a decision's token usage to the usage log, if one is attached.
+
+        A no-op when no :attr:`usage_log` is configured. Token cost is an operator
+        metric, recorded *outside* the event bus (never an :class:`~bus.events.Event`,
+        never routed to an agent inbox -- agents stay unaware of the simulation).
+
+        Args:
+            kind: ``"breath"`` (a main decision) or ``"reflection"`` (the memory step).
+            decision: The decision whose ``prompt_tokens`` / ``completion_tokens`` to log.
+
+        Side effects:
+            Appends one :class:`~observability.usage.UsageRecord` to :attr:`usage_log`.
+            A sink failure (e.g. a disk error) is logged and swallowed -- an operator
+            metric must never crash a breath (run-forever crash-resistance), mirroring
+            the event-log sink isolation in the bus.
+        """
+        if self.usage_log is None:
+            return
+        try:
+            self.usage_log.record(
+                UsageRecord(
+                    timestamp=self.world.now(),
+                    agent_id=self.agent_id,
+                    model=self.model,
+                    kind=kind,
+                    prompt_tokens=decision.prompt_tokens,
+                    completion_tokens=decision.completion_tokens,
+                )
+            )
+        except Exception:
+            logger.exception("usage-log record failed for agent %r; continuing", self.agent_id)
 
     async def execute(self, tool_calls: list[ToolCall]) -> None:
         """Invoke each requested tool and append a paired ``tool`` result turn.
@@ -389,6 +434,7 @@ class Agent:
         except Exception:
             logger.exception("Reflection decider failed for agent %r", self.agent_id)
             return
+        self._record_usage("reflection", decision)
         for call in decision.tool_calls:
             match call.name:
                 case "remember":

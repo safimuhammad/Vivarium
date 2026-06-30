@@ -96,6 +96,15 @@ def test_build_simulation_gemini_provider_runs_unserialized(tmp_path: Path) -> N
     assert not isinstance(sim.decider, SerializingDecider)
 
 
+def test_build_simulation_wires_usage_log_and_model(tmp_path: Path) -> None:
+    """Each agent gets the usage sink + model name so token cost is recorded + attributed."""
+    sim = _build(tmp_path, MockDecider([Decision()]))
+    assert sim.agents, "expected at least one agent"
+    for agent in sim.agents:
+        assert agent.usage_log is not None
+        assert agent.model == "mock"
+
+
 def _build(tmp_path: Path, decider: MockDecider) -> Simulation:
     """Build a deterministic sim from the shipped world config + a fake vector store."""
     return build_simulation(

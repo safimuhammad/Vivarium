@@ -86,12 +86,17 @@ class Decision:
             by the backend (Ollama ``prompt_eval_count``); ``0`` when unavailable.
             The breathing loop uses it as the ground-truth safety net for
             transcript compaction (Sprint 5.5).
+        completion_tokens: The tokens *generated* for this call, as reported by the
+            backend (Ollama ``eval_count``, Gemini ``candidates_token_count``); ``0``
+            when unavailable. Recorded for cost/observability (input and output are
+            priced differently); not used by the breathing loop itself.
     """
 
     text: str = ""
     thinking: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 
 class Decider(Protocol):
@@ -150,10 +155,16 @@ def parse_ollama_response(response: Any) -> Decision:
 
     # ``prompt_eval_count`` lives on the response (not ``message``); it is the actual
     # prompt size in tokens, the ground-truth safety net for compaction (Sprint 5.5).
+    # ``eval_count`` is the generated-token count, recorded for cost/observability.
     prompt_tokens = getattr(response, "prompt_eval_count", 0) or 0
+    completion_tokens = getattr(response, "eval_count", 0) or 0
 
     return Decision(
-        text=text, thinking=thinking, tool_calls=tool_calls, prompt_tokens=prompt_tokens
+        text=text,
+        thinking=thinking,
+        tool_calls=tool_calls,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
     )
 
 
