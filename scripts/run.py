@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
 from rich.console import Console
 
 from agents.decider import Decider, SerializingDecider, make_default_decider
@@ -64,7 +65,10 @@ COLLAPSE_ZERO_ALIVE_TICKS: int = 3
 #: call :func:`run_simulation` directly with their own tiny values.
 DEFAULT_CONFIG: str = "config/world.yaml"
 DEFAULT_SEED: int = 7
+DEFAULT_PROVIDER: str = "ollama"
+#: Default model per provider; ``--model`` overrides, else the provider picks its own.
 DEFAULT_MODEL: str = "qwen3:8b"
+DEFAULT_GEMINI_MODEL: str = "gemini-3.1-flash-lite"
 DEFAULT_PACE: float = 1.0
 DEFAULT_DURATION: float = 1800.0
 DEFAULT_WORLD_TICK_INTERVAL: float = 5.0
@@ -109,6 +113,7 @@ def build_simulation(
     model: str,
     memory_root: str | Path,
     run_dir: str | Path,
+    provider: str = "ollama",
     decider: Decider | None = None,
     vector_store_factory: Callable[[str], VectorStore] | None = None,
 ) -> Simulation:
@@ -130,11 +135,15 @@ def build_simulation(
         config_path: Path to the ``world.yaml`` describing regions and agents.
         seed: RNG seed threaded into the world (reproducible run) and used to name
             the JSONL replay file (``run_<seed>.jsonl``).
-        model: Ollama model name for the default decider; ignored when ``decider``
-            is supplied.
+        model: Model name for the default decider; ignored when ``decider`` is
+            supplied. Interpreted per ``provider`` (an Ollama model for ``"ollama"``,
+            a hosted model for ``"gemini"``).
         memory_root: Root directory under which each agent's ``<agent_id>/`` memory
             directory is created (``FileMemoryStore`` appends the id itself).
         run_dir: Directory the JSONL replay log is written into.
+        provider: Decider backend to build when ``decider`` is ``None`` -- ``"ollama"``
+            (local, the default, serialized one-at-a-time) or ``"gemini"`` (hosted,
+            left UNserialized so agents breathe concurrently).
         decider: Optional pre-built decider (tests inject a mock); when ``None`` a
             production :func:`~agents.decider.make_default_decider` is built for
             ``model``. Either way it is serialized (unless already a
@@ -157,10 +166,16 @@ def build_simulation(
     register_builtins(registry)
 
     # A NEW variable so the param's ``Decider | None`` is never reassigned to a
-    # different type (keeps ``mypy --strict`` happy); then serialize exactly once.
-    inner: Decider = decider if decider is not None else make_default_decider(model)
+    # different type (keeps ``mypy --strict`` happy). Ollama serves one request at a
+    # time, so its decider is serialized exactly once; the Gemini (hosted) path serves
+    # requests in parallel, so it is left UNserialized and agents breathe concurrently.
+    inner: Decider = (
+        decider if decider is not None else make_default_decider(model, provider=provider)
+    )
     serialized: Decider = (
-        inner if isinstance(inner, SerializingDecider) else SerializingDecider(inner)
+        inner
+        if (provider == "gemini" or isinstance(inner, SerializingDecider))
+        else SerializingDecider(inner)
     )
 
     def _real_vector_store(agent_id: str) -> VectorStore:  # pragma: no cover - prod path
@@ -558,7 +573,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="Path to world.yaml.")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="RNG seed (reproducible).")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Ollama model name.")
+    parser.add_argument(
+        "--provider",
+        default=DEFAULT_PROVIDER,
+        choices=("ollama", "gemini"),
+        help="Decider backend: local 'ollama' (default) or hosted 'gemini'.",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model name; defaults per provider (qwen3:8b for ollama, "
+        f"{DEFAULT_GEMINI_MODEL} for gemini).",
+    )
     parser.add_argument(
         "--pace", type=float, default=DEFAULT_PACE, help="Inter-breath sleep (seconds)."
     )
@@ -595,13 +621,19 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - live e
     """
     args = _build_parser().parse_args(argv)
 
+    # Load .env so a hosted provider's key (e.g. GEMINI_API_KEY) is present without the
+    # caller exporting it; the key is read inside the SDK, never logged here.
+    load_dotenv()
+
     console = Console(stderr=True)
     configure_rich_logging(console)
 
+    model = args.model or (DEFAULT_GEMINI_MODEL if args.provider == "gemini" else DEFAULT_MODEL)
     sim = build_simulation(
         args.config,
         seed=args.seed,
-        model=args.model,
+        model=model,
+        provider=args.provider,
         memory_root=args.memory_root,
         run_dir=args.run_dir,
     )
