@@ -56,6 +56,15 @@ def test_mating_proposal_timeout_is_present_and_distinct() -> None:
     assert constants.MATING_PROPOSAL_TIMEOUT_SECONDS != constants.MATING_COOLDOWN_SECONDS
 
 
+def test_genesis_seed_is_a_neutral_self_defining_prompt() -> None:
+    """The single shared birth seed exists, is substantial prose, and grants self-definition."""
+    seed = constants.GENESIS_SEED
+    assert isinstance(seed, str) and len(seed.strip()) > 100
+    lowered = seed.lower()
+    # It must invite the agent to choose/reshape who it is (not prescribe a personality).
+    assert any(word in lowered for word in ("decide", "choose", "reshape"))
+
+
 def test_corpse_decay_present_and_sane() -> None:
     """The corpse-decay window exists and is a positive float (a body lingers, briefly)."""
     assert isinstance(constants.CORPSE_DECAY_SECONDS, float)

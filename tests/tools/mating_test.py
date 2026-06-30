@@ -8,7 +8,8 @@ Mating is a two-step escrow:
   the proposal is removed.
 * ``accept_mating`` -- the acceptor commits the *same* resources, both
   contributions are consumed, and an offspring agent is spawned (inheriting
-  ``committed * MATING_OFFSPRING_MULTIPLIER`` of each resource and both personas).
+  ``committed * MATING_OFFSPRING_MULTIPLIER`` of each resource; its persona is the
+  shared ``GENESIS_SEED``, not its parents' -- offspring author their own identity).
 
 The final test pins determinism: the offspring id and Faker name route through
 ``world.rng``, so the same seed reproduces the same offspring identity.
@@ -20,6 +21,7 @@ from bus.event_bus import EventBus
 from bus.events import ScopeType
 from core.constants import (
     AGENT_ID_CATEGORIES,
+    GENESIS_SEED,
     MATING_COOLDOWN_SECONDS,
     MATING_MAX_OFFSPRING,
     MATING_OFFSPRING_MULTIPLIER,
@@ -312,7 +314,9 @@ async def test_accept_consumes_both_contributions_and_spawns_offspring(
     assert offspring.current_materials == 30.0 * MATING_OFFSPRING_MULTIPLIER  # 48.0
     assert offspring.current_position == acceptor.current_position  # born at acceptor
     assert offspring.status is AgentStatus.ALIVE
-    assert offspring.persona == f"{initiator.persona}|{acceptor.persona}"
+    # Offspring are born from the shared genesis seed too — they author their own
+    # identity, not inherit their parents' (no nature-by-concatenation).
+    assert offspring.persona == GENESIS_SEED
     category, _, suffix = offspring.id.partition("_")
     assert category in AGENT_ID_CATEGORIES
     assert len(suffix) == 4

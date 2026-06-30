@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from core.constants import GENESIS_SEED
 from world.agents import AgentState, AgentStatus
 from world.regions import Region
 
@@ -107,18 +108,23 @@ class AgentConfig(BaseModel):
     Attributes:
         id: Stable unique identifier, conventionally ``"{category}_{suffix}"``.
         name: Human-readable display name.
-        persona: Free-text personality/identity description.
         current_position: Name of the region the agent starts in.
         current_energy: Starting energy reserve.
         current_materials: Starting materials reserve.
         status: Lifecycle status as an :class:`AgentStatus` member.
+
+    Note:
+        There is intentionally **no** ``persona`` field. Every agent is born from the
+        single shared :data:`~core.constants.GENESIS_SEED` and authors its own identity
+        thereafter; a per-agent persona would re-introduce the hand-written
+        personalities the design exists to avoid. Supplying one fails validation
+        (``extra='forbid'``).
     """
 
     model_config = _STRICT
 
     id: str
     name: str
-    persona: str
     current_position: str
     current_energy: float = Field(ge=0.0)
     current_materials: float = Field(ge=0.0)
@@ -127,14 +133,19 @@ class AgentConfig(BaseModel):
     def to_agent_state(self) -> AgentState:
         """Convert this validated config into a domain :class:`AgentState`.
 
+        The agent's ``persona`` is set to the shared :data:`~core.constants.GENESIS_SEED`
+        (the one prompt every being is born from); it diverges only through its own
+        lived experience and self-revision.
+
         Returns:
             A new mutable :class:`~world.agents.AgentState` with ``status`` as an
-            :class:`~world.agents.AgentStatus` enum member.
+            :class:`~world.agents.AgentStatus` enum member and ``persona`` set to the
+            genesis seed.
         """
         return AgentState(
             id=self.id,
             name=self.name,
-            persona=self.persona,
+            persona=GENESIS_SEED,
             current_position=self.current_position,
             current_energy=self.current_energy,
             current_materials=self.current_materials,

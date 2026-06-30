@@ -16,6 +16,7 @@ import pytest
 from pydantic import ValidationError
 
 from config.schema import AgentConfig, RegionConfig, WorldConfig
+from core.constants import GENESIS_SEED
 from world.agents import AgentState, AgentStatus
 from world.regions import Region
 
@@ -40,7 +41,6 @@ def valid_agent_data() -> dict[str, Any]:
     return {
         "id": "wanderer_001",
         "name": "Ada",
-        "persona": "Curious and careful.",
         "current_position": "alpha",
         "current_energy": 100,
         "current_materials": 5,
@@ -133,18 +133,27 @@ def test_agent_config_forbids_extra_field() -> None:
 def test_agent_config_missing_required_field() -> None:
     """A missing required agent field raises a ``ValidationError``."""
     data = valid_agent_data()
-    del data["persona"]
+    del data["name"]
     with pytest.raises(ValidationError):
         AgentConfig.model_validate(data)
 
 
-def test_agent_config_to_agent_state() -> None:
-    """``to_agent_state`` yields an :class:`AgentState` with the enum status."""
+def test_agent_config_persona_is_not_configurable() -> None:
+    """Persona is no longer a per-agent field: supplying one is rejected (extra=forbid)."""
+    data = valid_agent_data()
+    data["persona"] = "a hand-written personality"
+    with pytest.raises(ValidationError):
+        AgentConfig.model_validate(data)
+
+
+def test_agent_config_to_agent_state_uses_the_genesis_seed() -> None:
+    """Every agent is born from the single shared GENESIS_SEED, not a per-agent persona."""
     agent = AgentConfig.model_validate(valid_agent_data()).to_agent_state()
     assert isinstance(agent, AgentState)
     assert agent.id == "wanderer_001"
     assert agent.status is AgentStatus.ALIVE
     assert isinstance(agent.current_energy, float)
+    assert agent.persona == GENESIS_SEED
 
 
 # ---- WorldConfig ----

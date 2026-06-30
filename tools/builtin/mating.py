@@ -43,6 +43,7 @@ from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
     AGENT_ID_CATEGORIES,
+    GENESIS_SEED,
     MATING_COOLDOWN_SECONDS,
     MATING_MAX_OFFSPRING,
     MATING_MIN_ENERGY_CONTRIBUTION,
@@ -381,8 +382,10 @@ async def accept_mating(
     faker = Faker()
     faker.seed_instance(world.rng.getrandbits(32))
     offspring_name = faker.first_name()
-    # Persona currently just concatenated; later phases will do LLM-based infusion.
-    offspring_persona = f"{agent_init.persona}|{agent_accept.persona}"
+    # Offspring are born from the same shared GENESIS_SEED as the founders: they are
+    # not handed their parents' natures (no inheritance-by-concatenation). Like every
+    # being, a child discovers and authors its own identity through living + reflection.
+    offspring_persona = GENESIS_SEED
     # Not exactly the sum committed -- some is "burned" in the process.
     offspring_energy = resources.get(ResourceTypes.ENERGY, 0.0) * MATING_OFFSPRING_MULTIPLIER
     offspring_materials = resources.get(ResourceTypes.MATERIALS, 0.0) * MATING_OFFSPRING_MULTIPLIER

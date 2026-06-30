@@ -47,7 +47,6 @@ VALID_YAML: str = textwrap.dedent(
     agents:
       - id: "wanderer_001"
         name: "Ada"
-        persona: "Curious and careful."
         current_position: "alpha"
         current_energy: 100
         current_materials: 5
@@ -187,7 +186,6 @@ def test_missing_regions_key_raises_config_error(tmp_path: Path) -> None:
         agents:
           - id: "wanderer_001"
             name: "Ada"
-            persona: "Curious."
             current_position: "alpha"
             current_energy: 100
             current_materials: 5
@@ -269,7 +267,6 @@ def test_unknown_status_raises_config_error(tmp_path: Path) -> None:
         agents:
           - id: "wanderer_001"
             name: "Ada"
-            persona: "Curious."
             current_position: "alpha"
             current_energy: 100
             current_materials: 5
@@ -288,7 +285,6 @@ def test_unknown_extra_field_raises_config_error(tmp_path: Path) -> None:
         agents:
           - id: "wanderer_001"
             name: "Ada"
-            persona: "Curious."
             current_position: "alpha"
             current_energy: 100
             current_materials: 5
