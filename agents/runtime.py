@@ -304,19 +304,25 @@ class Agent:
 
         Side effects:
             Appends one :class:`~observability.usage.UsageRecord` to :attr:`usage_log`.
+            A sink failure (e.g. a disk error) is logged and swallowed -- an operator
+            metric must never crash a breath (run-forever crash-resistance), mirroring
+            the event-log sink isolation in the bus.
         """
         if self.usage_log is None:
             return
-        self.usage_log.record(
-            UsageRecord(
-                timestamp=self.world.now(),
-                agent_id=self.agent_id,
-                model=self.model,
-                kind=kind,
-                prompt_tokens=decision.prompt_tokens,
-                completion_tokens=decision.completion_tokens,
+        try:
+            self.usage_log.record(
+                UsageRecord(
+                    timestamp=self.world.now(),
+                    agent_id=self.agent_id,
+                    model=self.model,
+                    kind=kind,
+                    prompt_tokens=decision.prompt_tokens,
+                    completion_tokens=decision.completion_tokens,
+                )
             )
-        )
+        except Exception:
+            logger.exception("usage-log record failed for agent %r; continuing", self.agent_id)
 
     async def execute(self, tool_calls: list[ToolCall]) -> None:
         """Invoke each requested tool and append a paired ``tool`` result turn.

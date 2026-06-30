@@ -152,6 +152,31 @@ async def test_breathe_without_usage_log_does_not_crash(
     assert agent.breath_count == 1
 
 
+async def test_breathe_survives_a_failing_usage_log(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A usage-sink error is swallowed so a metric never crashes a breath (run-forever)."""
+
+    class _BoomLog:
+        def record(self, usage: object) -> None:
+            raise RuntimeError("disk full")
+
+    decider = MockDecider([Decision(tool_calls=[ToolCall("look_around")])])
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        decider,
+        pace=0.0,
+        usage_log=_BoomLog(),
+        model="m",
+    )
+
+    await agent.breathe()  # must not raise
+    assert agent.breath_count == 1
+
+
 async def test_breathe_appends_user_assistant_and_paired_tool(
     world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
 ) -> None:
