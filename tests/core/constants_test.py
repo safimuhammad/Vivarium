@@ -12,9 +12,9 @@ from core import constants
 
 def test_values_extracted_from_code_are_preserved() -> None:
     """Constants pulled from tool source keep their current values."""
-    # combat.py
-    assert constants.ATTACK_ENERGY_COST == 10.0
-    assert constants.ATTACK_DAMAGE == 30.0
+    # combat.py (softened 2026-06-29: aggression self-limits, kills less swingy)
+    assert constants.ATTACK_ENERGY_COST == 15.0
+    assert constants.ATTACK_DAMAGE == 20.0
     # communication.py
     assert constants.SPEAK_ENERGY_COST == 0.5
     # mating.py
@@ -49,8 +49,17 @@ def test_mating_proposal_timeout_is_present_and_distinct() -> None:
     """The proposal-timeout constant exists, is a float, and differs from cooldown."""
     assert isinstance(constants.MATING_PROPOSAL_TIMEOUT_SECONDS, float)
     assert constants.MATING_PROPOSAL_TIMEOUT_SECONDS > 0.0
+    # Retuned for fast concurrent (Gemini) breathing: a standing offer should expire
+    # in tens of seconds, not minutes, so stale escrow clears quickly.
+    assert constants.MATING_PROPOSAL_TIMEOUT_SECONDS == 45.0
     # Distinct concept from the between-matings cooldown (DD5 / spec Section 4.7).
     assert constants.MATING_PROPOSAL_TIMEOUT_SECONDS != constants.MATING_COOLDOWN_SECONDS
+
+
+def test_corpse_decay_present_and_sane() -> None:
+    """The corpse-decay window exists and is a positive float (a body lingers, briefly)."""
+    assert isinstance(constants.CORPSE_DECAY_SECONDS, float)
+    assert constants.CORPSE_DECAY_SECONDS > 0.0
 
 
 def test_child_share_and_multiplier_are_consistent() -> None:

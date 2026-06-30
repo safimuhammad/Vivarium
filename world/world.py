@@ -300,15 +300,18 @@ class WorldState:
     def kill_agent(self, agent_id: str) -> bool:
         """Mark an agent DEAD and clean up its pending mating proposals.
 
-        The sole death writer (Sprint 6). Sets status to DEAD, then sweeps proposals:
+        The sole death writer (Sprint 6). Sets status to DEAD and stamps ``died_at``
+        with the current world clock (so the world-tick can later decay the corpse),
+        then sweeps proposals:
         where the dead agent is the *initiator*, the proposal is removed and its escrow is
         abandoned (not refunded to a corpse); where the dead agent is a *target*, the
         proposal is removed and the still-live initiator's escrow is refunded immediately
         (rather than waiting for the world-tick timeout sweep). Emits no event (the caller
         emits ``agent_died``).
 
-        Mutates the agent's :attr:`~world.agents.AgentState.status`, the escrow balances
-        of any still-live initiators (via :meth:`modify_agent_energy` /
+        Mutates the agent's :attr:`~world.agents.AgentState.status` and
+        :attr:`~world.agents.AgentState.died_at`, the escrow balances of any
+        still-live initiators (via :meth:`modify_agent_energy` /
         :meth:`modify_agent_materials`), and both :attr:`pending_proposals` and
         :attr:`pending_proposal_targets`.
 
@@ -321,6 +324,8 @@ class WorldState:
         if agent_id not in self.agents:
             return False
         self.agents[agent_id].status = AgentStatus.DEAD
+        # Stamp time-of-death so the world-tick can decay the corpse later.
+        self.agents[agent_id].died_at = self.now()
         # Initiator died: drop its proposals, abandon escrow.
         for target in list(self.get_proposed_targets(agent_id)):
             self.remove_proposal(agent_id, target)

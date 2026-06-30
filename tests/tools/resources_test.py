@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from bus.event_bus import EventBus
 from bus.events import ScopeType
+from core.constants import HOARDING_ENERGY_THRESHOLD, HOARDING_MATERIALS_THRESHOLD
 from tools.builtin.resources import harvest_resources, transfer_resource
 from world.agents import AgentState, AgentStatus
 from world.regions import ResourceTypes
@@ -93,6 +94,51 @@ async def test_harvest_missing_agent_returns_error(world: WorldState, event_bus:
     )
     assert result.startswith("Error:")
     assert event_bus.get_events("wanderer_001") == []
+
+
+async def test_harvest_crossing_into_hoarding_announces_it(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Harvesting that lifts an agent over a hoarding threshold emits a LOCAL announcement.
+
+    Makes a new hoarder *visible* to co-located beings (and gives the chronicle a beat),
+    so others can react to a growing hoard.
+    """
+    region = world.get_region("alpha")
+    assert region is not None
+    region.current_materials = 500.0  # enough stock to push the harvester over the line
+    # wanderer_001 starts at 50 materials; harvest past the threshold (50 -> 350 > 300).
+    amount = HOARDING_MATERIALS_THRESHOLD  # 300 -> final 350
+    await harvest_resources(
+        world, event_bus, "wanderer_001", resource_type=ResourceTypes.MATERIALS, amount=amount
+    )
+
+    started = [
+        e for e in event_bus.get_events("wanderer_001") if e.type == "agent_started_hoarding"
+    ]
+    assert len(started) == 1
+    assert started[0].scope is ScopeType.LOCAL and started[0].region == "alpha"
+    assert started[0].source == "wanderer_001" and "message" in started[0].payload
+
+
+async def test_harvest_when_already_hoarding_does_not_reannounce(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A being already over the threshold that harvests more does not re-announce."""
+    region = world.get_region("alpha")
+    assert region is not None
+    region.current_materials = 500.0
+    agent = world.get_agent("wanderer_001")
+    assert agent is not None
+    agent.current_materials = HOARDING_MATERIALS_THRESHOLD + 100.0  # already hoarding
+
+    await harvest_resources(
+        world, event_bus, "wanderer_001", resource_type=ResourceTypes.MATERIALS, amount=20.0
+    )
+
+    assert [
+        e for e in event_bus.get_events("wanderer_001") if e.type == "agent_started_hoarding"
+    ] == []
 
 
 # ---- transfer_resource ----------------------------------------------------
@@ -543,3 +589,52 @@ async def test_transfer_to_self_is_invalid_no_event(world: WorldState, event_bus
     assert sender is not None and sender.current_energy == 100.0  # unchanged
     assert result.startswith("Invalid:")
     assert event_bus.get_events("wanderer_001") == []
+
+
+async def test_transfer_energy_crossing_into_hoarding_announces_it(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A transfer that lifts the RECEIVER over the energy threshold announces it."""
+    sender = world.get_agent("wanderer_001")
+    assert sender is not None
+    sender.current_energy = 600.0  # enough to push the receiver over
+    # receiver wanderer_002 has 100 energy; +450 -> 550 (> 500 threshold)
+    await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.ENERGY,
+        amount=HOARDING_ENERGY_THRESHOLD - 50.0,
+    )
+
+    started = [
+        e for e in event_bus.get_events("wanderer_002") if e.type == "agent_started_hoarding"
+    ]
+    assert len(started) == 1
+    assert started[0].scope is ScopeType.LOCAL and started[0].region == "alpha"
+    assert started[0].source == "wanderer_002"
+
+
+async def test_transfer_materials_crossing_into_hoarding_announces_it(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A transfer that lifts the RECEIVER over the materials threshold announces it."""
+    sender = world.get_agent("wanderer_001")
+    assert sender is not None
+    sender.current_materials = 400.0
+    # receiver wanderer_002 has 50 materials; +300 -> 350 (> 300 threshold)
+    await transfer_resource(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        resource_type=ResourceTypes.MATERIALS,
+        amount=HOARDING_MATERIALS_THRESHOLD,
+    )
+
+    started = [
+        e for e in event_bus.get_events("wanderer_002") if e.type == "agent_started_hoarding"
+    ]
+    assert len(started) == 1
+    assert started[0].source == "wanderer_002" and started[0].region == "alpha"

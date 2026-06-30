@@ -20,9 +20,11 @@ import pytest
 
 import world.tick as tick_module
 from bus.event_bus import EventBus
-from core.constants import MATING_PROPOSAL_TIMEOUT_SECONDS
+from bus.events import ScopeType
+from core.constants import CORPSE_DECAY_SECONDS, MATING_PROPOSAL_TIMEOUT_SECONDS
 from tests.conftest import FakeClock
 from tools.builtin.mating import initiate_mating, reject_mating
+from world.agents import AgentState, AgentStatus
 from world.regions import ResourceTypes
 from world.tick import _tick_once_resilient, tick
 from world.world import WorldState
@@ -173,6 +175,61 @@ async def test_tick_leaves_recent_proposal_intact(
         ResourceTypes.ENERGY: 50.0,
         ResourceTypes.MATERIALS: 30.0,
     }
+
+
+# ---- Corpse-decay sweep ---------------------------------------------------
+
+
+async def test_tick_decays_corpse_past_window_and_announces_it(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """A body older than the decay window is removed; a LOCAL ``agent_decayed`` is heard.
+
+    The announcement is region-scoped: a co-located being perceives the body's
+    passing, a being in another region does not.
+    """
+    afar = AgentState(
+        id="wanderer_009",
+        name="Distant",
+        persona="Far away.",
+        current_position="beta",
+        current_energy=100.0,
+        current_materials=50.0,
+        status=AgentStatus.ALIVE,
+    )
+    assert world.add_agent(afar) is True
+    assert event_bus.subscribe("wanderer_009") is True
+    # Boris dies in alpha; Ada (wanderer_001) remains there to witness the decay.
+    world.kill_agent("wanderer_002")
+    fake_clock.advance(CORPSE_DECAY_SECONDS + 1.0)
+
+    await tick(world, event_bus)
+
+    # The body is gone from the world.
+    assert world.get_agent("wanderer_002") is None
+    # A co-located witness hears the body's passing, scoped to alpha.
+    here = [e for e in event_bus.get_events("wanderer_001") if e.type == "agent_decayed"]
+    assert len(here) == 1
+    assert here[0].scope is ScopeType.LOCAL
+    assert here[0].region == "alpha"
+    assert here[0].source == "wanderer_002"
+    assert "message" in here[0].payload
+    # A being in another region perceives nothing of it.
+    assert [e for e in event_bus.get_events("wanderer_009") if e.type == "agent_decayed"] == []
+
+
+async def test_tick_leaves_fresh_corpse_intact(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """A body younger than the decay window lingers (still perceivable), no announcement."""
+    world.kill_agent("wanderer_002")
+    fake_clock.advance(CORPSE_DECAY_SECONDS - 1.0)
+
+    await tick(world, event_bus)
+
+    corpse = world.get_agent("wanderer_002")
+    assert corpse is not None and corpse.status is AgentStatus.DEAD
+    assert [e for e in event_bus.get_events("wanderer_001") if e.type == "agent_decayed"] == []
 
 
 async def test_tick_and_reject_interleave_yield_single_refund(

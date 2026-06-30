@@ -629,6 +629,15 @@ def test_kill_agent_sets_dead(world: WorldState) -> None:
     assert world.kill_agent("nope") is False
 
 
+def test_kill_agent_stamps_time_of_death(world: WorldState) -> None:
+    """``kill_agent`` records ``died_at`` (world clock) so the corpse can later decay."""
+    before = world.get_agent("wanderer_001")
+    assert before is not None and before.died_at is None
+    world.kill_agent("wanderer_001")
+    dead = world.get_agent("wanderer_001")
+    assert dead is not None and dead.died_at == world.now()
+
+
 def test_kill_initiator_abandons_escrow_and_removes_proposal(world: WorldState) -> None:
     """Killing a proposal initiator drops the proposal and abandons its escrow."""
     world.add_proposal("wanderer_001", "wanderer_002", {ResourceTypes.ENERGY: 50.0})

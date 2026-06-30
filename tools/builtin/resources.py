@@ -15,7 +15,7 @@ import math
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from world.agents import AgentState, AgentStatus
+from world.agents import AgentState, AgentStatus, is_hoarding
 from world.regions import Region, ResourceTypes
 from world.world import WorldState
 
@@ -103,6 +103,50 @@ def _resource_handler_by_agent(
     return True, None
 
 
+async def _announce_if_started_hoarding(
+    event_bus: EventBus,
+    agent: AgentState,
+    *,
+    was_hoarding: bool,
+    region: str,
+    timestamp: float,
+) -> None:
+    """Publish a LOCAL ``agent_started_hoarding`` event iff this op crossed the threshold.
+
+    Shared by :func:`harvest_resources` and :func:`transfer_resource` so a being that
+    becomes a hoarder by *any* resource-credit path is announced once, the moment it
+    crosses (mirroring the ``was_paralyzed`` revival pattern). Does nothing if the
+    agent was already hoarding or is still below both thresholds.
+
+    Args:
+        event_bus: The bus the event is published to.
+        agent: The credited agent (its ``current_*`` already reflect the credit).
+        was_hoarding: Whether the agent was hoarding *before* the credit.
+        region: Region to scope the LOCAL announcement to.
+        timestamp: World-clock stamp for the event.
+
+    Returns:
+        None.
+    """
+    if was_hoarding or not is_hoarding(agent):
+        return
+    await event_bus.publish(
+        Event(
+            "agent_started_hoarding",
+            agent.id,
+            {
+                "message": (
+                    f"{agent.name} (ID:{agent.id}) is now sitting on a hoard "
+                    f"(energy {agent.current_energy}, materials {agent.current_materials})."
+                )
+            },
+            scope=ScopeType.LOCAL,
+            region=region,
+            timestamp=timestamp,
+        )
+    )
+
+
 async def harvest_resources(
     world: WorldState,
     event_bus: EventBus,
@@ -119,6 +163,11 @@ async def harvest_resources(
     Emits events:
         * One ``"resource_changed"`` event (:attr:`~bus.events.ScopeType.LOCAL`,
           stamped with ``world.now()``) to the agent's region.
+        * One ``"agent_started_hoarding"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, stamped with the region and
+          ``world.now()``) **only** when this harvest lifts the agent over a hoarding
+          threshold (see :func:`~world.agents.is_hoarding`), so co-located beings
+          perceive the new hoarder. Only the crossing is announced.
 
     Args:
         world: The live world state.
@@ -157,6 +206,11 @@ async def harvest_resources(
             f"available resource {resource}"
         )
 
+    # Snapshot hoarding state before the harvest so we can detect a *crossing* into
+    # hoarding (and announce it once), mirroring the was_paralyzed revival pattern in
+    # transfer_resource.
+    was_hoarding = is_hoarding(agent_state)
+
     if req_resource == ResourceTypes.ENERGY:
         world.modify_region_energy(curr_region.name, -quantity)
         world.modify_agent_energy(agent_id, quantity)
@@ -178,6 +232,17 @@ async def harvest_resources(
         timestamp=world.now(),
     )
     await event_bus.publish(event_message)
+
+    # If this harvest just lifted the agent over a hoarding threshold, announce it
+    # LOCALLY so co-located beings perceive the new hoarder (and the chronicle gets a
+    # beat). Only the crossing is announced -- an already-hoarding agent is silent.
+    await _announce_if_started_hoarding(
+        event_bus,
+        agent_state,
+        was_hoarding=was_hoarding,
+        region=curr_region.name,
+        timestamp=world.now(),
+    )
     return (
         f"Successfully harvested {req_resource} from Region {curr_region.name}\n"
         f" Agent Energy: {agent_state.current_energy}|"
@@ -210,6 +275,10 @@ async def transfer_resource(
           targeting the receiver, stamped with ``world.now()``) **only** when an
           energy transfer lifts a ``PARALYZED`` receiver back to ``ALIVE``, so
           nearby agents perceive the revival.
+        * One ``"agent_started_hoarding"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, source = the receiver, stamped with
+          the region and ``world.now()``) **only** when the transfer lifts the
+          receiver over a hoarding threshold (see :func:`~world.agents.is_hoarding`).
 
     Args:
         world: The live world state.
@@ -265,6 +334,10 @@ async def transfer_resource(
             f"Your Current {req_resource} is {resource} amount exceeding current available"
         )
 
+    # Snapshot the receiver's hoarding state before the credit so we can announce a
+    # crossing once (covers both the energy and materials branches below).
+    receiver_was_hoarding = is_hoarding(receiver_agent)
+
     if req_resource == ResourceTypes.ENERGY:
         was_paralyzed = receiver_agent.status is AgentStatus.PARALYZED
         world.modify_agent_energy(sender_agent.id, -quantity)
@@ -305,6 +378,16 @@ async def transfer_resource(
         timestamp=world.now(),
     )
     await event_bus.publish(event_message)
+
+    # A gift can also make a hoarder: announce if this transfer lifted the receiver
+    # over a threshold (co-located, so the sender's region is the receiver's region).
+    await _announce_if_started_hoarding(
+        event_bus,
+        receiver_agent,
+        was_hoarding=receiver_was_hoarding,
+        region=receiver_agent.current_position,
+        timestamp=world.now(),
+    )
     return (
         f"Successfully transferred {req_resource} to "
         f"Agent ID:{receiver_agent.id}|Agent Name:{receiver_agent.name},\n"

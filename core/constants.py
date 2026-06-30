@@ -60,17 +60,30 @@ SPEAK_ENERGY_COST: Final[float] = 0.5
 """Energy cost to speak. [code: communication.py ``modify_agent_energy(-0.5)``]
 and [doc] (both agree)."""
 
-ATTACK_ENERGY_COST: Final[float] = 10.0
-"""Energy the attacker spends per attack. [code: combat.py ``ATTACK_ENERGY``]
-and [doc] (both agree)."""
+ATTACK_ENERGY_COST: Final[float] = 15.0
+"""Energy the attacker spends per attack. [code: combat.py ``ATTACK_ENERGY``;
+softened 2026-06-29 from 10.0].
+
+**Why raised.** Aggression must self-limit, or a single well-fed agent snowballs
+into a massacre (the F4 Gemini run: one hoarder killed 5 of 6). At 15/hit and
+:data:`ATTACK_DAMAGE` 20, a kill costs the attacker ~60 energy (4 hits), so a serial
+killer drains itself and must keep harvesting -- which, with hoarding now visible,
+makes it a target others can react to. A world-rule dial; retune by observation.
+"""
 
 # ---------------------------------------------------------------------------
 # Combat
 # ---------------------------------------------------------------------------
 
-ATTACK_DAMAGE: Final[float] = 30.0
-"""Energy drained from the target per attack. [code: combat.py
-``ATTACK_DAMAGE``] and [doc] (both agree)."""
+ATTACK_DAMAGE: Final[float] = 20.0
+"""Energy drained from the target per attack. [code: combat.py ``ATTACK_DAMAGE``;
+softened 2026-06-29 from 30.0].
+
+**Why lowered.** Makes kills less swingy: a healthy (100-energy) target now survives
+~4 hits instead of ~3, giving it breaths to flee, feed, or call for help before a
+finishing blow. Pairs with the raised :data:`ATTACK_ENERGY_COST` so sustained
+aggression burns the aggressor out. A world-rule dial; retune by observation.
+"""
 
 KILL_ENERGY_THRESHOLD: Final[float] = 0.0
 """At or below this energy an agent dies. [doc].
@@ -84,6 +97,26 @@ PARALYSIS_ENERGY_THRESHOLD: Final[float] = 5.0
 Enforced as of Sprint 4 Phase 2: ``WorldState.modify_agent_energy`` paralyses an
 ALIVE agent at ``energy <= 5.0`` (inclusive, including 0.0) and revives a
 PARALYZED agent only when ``energy > 5.0``; a DEAD agent is left untouched.
+"""
+
+# ---------------------------------------------------------------------------
+# Death / corpse decay
+# ---------------------------------------------------------------------------
+
+CORPSE_DECAY_SECONDS: Final[float] = 120.0
+"""How long a slain agent's body lingers, perceivable in its region, before the
+world-tick removes it and announces its passing. [design -- 2026-06-29].
+
+Death is a *local* event (see ``combat.py``): only beings present where it happens
+perceive it directly. A being who was away discovers the death by returning and
+finding the body -- which is why the corpse must linger rather than vanish. After
+this window the world-tick removes the body (via ``WorldState.remove_agent``) and
+publishes a LOCAL ``"agent_decayed"`` event in that region, so the body's passing is
+*also* a heard, observed beat -- not a silent cleanup -- and so corpses never
+accumulate without bound (a run-forever requirement). Tracks the same breath cadence
+as the other timing dials: long enough that a wandering partner can plausibly return
+within it, short enough that the world stays uncluttered. A world-rule dial; retune
+by observation.
 """
 
 # ---------------------------------------------------------------------------
@@ -102,25 +135,30 @@ MATING_COOLDOWN_SECONDS: Final[float] = 300.0
 """Cooldown between matings for an agent, in seconds (5 minutes). [doc]
 (enforced for both parties in ``initiate_mating`` / ``accept_mating`` -- Sprint 7)."""
 
-MATING_PROPOSAL_TIMEOUT_SECONDS: Final[float] = 600.0
+MATING_PROPOSAL_TIMEOUT_SECONDS: Final[float] = 45.0
 """How long a mating proposal's escrow may sit unanswered before the world-tick
-refunds the initiator and removes it, in seconds (10 minutes). [design -- Sprint 4
-Phase 2; retuned 2026-06-29 from the F4 viability run].
+refunds the initiator and removes it, in seconds. [design -- Sprint 4 Phase 2;
+retuned 2026-06-29 (F4, 600s) then 2026-06-29 again (this value) for the hosted
+Gemini path].
 
 DISTINCT from :data:`MATING_COOLDOWN_SECONDS` (the gap *between* matings): this is
 the lifetime of a single outstanding proposal. Not part of the design doc's
 "World Rules" table; introduced for the proposal-timeout sweep on the Revisit List
 (see the Sprint-4 design spec Section 4.7).
 
-**Why 600s, not the original 60s.** The timeout must outlast the *target's* breath
-interval, or a proposal expires before its target ever perceives it. Ollama runs
-inference sequentially, so with N agents sharing one model each agent breathes only
-about every ``N * latency`` seconds. The F4 run (4 agents) measured per-agent breath
-gaps of ~150-600s; against those, a 60s window guaranteed every proposal timed out
-unanswered (7/7 in run 5) -- the target had no breath while the offer stood. 600s
-spans ~2-3 target breaths so a standing offer survives long enough to be seen and
-answered. It is now *longer* than the cooldown by design: escrow held a few extra
-minutes is a far cheaper failure than mating that can never complete.
+**This value tracks the breath cadence, which depends on the decider.** The timeout
+must outlast the *target's* breath interval, or a proposal expires before its target
+ever perceives it -- but no longer, or stale escrow lingers. The two regimes:
+
+* **Hosted/concurrent (Gemini, current).** All agents breathe in parallel every
+  ~1-3s, so a target sees a standing offer within a breath or two. 45s spans ~15-45
+  target breaths -- ample to be seen and answered -- while clearing abandoned escrow
+  in well under a minute. This is the tuned value for the runs we observe today.
+* **Local/sequential (Ollama).** One shared model serves inference serially, so with
+  N agents each breathes only every ``N * latency`` seconds; the F4 run measured
+  per-agent gaps of ~150-600s and *needed* ~600s here (a 60s window timed out 7/7
+  proposals before the target ever breathed). If a sequential local run is revived,
+  raise this back toward that range -- 45s would starve it.
 """
 
 MATING_MAX_OFFSPRING: Final[int] = 5
@@ -177,12 +215,14 @@ could not be produced; a healthy loop sleeps for its ``Agent.pace`` instead.
 # ---------------------------------------------------------------------------
 
 HOARDING_ENERGY_THRESHOLD: Final[float] = 500.0
-"""Energy above which an agent is considered to be hoarding. [doc]
-(not yet enforced in code)."""
+"""Energy at or above which an agent is considered to be hoarding. [doc]
+(enforced 2026-06-29 in ``world.agents.is_hoarding``; a crossing publishes
+``agent_started_hoarding`` from ``harvest_resources`` / ``transfer_resource``)."""
 
 HOARDING_MATERIALS_THRESHOLD: Final[float] = 300.0
-"""Materials above which an agent is considered to be hoarding. [doc]
-(not yet enforced in code)."""
+"""Materials at or above which an agent is considered to be hoarding. [doc]
+(enforced 2026-06-29 in ``world.agents.is_hoarding``; a crossing publishes
+``agent_started_hoarding`` from ``harvest_resources`` / ``transfer_resource``)."""
 
 # ---------------------------------------------------------------------------
 # Memory subsystem (Sprint 5)

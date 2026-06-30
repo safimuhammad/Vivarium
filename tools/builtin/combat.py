@@ -43,9 +43,13 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
 
     Emits events:
         * On a **lethal** hit: one ``"agent_died"`` event
-          (:attr:`~bus.events.ScopeType.GLOBAL`, ``source`` = the victim,
-          ``payload`` carrying a narrating ``"message"`` and the ``"killer"`` id,
-          stamped with ``world.now()``) so the whole world perceives the death.
+          (:attr:`~bus.events.ScopeType.LOCAL`, stamped with the victim's region,
+          ``source`` = the victim, ``payload`` carrying a narrating ``"message"`` and
+          the ``"killer"`` id, stamped with ``world.now()``) so the death is perceived
+          by those *present* where it happened -- not the whole world. A being away in
+          another region discovers the death by returning and finding the body (the
+          corpse lingers until the world-tick decays it); this regional scope is what
+          prevents an instant world-wide grief/revenge cascade.
         * On a **non-lethal** hit: one ``"attack"`` event
           (:attr:`~bus.events.ScopeType.LOCAL`, stamped with ``world.now()``)
           targeting the victim, delivered to every agent in the attacker's region.
@@ -84,6 +88,9 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
     target_was_paralyzed = target_agent.status is AgentStatus.PARALYZED
     overshoots = target_agent.current_energy - ATTACK_DAMAGE < KILL_ENERGY_THRESHOLD
     if target_was_paralyzed or overshoots:
+        # Capture the region before the kill so the death is routed to the place it
+        # happened (kill_agent does not move the body, but be explicit).
+        death_region = target_agent.current_position
         world.kill_agent(target_agent.id)
         death_payload: dict[str, Any] = {
             "message": (
@@ -97,7 +104,8 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
                 "agent_died",
                 target_agent.id,
                 death_payload,
-                scope=ScopeType.GLOBAL,
+                scope=ScopeType.LOCAL,
+                region=death_region,
                 timestamp=world.now(),
             )
         )
