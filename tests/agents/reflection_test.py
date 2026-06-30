@@ -41,3 +41,11 @@ def test_reflection_messages_have_no_consecutive_user_turns() -> None:
     assert [m["role"] for m in msgs] == ["system", "user"]
     assert "I am Ada." in msgs[0]["content"]
     assert "reflect" in msgs[1]["content"].lower()
+
+
+def test_reflection_prompt_actively_invites_self_definition() -> None:
+    """The reflection prompt pushes the agent to decide/reshape who it is becoming."""
+    prompt = build_reflection_messages("I am Ada.", "Recently: nothing.")[1]["content"].lower()
+    assert "who you are" in prompt or "who you are becoming" in prompt
+    # It should point at the act of (re)defining the self, not just record memories.
+    assert any(word in prompt for word in ("become", "reshape", "redefine", "kind of being"))

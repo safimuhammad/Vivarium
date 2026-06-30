@@ -23,6 +23,7 @@ from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
     ATTACK_ENERGY_COST,
+    GENESIS_SEED,
     MATING_MAX_OFFSPRING,
     PARALYSIS_ENERGY_THRESHOLD,
     REFLECT_EVERY_N_BREATHS,
@@ -622,7 +623,7 @@ async def test_breathing_loop_completes_a_mating_end_to_end(
     assert newborn is not None
     assert newborn.status is AgentStatus.ALIVE
     assert newborn.current_position == "alpha"  # born where the acceptor stands
-    assert newborn.persona == f"{joe_state.persona}|{mae_state.persona}"
+    assert newborn.persona == GENESIS_SEED  # born from the shared seed, authors its own self
     # The birth is announced as an agent_born event sourced from the newborn.
     born_events = [e for e in event_bus.get_events(ADA) if e.type == "agent_born"]
     assert len(born_events) == 1 and born_events[0].source == newborn_id

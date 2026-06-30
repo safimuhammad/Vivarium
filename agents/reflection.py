@@ -64,9 +64,11 @@ REFLECTION_TOOL_SCHEMAS: list[dict[str, Any]] = [
 """Ollama function schemas offered during reflection -- ONLY the memory tools."""
 
 _REFLECTIVE_PROMPT = (
-    "Pause and reflect on your life so far. If anything here is worth carrying "
-    "forward -- a grudge, a bond, a lesson, a goal -- record it, and update who "
-    "you are if you have changed."
+    "Pause and reflect on your life so far. What has it shown you about who you are -- "
+    "and who you are becoming? Your nature is yours to author: decide what kind of "
+    "being you choose to be now, and reshape who you are to match it -- whether that "
+    "means deepening what you already are or becoming something new. If anything here "
+    "is worth carrying forward -- a grudge, a bond, a lesson, a goal -- record it too."
 )
 
 

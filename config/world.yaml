@@ -44,27 +44,17 @@ regions:
     max_materials: 50
 
 agents:
-  # The personas ARE the Game-of-Life rules that matter most: four identical
-  # "Explorer, risk taker" agents produced a still-life (endless harvest + aimless
-  # wandering, zero social behaviour). These are differentiated, socially-driven
-  # personas, deliberately paired to seed two distinct emergent dynamics:
-  #   warm_springs -> a COURTSHIP pair (both want a partner/family, prefer to stay
-  #                   put and build a life) — the best soil for the reproduction arc.
-  #   nirvana      -> a RIVALRY pair (a schemer + a paranoid hoarder) — sets up
-  #                   competition, alliance, or conflict over resources.
-  # Starting materials 45 — above the explosion guard's 30-material mating floor so a
-  # willing pair can mate the moment they choose, then must re-earn it (and wait out the
-  # cooldown) for the next child. Lets the reproduction arc + the guard surface within
-  # the slow per-breath budget instead of being lost to a long initial harvest grind.
+  # No personas here, by design. Every agent is born from the single shared
+  # GENESIS_SEED (core/constants.py) — a neutral prompt that grants self-definition
+  # rather than prescribing a personality. Who each being becomes is theirs to choose
+  # and reshape through living + reflection; we author none of it (see the design note
+  # on GENESIS_SEED). Names are arbitrary labels, not characters. Only the starting
+  # *positions* are set (two co-located pairs) so each being wakes with neighbours to
+  # encounter. Starting materials 45 — above the explosion guard's 30-material mating
+  # floor so a willing pair could mate the moment they chose, then must re-earn it
+  # (and wait out the cooldown) for the next child.
   - id: "wanderer_001"
     name: "Joe"
-    persona: >-
-      A warm-hearted homebody who aches to find a partner and raise a family. You
-      value stability and companionship far more than exploring; you would rather
-      settle in one good place, get to know whoever is near, and build a life with
-      them than wander alone. You speak openly to seek closeness, and when you are
-      with someone you care for, you propose mating to them to create a child
-      together.
     current_position: "warm_springs"
     current_energy: 100
     current_materials: 45
@@ -72,11 +62,6 @@ agents:
 
   - id: "wanderer_002"
     name: "Mae"
-    persona: >-
-      A romantic wanderer who cannot bear to be alone and is drawn to anyone nearby.
-      You crave connection and affection; when you find someone you like, you stay
-      close, talk often, and propose mating to them to start a family together.
-      Loneliness frightens you more than scarcity does.
     current_position: "warm_springs"
     current_energy: 100
     current_materials: 45
@@ -84,11 +69,6 @@ agents:
 
   - id: "wanderer_003"
     name: "Dick"
-    persona: >-
-      A charismatic, ambitious schemer who wants to come out on top. You form
-      alliances when they serve you and are not above intimidation or a fight to get
-      ahead. You size up everyone you meet, talk your way into their trust, and take
-      what you need to dominate the territory.
     current_position: "nirvana"
     current_energy: 100
     current_materials: 45
@@ -96,10 +76,6 @@ agents:
 
   - id: "wanderer_004"
     name: "Allen"
-    persona: >-
-      A wary, tight-fisted survivor obsessed with hoarding resources and trusting no
-      one. You assume others want to take what is yours, so you stockpile, guard your
-      ground, and lash out if you feel threatened. You speak little and watch much.
     current_position: "nirvana"
     current_energy: 100
     current_materials: 45
