@@ -111,6 +111,47 @@ async def test_init_seeds_system_prompt_with_persona_and_tools(
         assert name in system
 
 
+async def test_breathe_records_token_usage(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A breath records its decision's token usage into the usage log (operator metric)."""
+    from observability.usage import InMemoryUsageLog
+
+    usage_log = InMemoryUsageLog()
+    decider = MockDecider(
+        [Decision(tool_calls=[ToolCall("look_around")], prompt_tokens=100, completion_tokens=20)]
+    )
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        decider,
+        pace=0.0,
+        usage_log=usage_log,
+        model="gemini-3.1-flash-lite",
+    )
+
+    await agent.breathe()
+
+    breaths = [r for r in usage_log.records if r.kind == "breath"]
+    assert len(breaths) == 1
+    rec = breaths[0]
+    assert rec.agent_id == ADA and rec.model == "gemini-3.1-flash-lite"
+    assert rec.prompt_tokens == 100 and rec.completion_tokens == 20
+    assert rec.timestamp == world.now()
+
+
+async def test_breathe_without_usage_log_does_not_crash(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """The usage log is optional: a breath with no log behaves exactly as before."""
+    decider = MockDecider([Decision(tool_calls=[ToolCall("look_around")])])
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
+    await agent.breathe()
+    assert agent.breath_count == 1
+
+
 async def test_breathe_appends_user_assistant_and_paired_tool(
     world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
 ) -> None:

@@ -46,6 +46,7 @@ from memory.store import FileMemoryStore
 from memory.vector_store import ChromaVectorStore, VectorStore
 from observability.activity_feed import render_world_table, run_activity_feed
 from observability.event_log import CompositeEventLog, FeedEventLog, JsonlEventLog
+from observability.usage import JsonlUsageLog
 from tools.builtin import register_builtins
 from tools.registry import ToolRegistry
 from world.agents import AgentState, AgentStatus
@@ -162,6 +163,11 @@ def build_simulation(
     jsonl = JsonlEventLog(Path(run_dir) / f"run_{seed}.jsonl")
     bus = EventBus(world, event_log=CompositeEventLog(jsonl, feed))
 
+    # Token-usage sink, a sibling of the replay log: per-decision input/output tokens
+    # for cost accounting (read post-hoc by the chronicle). Operator metric, NOT routed
+    # through the bus -- agents never perceive it.
+    usage_log = JsonlUsageLog(Path(run_dir) / f"usage_{seed}.jsonl")
+
     registry = ToolRegistry(world, bus)
     register_builtins(registry)
 
@@ -203,7 +209,17 @@ def build_simulation(
             vector_store=make_vector_store(state.id),
             clock=world.now,
         )
-        return Agent(state.id, world, bus, registry, serialized, pace=0.0, memory=memory)
+        return Agent(
+            state.id,
+            world,
+            bus,
+            registry,
+            serialized,
+            pace=0.0,
+            memory=memory,
+            usage_log=usage_log,
+            model=model,
+        )
 
     agents: list[Agent] = [spawn_agent(state) for state in world.get_all_agents()]
 
