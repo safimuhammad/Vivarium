@@ -49,6 +49,9 @@ def test_mating_proposal_timeout_is_present_and_distinct() -> None:
     """The proposal-timeout constant exists, is a float, and differs from cooldown."""
     assert isinstance(constants.MATING_PROPOSAL_TIMEOUT_SECONDS, float)
     assert constants.MATING_PROPOSAL_TIMEOUT_SECONDS > 0.0
+    # Retuned for fast concurrent (Gemini) breathing: a standing offer should expire
+    # in tens of seconds, not minutes, so stale escrow clears quickly.
+    assert constants.MATING_PROPOSAL_TIMEOUT_SECONDS == 45.0
     # Distinct concept from the between-matings cooldown (DD5 / spec Section 4.7).
     assert constants.MATING_PROPOSAL_TIMEOUT_SECONDS != constants.MATING_COOLDOWN_SECONDS
 
