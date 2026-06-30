@@ -54,6 +54,7 @@ _EVENT_VERBS: dict[str, str] = {
     "agent_recovered": "recovered",
     "agent_paralyzed": "was paralyzed",
     "agent_born": "was born",
+    "agent_started_hoarding": "started hoarding",
     "harvest": "harvested resources",
     "move": "moved",
     "resource_transferred": "transferred resources",

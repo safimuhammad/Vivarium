@@ -15,7 +15,7 @@ import math
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from world.agents import AgentState, AgentStatus
+from world.agents import AgentState, AgentStatus, is_hoarding
 from world.regions import Region, ResourceTypes
 from world.world import WorldState
 
@@ -119,6 +119,11 @@ async def harvest_resources(
     Emits events:
         * One ``"resource_changed"`` event (:attr:`~bus.events.ScopeType.LOCAL`,
           stamped with ``world.now()``) to the agent's region.
+        * One ``"agent_started_hoarding"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, stamped with the region and
+          ``world.now()``) **only** when this harvest lifts the agent over a hoarding
+          threshold (see :func:`~world.agents.is_hoarding`), so co-located beings
+          perceive the new hoarder. Only the crossing is announced.
 
     Args:
         world: The live world state.
@@ -157,6 +162,11 @@ async def harvest_resources(
             f"available resource {resource}"
         )
 
+    # Snapshot hoarding state before the harvest so we can detect a *crossing* into
+    # hoarding (and announce it once), mirroring the was_paralyzed revival pattern in
+    # transfer_resource.
+    was_hoarding = is_hoarding(agent_state)
+
     if req_resource == ResourceTypes.ENERGY:
         world.modify_region_energy(curr_region.name, -quantity)
         world.modify_agent_energy(agent_id, quantity)
@@ -178,6 +188,27 @@ async def harvest_resources(
         timestamp=world.now(),
     )
     await event_bus.publish(event_message)
+
+    # If this harvest just lifted the agent over a hoarding threshold, announce it
+    # LOCALLY so co-located beings perceive the new hoarder (and the chronicle gets a
+    # beat). Only the crossing is announced -- an already-hoarding agent is silent.
+    if not was_hoarding and is_hoarding(agent_state):
+        await event_bus.publish(
+            Event(
+                "agent_started_hoarding",
+                agent_id,
+                {
+                    "message": (
+                        f"{agent_state.name} (ID:{agent_state.id}) is now sitting on a hoard "
+                        f"(energy {agent_state.current_energy}, "
+                        f"materials {agent_state.current_materials})."
+                    )
+                },
+                scope=ScopeType.LOCAL,
+                region=curr_region.name,
+                timestamp=world.now(),
+            )
+        )
     return (
         f"Successfully harvested {req_resource} from Region {curr_region.name}\n"
         f" Agent Energy: {agent_state.current_energy}|"

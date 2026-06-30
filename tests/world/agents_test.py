@@ -12,7 +12,23 @@ import dataclasses
 
 import pytest
 
-from world.agents import AgentState, AgentStatus
+from core.constants import HOARDING_ENERGY_THRESHOLD, HOARDING_MATERIALS_THRESHOLD
+from world.agents import AgentState, AgentStatus, describe_agent_brief, is_hoarding
+
+
+def _agent(**overrides: object) -> AgentState:
+    """Build an ALIVE agent in ``alpha`` with modest resources; override as needed."""
+    fields: dict[str, object] = {
+        "id": "wanderer_001",
+        "name": "Ada",
+        "persona": "Curious.",
+        "current_position": "alpha",
+        "current_energy": 100.0,
+        "current_materials": 50.0,
+        "status": AgentStatus.ALIVE,
+    }
+    fields.update(overrides)
+    return AgentState(**fields)  # type: ignore[arg-type]
 
 
 def test_agent_status_values() -> None:
@@ -99,3 +115,54 @@ def test_agent_state_slots_rejects_unknown_attribute() -> None:
     )
     with pytest.raises(AttributeError):
         agent.undeclared = "nope"  # type: ignore[attr-defined]
+
+
+# ---- is_hoarding -----------------------------------------------------------
+
+
+def test_is_hoarding_true_over_either_threshold() -> None:
+    """An agent over the energy OR the materials threshold is hoarding."""
+    assert is_hoarding(_agent(current_energy=HOARDING_ENERGY_THRESHOLD + 1.0)) is True
+    assert is_hoarding(_agent(current_materials=HOARDING_MATERIALS_THRESHOLD + 1.0)) is True
+
+
+def test_is_hoarding_true_at_threshold_boundary() -> None:
+    """Exactly at a threshold counts as hoarding (inclusive, like the paralysis dial)."""
+    assert is_hoarding(_agent(current_energy=HOARDING_ENERGY_THRESHOLD)) is True
+
+
+def test_is_hoarding_false_under_both_thresholds() -> None:
+    """An agent below both thresholds is not hoarding."""
+    assert (
+        is_hoarding(
+            _agent(
+                current_energy=HOARDING_ENERGY_THRESHOLD - 1.0,
+                current_materials=HOARDING_MATERIALS_THRESHOLD - 1.0,
+            )
+        )
+        is False
+    )
+
+
+# ---- describe_agent_brief --------------------------------------------------
+
+
+def test_describe_agent_brief_plain_alive_agent_has_no_marker() -> None:
+    """A modest, living agent is described with no status/hoarding marker."""
+    text = describe_agent_brief(_agent())
+    assert "Ada" in text and "[id: wanderer_001]" in text
+    assert "(dead)" not in text and "(fallen)" not in text and "(hoarding)" not in text
+
+
+def test_describe_agent_brief_marks_hoarder() -> None:
+    """A being over a hoarding threshold is visibly marked so others can react to it."""
+    text = describe_agent_brief(_agent(current_materials=HOARDING_MATERIALS_THRESHOLD + 50.0))
+    assert "(hoarding)" in text
+
+
+def test_describe_agent_brief_marks_dead_hoarder_with_both() -> None:
+    """Status and hoarding markers coexist (a slain being still sitting on a hoard)."""
+    text = describe_agent_brief(
+        _agent(status=AgentStatus.DEAD, current_energy=HOARDING_ENERGY_THRESHOLD + 10.0)
+    )
+    assert "(dead)" in text and "(hoarding)" in text
