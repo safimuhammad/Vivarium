@@ -152,10 +152,14 @@ def test_to_gemini_contents_assistant_text_only_becomes_model_text() -> None:
 # ---- parse_gemini_response --------------------------------------------------
 
 
-def _response(*, parts: list[Any], prompt_tokens: int = 0) -> SimpleNamespace:
+def _response(
+    *, parts: list[Any], prompt_tokens: int = 0, completion_tokens: int = 0
+) -> SimpleNamespace:
     content = SimpleNamespace(parts=parts)
     candidate = SimpleNamespace(content=content)
-    usage = SimpleNamespace(prompt_token_count=prompt_tokens)
+    usage = SimpleNamespace(
+        prompt_token_count=prompt_tokens, candidates_token_count=completion_tokens
+    )
     return SimpleNamespace(candidates=[candidate], usage_metadata=usage)
 
 
@@ -163,11 +167,13 @@ def test_parse_gemini_response_reads_text_and_prompt_tokens() -> None:
     resp = _response(
         parts=[SimpleNamespace(text="Hello there.", function_call=None)],
         prompt_tokens=123,
+        completion_tokens=45,
     )
     decision = parse_gemini_response(resp)
     assert decision.text == "Hello there."
     assert decision.tool_calls == []
     assert decision.prompt_tokens == 123
+    assert decision.completion_tokens == 45  # candidates_token_count -> cost accounting
 
 
 def test_parse_gemini_response_maps_function_call_to_tool_call() -> None:

@@ -151,7 +151,9 @@ def parse_gemini_response(response: Any) -> Decision:
     :attr:`Decision.text` (``thought`` parts, when present, become
     :attr:`Decision.thinking`); each ``function_call`` part becomes a
     :class:`~agents.decider.ToolCall`; ``usage_metadata.prompt_token_count`` becomes
-    :attr:`Decision.prompt_tokens` (the compaction safety net).
+    :attr:`Decision.prompt_tokens` (the compaction safety net) and
+    ``usage_metadata.candidates_token_count`` becomes
+    :attr:`Decision.completion_tokens` (for cost/observability).
 
     Args:
         response: A Gemini response (or a structurally compatible double) exposing
@@ -187,14 +189,17 @@ def parse_gemini_response(response: Any) -> Decision:
                 text_chunks.append(part_text)
 
     prompt_tokens = 0
+    completion_tokens = 0
     if (usage := getattr(response, "usage_metadata", None)) is not None:
         prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
+        completion_tokens = getattr(usage, "candidates_token_count", 0) or 0
 
     return Decision(
         text="".join(text_chunks),
         thinking="".join(thinking_chunks),
         tool_calls=tool_calls,
         prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
     )
 
 
