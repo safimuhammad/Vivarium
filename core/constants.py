@@ -215,12 +215,14 @@ could not be produced; a healthy loop sleeps for its ``Agent.pace`` instead.
 # ---------------------------------------------------------------------------
 
 HOARDING_ENERGY_THRESHOLD: Final[float] = 500.0
-"""Energy above which an agent is considered to be hoarding. [doc]
-(not yet enforced in code)."""
+"""Energy at or above which an agent is considered to be hoarding. [doc]
+(enforced 2026-06-29 in ``world.agents.is_hoarding``; a crossing publishes
+``agent_started_hoarding`` from ``harvest_resources`` / ``transfer_resource``)."""
 
 HOARDING_MATERIALS_THRESHOLD: Final[float] = 300.0
-"""Materials above which an agent is considered to be hoarding. [doc]
-(not yet enforced in code)."""
+"""Materials at or above which an agent is considered to be hoarding. [doc]
+(enforced 2026-06-29 in ``world.agents.is_hoarding``; a crossing publishes
+``agent_started_hoarding`` from ``harvest_resources`` / ``transfer_resource``)."""
 
 # ---------------------------------------------------------------------------
 # Memory subsystem (Sprint 5)
