@@ -17,6 +17,7 @@ import pytest
 
 from agents.decider import Decision, SerializingDecider, ToolCall
 from agents.runtime import Agent
+from core.constants import COMPACTION_TRIGGER_TOKENS, compaction_budgets
 from memory.embedding import FakeEmbeddingFunction
 from memory.vector_store import FakeVectorStore, VectorStore
 from scripts.run import Simulation, _spawn_new_agents, build_simulation, run_simulation
@@ -103,6 +104,48 @@ def test_build_simulation_wires_usage_log_and_model(tmp_path: Path) -> None:
     for agent in sim.agents:
         assert agent.usage_log is not None
         assert agent.model == "mock"
+
+
+def test_build_simulation_gemini_gives_agents_a_large_context_window(tmp_path: Path) -> None:
+    """The Gemini path sizes the window so compaction triggers near 500K tokens."""
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=7,
+        model="gemini-3.1-flash-lite",
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=MockDecider([Decision()]),
+        vector_store_factory=_fake_factory,
+        provider="gemini",
+    )
+    assert sim.agents
+    for agent in sim.agents:
+        assert 480_000 < agent._compaction_trigger < 520_000
+
+
+def test_build_simulation_ollama_keeps_the_default_window(tmp_path: Path) -> None:
+    """The local/Ollama path leaves the module default window (no large override)."""
+    sim = _build(tmp_path, MockDecider([Decision()]))  # _build defaults to the ollama provider
+    for agent in sim.agents:
+        assert agent._compaction_trigger == COMPACTION_TRIGGER_TOKENS
+
+
+def test_build_simulation_context_tokens_override_wins(tmp_path: Path) -> None:
+    """An explicit context_window override is applied regardless of provider."""
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=7,
+        model="gemini-3.1-flash-lite",
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=MockDecider([Decision()]),
+        vector_store_factory=_fake_factory,
+        provider="gemini",
+        context_window=100_000,
+    )
+    expected_trigger = compaction_budgets(100_000)[1]
+    for agent in sim.agents:
+        assert agent._compaction_trigger == expected_trigger
 
 
 def _build(tmp_path: Path, decider: MockDecider) -> Simulation:

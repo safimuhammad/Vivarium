@@ -70,6 +70,11 @@ DEFAULT_PROVIDER: str = "ollama"
 #: Default model per provider; ``--model`` overrides, else the provider picks its own.
 DEFAULT_MODEL: str = "qwen3:8b"
 DEFAULT_GEMINI_MODEL: str = "gemini-3.1-flash-lite"
+#: Effective context window (tokens) for the hosted Gemini path. Sized so compaction
+#: triggers near 500K tokens (0.70 * (window - generation reserve)), staying safely under
+#: the model's real ~1M window so agents keep far more lived history before compacting.
+#: The local/Ollama path uses the smaller module default (``MODEL_CONTEXT_TOKENS``).
+DEFAULT_GEMINI_CONTEXT_TOKENS: int = 720_000
 DEFAULT_PACE: float = 1.0
 DEFAULT_DURATION: float = 1800.0
 DEFAULT_WORLD_TICK_INTERVAL: float = 5.0
@@ -115,6 +120,7 @@ def build_simulation(
     memory_root: str | Path,
     run_dir: str | Path,
     provider: str = "ollama",
+    context_window: int | None = None,
     decider: Decider | None = None,
     vector_store_factory: Callable[[str], VectorStore] | None = None,
 ) -> Simulation:
@@ -194,6 +200,13 @@ def build_simulation(
 
     make_vector_store = vector_store_factory or _real_vector_store
 
+    # Effective context window: an explicit override wins; else the hosted Gemini path
+    # gets its large window (compaction near ~500K) while the local path keeps the
+    # module default (``None`` -> the Agent uses ``MODEL_CONTEXT_TOKENS``).
+    resolved_window: int | None = context_window
+    if resolved_window is None and provider == "gemini":
+        resolved_window = DEFAULT_GEMINI_CONTEXT_TOKENS
+
     def spawn_agent(state: AgentState) -> Agent:
         """Build one breathing agent (the single place that knows the wiring).
 
@@ -219,6 +232,7 @@ def build_simulation(
             memory=memory,
             usage_log=usage_log,
             model=model,
+            context_window=resolved_window,
         )
 
     agents: list[Agent] = [spawn_agent(state) for state in world.get_all_agents()]
@@ -602,6 +616,14 @@ def _build_parser() -> argparse.ArgumentParser:
         f"{DEFAULT_GEMINI_MODEL} for gemini).",
     )
     parser.add_argument(
+        "--context-tokens",
+        type=int,
+        default=None,
+        help="Context window (tokens) for compaction; overrides the per-provider default "
+        f"(gemini: {DEFAULT_GEMINI_CONTEXT_TOKENS}, compacting near 500K; ollama: the module "
+        "default). Lower it to spend less, raise it to keep more lived history.",
+    )
+    parser.add_argument(
         "--pace", type=float, default=DEFAULT_PACE, help="Inter-breath sleep (seconds)."
     )
     parser.add_argument(
@@ -650,6 +672,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - live e
         seed=args.seed,
         model=model,
         provider=args.provider,
+        context_window=args.context_tokens,
         memory_root=args.memory_root,
         run_dir=args.run_dir,
     )

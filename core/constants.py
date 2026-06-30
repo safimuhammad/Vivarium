@@ -322,31 +322,77 @@ MEMORY_ROOT: Final[Path] = Path("./memory")
 # ---------------------------------------------------------------------------
 
 MODEL_CONTEXT_TOKENS: Final[int] = 40960
-"""The model's real context window in tokens (qwen3:8b trained max). [design].
+"""Default context window in tokens (qwen3:8b trained max -- the local/Ollama ceiling).
+[design].
 
-Ollama clamps the requested ``DECIDE_NUM_CTX`` (65536) to the model's trained
-maximum, so this -- not the request -- is the true ceiling we must stay under.
+This is the DEFAULT only. The effective window is per-agent (``Agent(context_window=...)``):
+the hosted Gemini path passes a far larger window (its model holds ~1M tokens), so each
+agent derives its own compaction budgets from its own window via :func:`compaction_budgets`.
+Ollama clamps the requested ``DECIDE_NUM_CTX`` to the model's trained maximum, so for the
+local path this -- not the request -- is the true ceiling we must stay under.
 """
 
 GENERATION_RESERVE_TOKENS: Final[int] = 6144
 """Tokens reserved within the window for the model's OWN output. [design].
 
-The window is prompt + completion together; qwen3's hidden ``thinking`` plus its
+The window is prompt + completion together; the model's hidden ``thinking`` plus its
 reply can be large, so the prompt may occupy at most ``window - this``.
 """
 
-PROMPT_BUDGET_TOKENS: Final[int] = MODEL_CONTEXT_TOKENS - GENERATION_RESERVE_TOKENS
-"""Max tokens the assembled prompt may occupy (= window - generation reserve)."""
+COMPACTION_TRIGGER_RATIO: Final[float] = 0.70
+"""Fraction of the prompt budget above which a breath compacts before deciding. [design]."""
 
-COMPACTION_TRIGGER_TOKENS: Final[int] = int(0.70 * PROMPT_BUDGET_TOKENS)
-"""Estimated-prompt size above which a breath compacts before deciding. [design]."""
+COMPACTION_TARGET_RATIO: Final[float] = 0.50
+"""Fraction of the prompt budget compaction evicts down to (so it does not re-trigger
+every breath). [design]."""
 
-COMPACTION_TARGET_TOKENS: Final[int] = int(0.50 * PROMPT_BUDGET_TOKENS)
-"""Compaction evicts down to roughly this, so it does not re-trigger every breath. [design]."""
+COMPACTION_HARD_SAFETY_RATIO: Final[float] = 0.90
+"""Fraction of the prompt budget above which the last REAL prompt forces a compaction next
+breath -- the self-correcting net against estimator drift. [design]."""
 
-COMPACTION_HARD_SAFETY_TOKENS: Final[int] = int(0.90 * PROMPT_BUDGET_TOKENS)
-"""If the last REAL prompt (Ollama ``prompt_eval_count``) exceeded this, force a
-compaction next breath -- the self-correcting net against estimator drift. [design]."""
+
+def compaction_budgets(context_window: int) -> tuple[int, int, int, int]:
+    """Derive the compaction budgets for a given context window.
+
+    The never-overflow guarantee is window-agnostic: it rests on the ordering
+    ``target < trigger < hard_safety < prompt_budget < window`` (the ratios are all
+    < 1.0), so the same machinery is simply re-parameterised per model. The local
+    (Ollama) path uses :data:`MODEL_CONTEXT_TOKENS`; the hosted Gemini path passes a
+    much larger window so agents keep far more lived history before compacting.
+
+    Args:
+        context_window: The model's usable context window in tokens.
+
+    Returns:
+        ``(prompt_budget, trigger, target, hard_safety)`` in tokens, where
+        ``prompt_budget = context_window - GENERATION_RESERVE_TOKENS`` and the other
+        three are that budget scaled by their respective ratios.
+    """
+    prompt_budget = context_window - GENERATION_RESERVE_TOKENS
+    return (
+        prompt_budget,
+        int(COMPACTION_TRIGGER_RATIO * prompt_budget),
+        int(COMPACTION_TARGET_RATIO * prompt_budget),
+        int(COMPACTION_HARD_SAFETY_RATIO * prompt_budget),
+    )
+
+
+_DEFAULT_BUDGETS: Final[tuple[int, int, int, int]] = compaction_budgets(MODEL_CONTEXT_TOKENS)
+#: Default compaction dials (for :data:`MODEL_CONTEXT_TOKENS`); per-agent values come from
+#: :func:`compaction_budgets` with the agent's own window.
+
+PROMPT_BUDGET_TOKENS: Final[int] = _DEFAULT_BUDGETS[0]
+"""Max tokens the assembled prompt may occupy at the default window (= window - reserve)."""
+
+COMPACTION_TRIGGER_TOKENS: Final[int] = _DEFAULT_BUDGETS[1]
+"""Estimated-prompt size above which a breath compacts before deciding (default window)."""
+
+COMPACTION_TARGET_TOKENS: Final[int] = _DEFAULT_BUDGETS[2]
+"""Compaction evicts down to roughly this, so it does not re-trigger every breath (default)."""
+
+COMPACTION_HARD_SAFETY_TOKENS: Final[int] = _DEFAULT_BUDGETS[3]
+"""If the last REAL prompt exceeded this, force a compaction next breath -- the
+self-correcting net against estimator drift (default window)."""
 
 COMPACTION_KEEP_RECENT_TURNS: Final[int] = 8
 """Minimum number of recent verbatim turns compaction always keeps. [design].

@@ -121,3 +121,35 @@ def test_compaction_dials_present_and_guarantee_headroom() -> None:
     # The recap reserve must stay comfortably below the eviction target, or there would
     # be no room left to keep any recent verbatim turns after reserving for the recap.
     assert 0 < constants.COMPACTION_RECAP_RESERVE_TOKENS < constants.COMPACTION_TARGET_TOKENS
+
+
+def test_compaction_ratios_present_and_ordered() -> None:
+    """The compaction thresholds are ratios of the prompt budget (target<trigger<safety<1)."""
+    assert (
+        0
+        < constants.COMPACTION_TARGET_RATIO
+        < constants.COMPACTION_TRIGGER_RATIO
+        < constants.COMPACTION_HARD_SAFETY_RATIO
+        < 1.0
+    )
+
+
+def test_compaction_budgets_helper_matches_module_defaults() -> None:
+    """compaction_budgets(default window) reproduces the module-level default dials."""
+    budget, trigger, target, hard = constants.compaction_budgets(constants.MODEL_CONTEXT_TOKENS)
+    assert budget == constants.PROMPT_BUDGET_TOKENS
+    assert trigger == constants.COMPACTION_TRIGGER_TOKENS
+    assert target == constants.COMPACTION_TARGET_TOKENS
+    assert hard == constants.COMPACTION_HARD_SAFETY_TOKENS
+
+
+def test_compaction_budgets_scale_with_window_and_keep_headroom() -> None:
+    """A larger window yields a larger trigger; the never-overflow ordering still holds.
+
+    The Gemini path uses a ~720K effective window so compaction triggers near 500K tokens
+    (well under Gemini's real ~1M window).
+    """
+    window = 720_000
+    budget, trigger, target, hard = constants.compaction_budgets(window)
+    assert 480_000 < trigger < 520_000  # compaction triggers at ~500K
+    assert 0 < target < trigger < hard < budget < window
