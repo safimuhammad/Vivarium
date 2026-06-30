@@ -104,7 +104,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "description": (
                 "Strike another being in your region, draining "
                 f"{ATTACK_DAMAGE:.0f} of their energy; striking costs you "
-                f"{ATTACK_ENERGY_COST:.0f} energy."
+                f"{ATTACK_ENERGY_COST:.0f} energy. A blow that drops them below zero "
+                "energy — or any blow against one already fallen — kills them, and you "
+                "take ALL of their energy and materials as loot."
             ),
             "parameters": {
                 "type": "object",

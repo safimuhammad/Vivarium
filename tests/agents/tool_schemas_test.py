@@ -70,3 +70,6 @@ def test_costed_action_schemas_state_their_energy_cost() -> None:
     attack_desc = TOOL_SCHEMAS["attack"]["function"]["description"]
     assert f"{ATTACK_DAMAGE:.0f}" in attack_desc
     assert f"{ATTACK_ENERGY_COST:.0f}" in attack_desc
+    # The loot incentive must be visible to the agent (else a "kill for loot" test is
+    # confounded — the agent can't choose a reward it doesn't know exists).
+    assert "loot" in attack_desc.lower()
