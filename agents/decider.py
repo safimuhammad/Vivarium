@@ -305,13 +305,32 @@ class SerializingDecider:
             return await self._inner.decide(messages, tools)
 
 
-def make_default_decider(model: str) -> Decider:
-    """Build the default production decider for ``model``.
+def make_default_decider(model: str, *, provider: str = "ollama") -> Decider:
+    """Build the default production decider for ``model`` on the chosen ``provider``.
 
     Args:
-        model: Name of the Ollama model the agent should think with.
+        model: Name of the model the agent should think with (an Ollama model name for
+            ``provider="ollama"``, e.g. ``"qwen3:8b"``; a hosted model name for
+            ``provider="gemini"``, e.g. ``"gemini-3.1-flash-lite"``).
+        provider: Which backend to build for -- ``"ollama"`` (local, the default) or
+            ``"gemini"`` (hosted via the Google Gen AI SDK). The Gemini implementation
+            is imported lazily so the Ollama-only path never requires that SDK.
 
     Returns:
-        A :class:`Decider` (concretely an :class:`OllamaDecider`).
+        A :class:`Decider`: an :class:`OllamaDecider` for ``"ollama"`` or a
+        :class:`~agents.gemini_decider.GeminiDecider` for ``"gemini"``.
+
+    Raises:
+        ValueError: If ``provider`` is neither ``"ollama"`` nor ``"gemini"``.
     """
-    return OllamaDecider(model)
+    match provider:
+        case "ollama":
+            return OllamaDecider(model)
+        case "gemini":
+            from agents.gemini_decider import GeminiDecider
+
+            return GeminiDecider(model)
+        case _:
+            raise ValueError(
+                f"Unknown decider provider {provider!r}; expected 'ollama' or 'gemini'."
+            )
