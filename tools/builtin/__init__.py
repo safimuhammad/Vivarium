@@ -11,6 +11,7 @@ from __future__ import annotations
 from tools.builtin.combat import attack
 from tools.builtin.communication import speak
 from tools.builtin.homes import (
+    break_in,
     build_home,
     deposit_to_home,
     leave_home,
@@ -27,6 +28,7 @@ __all__ = [
     "BUILTIN_TOOLS",
     "accept_mating",
     "attack",
+    "break_in",
     "build_home",
     "deposit_to_home",
     "harvest_resources",
@@ -60,6 +62,7 @@ BUILTIN_TOOLS: dict[str, ToolFn] = {
     "leave_home": leave_home,
     "deposit_to_home": deposit_to_home,
     "withdraw_from_home": withdraw_from_home,
+    "break_in": break_in,
 }
 
 

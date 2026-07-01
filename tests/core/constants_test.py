@@ -219,3 +219,12 @@ def test_home_health_constants_present_and_honor_anti_blob() -> None:
     # finite stakeholders (1 excluded), and the curve must not be so shallow that a
     # second stakeholder alone nearly reaches the cap (<= 0.5, per Task 2's formula).
     assert 0.0 < constants.HOME_HEALTH_DIMINISH <= 0.5
+
+
+def test_breakin_dials_present_and_positive() -> None:
+    """The break-in cost/damage dials exist and are positive floats (pure sinks)."""
+    assert isinstance(constants.BREAKIN_INTEGRITY_DAMAGE, float)
+    assert constants.BREAKIN_INTEGRITY_DAMAGE > 0.0
+    assert isinstance(constants.BREAKIN_ENERGY_COST, float) and constants.BREAKIN_ENERGY_COST > 0.0
+    assert isinstance(constants.BREAKIN_MATERIALS_COST, float)
+    assert constants.BREAKIN_MATERIALS_COST > 0.0

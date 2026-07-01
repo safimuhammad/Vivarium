@@ -1,8 +1,10 @@
 """Home tools: ``build_home`` (raise a private home), ``use_hearth`` (burn
 materials for energy at a home you share), ``pledge_home`` (join another's home as a
 stakeholder), ``leave_home`` (give up a stake, voluntarily), ``deposit_to_home``
-(bank personal materials into the home's shared vault), and ``withdraw_from_home``
-(draw materials back out of the vault into personal stock).
+(bank personal materials into the home's shared vault), ``withdraw_from_home``
+(draw materials back out of the vault into personal stock), and ``break_in`` (a
+co-located non-stakeholder pays a pure-sink cost to wear at a STANDING home's
+integrity, breaching it at ``<= 0``; the breach outcome itself is Tasks 4a/4b).
 
 Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
@@ -18,6 +20,9 @@ from __future__ import annotations
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
+    BREAKIN_ENERGY_COST,
+    BREAKIN_INTEGRITY_DAMAGE,
+    BREAKIN_MATERIALS_COST,
     HEARTH_ENERGY_PER_MATERIAL,
     HEARTH_MATERIALS_PER_USE,
     HOME_BUILD_MATERIALS_COST,
@@ -497,4 +502,103 @@ async def withdraw_from_home(
     return (
         f"You draw {quantity} materials from your home's store. It now holds "
         f"{home.vault_materials} materials; you hold {agent.current_materials}."
+    )
+
+
+async def break_in(
+    world: WorldState, event_bus: EventBus, agent_id: str, target_home: str, intent: str
+) -> str:
+    """Force your way into a co-located home that is not your own, wearing at its integrity.
+
+    Each attempt drains a PURE SINK of :data:`~core.constants.BREAKIN_ENERGY_COST` energy +
+    :data:`~core.constants.BREAKIN_MATERIALS_COST` materials from the raider (destroyed, credited
+    to no one — conservation), records the raider in the home's ``breachers``, and removes
+    :data:`~core.constants.BREAKIN_INTEGRITY_DAMAGE` integrity. The home is **breached** when the
+    blow drives integrity ``<= 0``; the breaching blow will execute ``intent`` atomically (thieve
+    or colonize — Tasks 4a/4b). A lone raider is out-healed by the home's repair between breaths
+    and self-limits by the resource burn; a coordinated group stacking damage inside one repair
+    window makes net progress.
+
+    Mutates world state:
+        * Drains ``BREAKIN_ENERGY_COST`` energy + ``BREAKIN_MATERIALS_COST`` materials from the
+          raider (pure sinks); records the raider via
+          :meth:`~world.world.WorldState.record_breacher`; applies ``-BREAKIN_INTEGRITY_DAMAGE``
+          via :meth:`~world.world.WorldState.modify_home_integrity` (floored at 0).
+
+    Emits events:
+        * On a breach (integrity ``<= 0``): one ``"home_breached"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, source = the raider, region = the home's region,
+          stamped ``world.now()``).
+
+    Args:
+        world: The live world state.
+        event_bus: The bus the resulting event is published to.
+        agent_id: Id of the raiding being.
+        target_home: Id of the co-located home to break into.
+        intent: The raider's intent on breach, one of ``"thieve"`` or ``"colonize"``.
+
+    Returns:
+        A success sentence (a distinct "breached" sentence on the breaching blow); an
+        ``"Error: "`` string if the raider or home is unknown; an ``"Invalid: "`` string for a bad
+        intent, a ruined target, a target it stakes, a target in another region, or too little
+        energy/materials to pay the cost (rejected calls mutate nothing).
+    """
+    if intent not in ("thieve", "colonize"):
+        return (
+            "Invalid: You must mean either to take a home's store (thieve) or seize it (colonize)."
+        )
+    agent = world.get_agent(agent_id)
+    if agent is None:
+        return f"Error: Cannot find Agent {agent_id} in the world."
+    if agent.status is not AgentStatus.ALIVE:
+        return (
+            "Invalid: You are fallen and cannot force your way into a home; "
+            "only another being can restore you."
+        )
+    home = world.get_home(target_home)
+    if home is None:
+        return "Error: There is no such home here to break into."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: That home is already a ruin; there is nothing to break into."
+    if home.region != agent.current_position:
+        return (
+            "Invalid: You are not where that home stands; you can only break into a home "
+            "in your place."
+        )
+    if world.is_stakeholder(target_home, agent_id):
+        return "Invalid: This is your own home; you cannot break into it."
+    if (
+        agent.current_energy < BREAKIN_ENERGY_COST
+        or agent.current_materials < BREAKIN_MATERIALS_COST
+    ):
+        return (
+            f"Invalid: Forcing a home costs {BREAKIN_ENERGY_COST:.0f} energy and "
+            f"{BREAKIN_MATERIALS_COST:.0f} materials; you hold {agent.current_energy} energy and "
+            f"{agent.current_materials} materials."
+        )
+
+    # Pay the cost — a PURE SINK (both pools destroyed, credited to no one).
+    world.modify_agent_energy(agent_id, -BREAKIN_ENERGY_COST)
+    world.modify_agent_materials(agent_id, -BREAKIN_MATERIALS_COST)
+    world.record_breacher(target_home, agent_id)
+    world.modify_home_integrity(target_home, -BREAKIN_INTEGRITY_DAMAGE)  # floors at 0
+
+    region = home.region
+    if home.integrity <= 0.0:
+        await event_bus.publish(
+            Event(
+                "home_breached",
+                agent_id,
+                {"message": f"{agent.name} has broken into the home {home.home_id} in {region}."},
+                scope=ScopeType.LOCAL,
+                region=region,
+                timestamp=world.now(),
+            )
+        )
+        # Task 4a inserts the thieve branch, Task 4b the colonize branch, before this line.
+        return f"You break the home {home.home_id} open — it can no longer keep anyone out."
+    return (
+        f"You batter the home {home.home_id}; its soundness drops to {home.integrity:.1f} but it "
+        f"still stands. You spent {BREAKIN_ENERGY_COST:.0f} energy and "
+        f"{BREAKIN_MATERIALS_COST:.0f} materials."
     )

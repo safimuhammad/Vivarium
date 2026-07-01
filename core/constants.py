@@ -216,6 +216,30 @@ HOME_HEALTH_DIMINISH: Final[float] = 0.5
 M(3)=175, M(4)=187.5. Smaller = faster diminishing returns; kept ``<= 0.5``. A world-rule dial."""
 
 # ---------------------------------------------------------------------------
+# Homes (Layer 2c) — break-in / ruins
+# [design: docs/superpowers/specs/2026-07-01-materials-home-layer2c-design.md]
+# Game-of-Life dials: first-guess values, tuned by observation. Stability: coordination
+# must emerge discretely (a lone raider self-limits; a coordinated group makes net
+# progress against the now-incremental repair) and the raid cost must be a pure sink.
+# ---------------------------------------------------------------------------
+
+BREAKIN_INTEGRITY_DAMAGE: Final[float] = 25.0
+"""Integrity a single ``break_in`` removes from a home. [design — 2026-07-01, Layer 2c].
+
+Cumulative against the now-incremental repair: coordination emerges discretely — net progress
+needs ``Σ(break_ins in one ~5s window) * this > HOME_REPAIR_PER_SECOND * 5`` (> 2/window). A LIVE
+dial; fall back toward 15 if solo-cracking a lone M(1)=100 home dominates."""
+
+BREAKIN_ENERGY_COST: Final[float] = 15.0
+"""Energy a ``break_in`` drains from the raider — a PURE SINK (destroyed, credited to no one).
+[design — 2026-07-01, Layer 2c]. Mirrors ``ATTACK_ENERGY_COST`` so lone aggression self-limits."""
+
+BREAKIN_MATERIALS_COST: Final[float] = 10.0
+"""Materials a ``break_in`` drains from the raider — a PURE SINK (destroyed). [design — 2026-07-01,
+Layer 2c]. Per-attempt cost (25 mat-equiv with energy) keeps typical vaults net-negative to raid;
+only a hoard-tier (~300) vault repays a coordinated breach after the split + repair leakage."""
+
+# ---------------------------------------------------------------------------
 # Mating
 # ---------------------------------------------------------------------------
 

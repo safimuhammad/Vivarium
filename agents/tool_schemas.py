@@ -20,6 +20,8 @@ from typing import Any
 from core.constants import (
     ATTACK_DAMAGE,
     ATTACK_ENERGY_COST,
+    BREAKIN_ENERGY_COST,
+    BREAKIN_MATERIALS_COST,
     HEARTH_MATERIALS_PER_USE,
     HOME_BUILD_MATERIALS_COST,
     MATING_MAX_OFFSPRING,
@@ -342,6 +344,37 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     },
                 },
                 "required": ["amount"],
+            },
+        },
+    },
+    "break_in": {
+        "type": "function",
+        "function": {
+            "name": "break_in",
+            "description": (
+                "Force your way into a home in your place that is not your own. Each attempt "
+                f"wears at its soundness and costs you {BREAKIN_ENERGY_COST:.0f} energy and "
+                f"{BREAKIN_MATERIALS_COST:.0f} materials, spent whether or not it gives way. "
+                "A home tended by many mends faster than one being can break it, so it takes "
+                "several breaking in together to bring one down. When it gives way you take "
+                "its store (thieve) or seize it for your own (colonize), as you intend."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_home": {
+                        "type": "string",
+                        "description": "Id of the home in your place to break into.",
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["thieve", "colonize"],
+                        "description": (
+                            "Whether to take the home's store (thieve) or seize it (colonize)."
+                        ),
+                    },
+                },
+                "required": ["target_home", "intent"],
             },
         },
     },

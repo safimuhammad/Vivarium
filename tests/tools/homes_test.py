@@ -24,6 +24,9 @@ import pytest
 from bus.event_bus import EventBus
 from bus.events import ScopeType
 from core.constants import (
+    BREAKIN_ENERGY_COST,
+    BREAKIN_INTEGRITY_DAMAGE,
+    BREAKIN_MATERIALS_COST,
     HEARTH_ENERGY_PER_MATERIAL,
     HEARTH_MATERIALS_PER_USE,
     HOARDING_ENERGY_THRESHOLD,
@@ -31,7 +34,9 @@ from core.constants import (
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
 )
+from tests.conftest import FakeClock
 from tools.builtin.homes import (
+    break_in,
     build_home,
     deposit_to_home,
     leave_home,
@@ -39,8 +44,9 @@ from tools.builtin.homes import (
     use_hearth,
     withdraw_from_home,
 )
-from world.agents import AgentStatus, is_hoarding
+from world.agents import AgentState, AgentStatus, is_hoarding
 from world.homes import HomeStatus, home_is_hoarding
+from world.tick import tick
 from world.world import WorldState
 
 # ---- build_home -----------------------------------------------------------
@@ -945,3 +951,163 @@ async def test_leave_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -
     result = await leave_home(world, event_bus, "wanderer_001")
     assert result.startswith("Invalid:")
     assert world.is_stakeholder("h1", "wanderer_001") is True  # still bound
+
+
+# ---- break_in (L2c Task 3) -------------------------------------------------
+
+
+def _add_raiders(world: WorldState, event_bus: EventBus, *ids: str) -> None:
+    """Add ALIVE, well-supplied raiders co-located in ``alpha`` (subscribed to the bus)."""
+    for rid in ids:
+        world.add_agent(
+            AgentState(
+                id=rid,
+                name=rid.title(),
+                persona="p",
+                current_position="alpha",
+                current_energy=100.0,
+                current_materials=100.0,
+                status=AgentStatus.ALIVE,
+            )
+        )
+        event_bus.subscribe(rid)
+
+
+async def test_break_in_damages_integrity_and_records_the_breacher(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A valid break_in wears the home by BREAKIN_INTEGRITY_DAMAGE and records the raider."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    boris = world.get_agent("wanderer_002")  # co-located, NOT a stakeholder of h1
+    assert boris is not None
+
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.integrity == 100.0 - BREAKIN_INTEGRITY_DAMAGE  # 75
+    assert home.breachers == {"wanderer_002"}
+    assert home.status is HomeStatus.STANDING
+    assert result.startswith("You batter")
+
+
+async def test_break_in_cost_is_a_pure_sink(world: WorldState, event_bus: EventBus) -> None:
+    """The energy+materials cost is destroyed — credited to NO agent/region/vault
+    (conservation)."""
+
+    def total_energy(w: WorldState) -> float:
+        return sum(a.current_energy for a in w.get_all_agents()) + sum(
+            r.current_energy for r in w.get_all_regions()
+        )
+
+    def total_materials(w: WorldState) -> float:
+        return (
+            sum(a.current_materials for a in w.get_all_agents())
+            + sum(r.current_materials for r in w.get_all_regions())
+            + sum(h.vault_materials for h in w.get_all_homes())
+        )
+
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    boris.current_materials = 100.0  # round starting balance (fixture default is 50.0)
+    e0, m0 = total_energy(world), total_materials(world)
+
+    await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    assert boris.current_energy == 100.0 - BREAKIN_ENERGY_COST
+    assert boris.current_materials == 100.0 - BREAKIN_MATERIALS_COST
+    assert total_energy(world) == pytest.approx(e0 - BREAKIN_ENERGY_COST)  # gone, not moved
+    assert total_materials(world) == pytest.approx(m0 - BREAKIN_MATERIALS_COST)
+
+
+async def test_break_in_breaches_at_zero_and_announces(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A blow driving integrity <= 0 breaches: home_breached fires; home STANDING at 0
+    (outcome is Task 4)."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=BREAKIN_INTEGRITY_DAMAGE
+    )  # one blow from breach
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.integrity == 0.0
+    assert home.status is HomeStatus.STANDING  # Task 4 executes the intent; here it just breaches
+    breached = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_breached"]
+    assert len(breached) == 1
+    assert breached[0].scope is ScopeType.LOCAL and breached[0].region == "alpha"
+    assert "break" in result.lower()
+
+
+async def test_break_in_lone_raider_is_out_healed_across_a_window(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """A lone raider (1 blow/window) is out-healed by one covered repair tick and burns
+    resources."""
+    ada = world.get_agent("wanderer_001")
+    boris = world.get_agent("wanderer_002")
+    assert ada is not None and boris is not None
+    ada.current_materials = 1000.0  # owner solvent -> covered repair every tick
+    boris.current_materials = 100.0  # round starting balance (fixture default is 50.0)
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+
+    await break_in(world, event_bus, "wanderer_002", "h1", "thieve")  # -25 -> 75
+    fake_clock.advance(5.0)
+    await tick(world, event_bus)  # +HOME_REPAIR_PER_SECOND*5 == +50 -> clamped to 100
+
+    home = world.get_home("h1")
+    assert home is not None and home.integrity == 100.0  # out-healed, no progress
+    # But the raider still paid (self-limiting).
+    assert boris.current_energy == 100.0 - BREAKIN_ENERGY_COST
+    assert boris.current_materials == 100.0 - BREAKIN_MATERIALS_COST
+
+
+async def test_break_in_coordinated_group_out_damages_one_repair_window(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """Three raiders in one window out-damage a single repair tick (> 2/window -> net progress)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    ada.current_materials = 1000.0
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    _add_raiders(world, event_bus, "raider_a", "raider_b")  # + wanderer_002 = three raiders
+
+    for rid in ("wanderer_002", "raider_a", "raider_b"):  # 3 * 25 == 75 in one window
+        await break_in(world, event_bus, rid, "h1", "thieve")
+    home = world.get_home("h1")
+    assert home is not None and home.integrity == 25.0  # 100 - 75
+
+    fake_clock.advance(5.0)
+    await tick(world, event_bus)  # covered repair +50 -> 75 (< 100: the group made net progress)
+    assert home.integrity == 75.0
+    # Accumulated (not fully repaired).
+    assert home.breachers == {"wanderer_002", "raider_a", "raider_b"}
+
+
+async def test_break_in_guards(world: WorldState, event_bus: EventBus) -> None:
+    """Every guard rejects with no mutation: bad intent, unknown home, own home, not
+    co-located, too poor."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    ada = world.get_agent("wanderer_001")
+    boris = world.get_agent("wanderer_002")
+    assert ada is not None and boris is not None
+
+    bad_intent = await break_in(world, event_bus, "wanderer_002", "h1", "wreck")
+    assert bad_intent.startswith("Invalid:")
+    no_home = await break_in(world, event_bus, "wanderer_002", "nope", "thieve")
+    assert no_home.startswith("Error:")
+    own_home = await break_in(world, event_bus, "wanderer_001", "h1", "thieve")
+    assert own_home.startswith("Invalid:")
+    assert world.move_agent("wanderer_002", "beta") is True
+    not_co_located = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+    assert not_co_located.startswith("Invalid:")
+    assert world.move_agent("wanderer_002", "alpha") is True
+    boris.current_materials = BREAKIN_MATERIALS_COST - 1.0  # too poor
+    assert (await break_in(world, event_bus, "wanderer_002", "h1", "thieve")).startswith("Invalid:")
+    assert world.homes["h1"].integrity == 100.0  # nothing above ever damaged the home
+    assert world.homes["h1"].breachers == set()

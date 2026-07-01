@@ -1033,3 +1033,15 @@ def test_modify_home_integrity_refuses_a_ruin(world: WorldState) -> None:
     world.homes["h1"].status = HomeStatus.RUIN  # manual (make_ruin arrives in Task 5)
     assert world.modify_home_integrity("h1", 25.0) is False
     assert world.homes["h1"].integrity == 40.0  # unchanged
+
+
+def test_record_and_clear_breachers(world: WorldState) -> None:
+    """record_breacher adds (idempotent); clear_breachers empties; unknown home is False."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    assert world.record_breacher("h1", "wanderer_002") is True
+    assert world.record_breacher("h1", "wanderer_002") is True  # idempotent
+    assert world.homes["h1"].breachers == {"wanderer_002"}
+    assert world.record_breacher("missing", "x") is False
+    assert world.clear_breachers("h1") is True
+    assert world.homes["h1"].breachers == set()
+    assert world.clear_breachers("missing") is False

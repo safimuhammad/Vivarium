@@ -797,6 +797,46 @@ class WorldState:
         home.vault_materials = max(home.vault_materials - amount, 0.0)
         return True
 
+    def record_breacher(self, home_id: str, agent_id: str) -> bool:
+        """Record ``agent_id`` as a breacher of a home (idempotent). Sync, event-free.
+
+        Called by the ``break_in`` tool on every attempt; the set is the pool the thieve split /
+        colonize enrolment draws from (filtered to co-located + living at the breaching blow), and
+        it clears on full repair (the tick) so a repelled raid resets. Mutates
+        :attr:`~world.homes.Home.breachers`.
+
+        Args:
+            home_id: Id of the home being broken into.
+            agent_id: Id of the raider to record.
+
+        Returns:
+            ``True`` if the home exists (whether or not it was a duplicate); ``False`` otherwise.
+        """
+        home = self.homes.get(home_id)
+        if home is None:
+            return False
+        home.breachers.add(agent_id)
+        return True
+
+    def clear_breachers(self, home_id: str) -> bool:
+        """Clear a home's breacher set. Sync, event-free.
+
+        Called by the world-tick when a covered repair restores integrity to its ceiling (a
+        repelled raid resets, spec Fork D) and by :meth:`make_ruin` (a ruin is not contestable).
+        Mutates :attr:`~world.homes.Home.breachers`.
+
+        Args:
+            home_id: Id of the home whose breachers to clear.
+
+        Returns:
+            ``True`` if the home exists; ``False`` otherwise.
+        """
+        home = self.homes.get(home_id)
+        if home is None:
+            return False
+        home.breachers.clear()
+        return True
+
     def is_stakeholder(self, home_id: str, agent_id: str) -> bool:
         """Return whether ``agent_id`` is a stakeholder of a home (pure read).
 

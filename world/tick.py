@@ -31,7 +31,9 @@ breathing loops. Each step does four jobs:
    ``last_upkeep_at`` would make each successive missed tick measure a larger
    ``elapsed`` and so decay faster, a death-spiral). Either way, collapse (removed
    from the world, its passing announced with a LOCAL ``home_collapsed`` event in
-   its region) still happens at integrity ``<= 0.0``.
+   its region) still happens at integrity ``<= 0.0``. A covered repair that restores
+   integrity to its stakeholder-scaled ceiling also clears the home's
+   :attr:`~world.homes.Home.breachers` (Layer 2c) -- a repelled raid resets.
 
 This lives as a *module function* taking both the world and the bus (NOT a
 :class:`~world.world.WorldState` method): the sweeps must publish events, and
@@ -62,7 +64,7 @@ from core.constants import (
 )
 from core.logging import get_logger
 from world.agents import AgentState, AgentStatus
-from world.homes import HomeStatus
+from world.homes import HomeStatus, max_integrity
 from world.regions import ResourceTypes
 from world.world import WorldState
 
@@ -101,7 +103,10 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
           :meth:`~world.world.WorldState.modify_home_integrity` -- which clamps to
           the stakeholder-scaled ceiling (:func:`~world.homes.max_integrity` of
           ``len(stakeholders)``), so a funded home simply sits at its ceiling --
-          and advances ``last_upkeep_at`` to ``now``. When the pool cannot cover
+          clears the home's :attr:`~world.homes.Home.breachers` via
+          :meth:`~world.world.WorldState.clear_breachers` iff this repair reached that
+          ceiling (a repelled raid resets, Layer 2c Fork D) -- and advances
+          ``last_upkeep_at`` to ``now``. When the pool cannot cover
           ``owed``, instead **incrementally** decrements integrity by
           :data:`~core.constants.HOME_DECAY_PER_SECOND` times the SAME ``elapsed``
           and deliberately leaves ``last_upkeep_at`` frozen so the shortfall accrues
@@ -239,6 +244,8 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
                 remaining -= pay
             # Incremental repair (NOT heal-to-full): +rate*elapsed, clamped to max_integrity(s).
             world.modify_home_integrity(home.home_id, HOME_REPAIR_PER_SECOND * elapsed)
+            if home.integrity >= max_integrity(len(home.stakeholders)):
+                world.clear_breachers(home.home_id)  # a repelled raid resets (Fork D)
             home.last_upkeep_at = now  # advance only on a covered tick
         else:
             # Time-based decay from last_integrity_at (advanced every tick) — cannot accelerate.

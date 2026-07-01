@@ -710,3 +710,34 @@ async def test_tick_upkeep_skips_a_ruin(
 
     home = world.get_home("home_ruin")
     assert home is not None and home.integrity == 40.0  # frozen, not decayed
+
+
+# ---- Breacher-clear on full repair (L2c Task 3, Fork D) --------------------
+
+
+async def test_tick_clears_breachers_when_fully_repaired() -> None:
+    """A repelled raid resets: breachers clear once a covered tick heals back to M(s) (Fork D)."""
+    world, bus, clock = _home_world(("owner_1", 100.0))
+    world.record_breacher("h1", "wanderer_9")  # a raider who gave up
+    world.modify_home_integrity("h1", -5.0)  # 100 -> 95 (one covered tick repairs it back)
+    clock.advance(5.0)  # +HOME_REPAIR_PER_SECOND*5 == +50 -> clamped to M(1)=100
+
+    await tick(world, bus)
+
+    home = world.get_home("h1")
+    assert home is not None and home.integrity == 100.0
+    assert home.breachers == set()  # cleared on full repair
+
+
+async def test_tick_keeps_breachers_while_not_fully_repaired() -> None:
+    """Breachers persist across a partial repair (the raid is not yet repelled)."""
+    world, bus, clock = _home_world(("owner_1", 100.0))
+    world.record_breacher("h1", "wanderer_9")
+    world.modify_home_integrity("h1", -80.0)  # 100 -> 20
+    clock.advance(2.0)  # +20 -> 40, still below the ceiling
+
+    await tick(world, bus)
+
+    home = world.get_home("h1")
+    assert home is not None and home.integrity == 40.0
+    assert home.breachers == {"wanderer_9"}  # not cleared
