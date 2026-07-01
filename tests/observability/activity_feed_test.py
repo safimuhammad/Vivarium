@@ -204,7 +204,17 @@ def test_render_world_table_marks_a_hoarding_agent(world: WorldState) -> None:
 def test_render_world_table_marks_a_hoarding_home_and_shows_contest_columns(
     world: WorldState,
 ) -> None:
-    """The homes section marks a hoarding vault and shows Status/Breachers/Remnant."""
+    """The homes section marks a hoarding vault and shows Status/Breachers/Remnant.
+
+    The breacher-count check is anchored to the Breachers column specifically (not a
+    bare ``"1" in home_rows[0]``): the row already contains the digit "1" from the
+    owner id ``wanderer_001`` and the (always-1, owner-is-a-stakeholder) Stakeholders
+    count, so a bare substring check would pass vacuously even if the Breachers
+    column were broken, empty, or stuck at "0". Splitting the row on the table's
+    column separator and indexing the Breachers cell closes that gap (same anti-
+    vacuity concern ``test_render_world_table_shows_stakeholders_and_scaled_health``
+    documents for its own stakeholder-count check).
+    """
     from rich.console import Console
 
     world.build_home(
@@ -219,7 +229,9 @@ def test_render_world_table_marks_a_hoarding_home_and_shows_contest_columns(
     assert len(home_rows) == 1
     assert "standing" in home_rows[0].lower()
     assert "hoarding" in home_rows[0].lower()  # vault-hoard marker
-    assert "1" in home_rows[0]  # one breacher
+    # Columns: '', Home, Owner, Region, Status, Stakeholders, Health, Vault, Breachers, Remnant, ''
+    cells = [cell.strip() for cell in home_rows[0].split("│")]
+    assert cells[8] == "1"  # exactly one breacher, in the Breachers column
 
 
 def test_render_world_table_shows_a_ruin_row(world: WorldState) -> None:
