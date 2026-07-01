@@ -303,6 +303,27 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    "deposit_to_home": {
+        "type": "function",
+        "function": {
+            "name": "deposit_to_home",
+            "description": (
+                "Set some of your own materials into the shared store of the home you share, "
+                "where you stand. What you set aside stays in the home's keeping until you "
+                "draw it back out. A home grown heavy with a great store draws notice."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "amount": {
+                        "type": "number",
+                        "description": "How many materials to set into the home's store.",
+                    },
+                },
+                "required": ["amount"],
+            },
+        },
+    },
 }
 """Tool name -> Ollama function schema; its key set mirrors ``BUILTIN_TOOLS``."""
 

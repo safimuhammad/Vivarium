@@ -1,5 +1,5 @@
 """Tests for :mod:`tools.builtin.homes` — ``build_home``, ``use_hearth``,
-``pledge_home``, ``leave_home``.
+``pledge_home``, ``leave_home``, ``deposit_to_home``.
 
 ``build_home`` sinks materials to raise a private home in the being's region and
 emits ``home_built``. ``use_hearth`` burns a stakeholder's own materials at a home it
@@ -7,8 +7,11 @@ shares for energy (a conversion, never a mint) and emits ``hearth_used``; any
 stakeholder (owner or pledged) may use it. ``pledge_home`` joins a co-located being
 into a home's stakeholders (sharing its upkeep and hearth) and emits ``home_joined``.
 ``leave_home`` gives up a being's stake (pruning it, promoting a new owner if needed,
-and clamping integrity) and emits ``home_left``. All four report lookup/precondition
-failures with ``Error:`` and rule violations with ``Invalid:``.
+and clamping integrity) and emits ``home_left``. ``deposit_to_home`` moves a
+stakeholder's personal materials into the home's shared vault (conserved: deduct
+personal first, then credit the vault) and emits ``home_started_hoarding`` only on
+the crossing into a home-level hoard. All five report lookup/precondition failures
+with ``Error:`` and rule violations with ``Invalid:``.
 """
 
 from __future__ import annotations
@@ -23,8 +26,9 @@ from core.constants import (
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
 )
-from tools.builtin.homes import build_home, leave_home, pledge_home, use_hearth
+from tools.builtin.homes import build_home, deposit_to_home, leave_home, pledge_home, use_hearth
 from world.agents import AgentStatus, is_hoarding
+from world.homes import home_is_hoarding
 from world.world import WorldState
 
 # ---- build_home -----------------------------------------------------------
@@ -532,3 +536,175 @@ async def test_use_hearth_works_for_nonowner_stakeholder_and_burns_personal_mate
     used = [e for e in event_bus.get_events("wanderer_002") if e.type == "hearth_used"]
     assert len(used) == 1
     assert result.startswith("You rest at your hearth")
+
+
+# ---- deposit_to_home --------------------------------------------------------
+
+
+async def test_deposit_to_home_moves_personal_to_vault_conserving(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A deposit moves materials personal -> vault, exactly (personal down == vault up)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    ada.current_materials = 100.0
+
+    result = await deposit_to_home(world, event_bus, "wanderer_001", 40.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert ada.current_materials == 60.0  # personal down 40
+    assert home.vault_materials == 40.0  # vault up 40 (conserved: same 40 moved)
+    # Silent per-deposit: no home_started_hoarding (well below threshold) and no plain event.
+    assert [
+        e for e in event_bus.get_events("wanderer_001") if e.type == "home_started_hoarding"
+    ] == []
+    assert result.startswith("You set")
+
+
+async def test_deposit_to_home_cannot_deposit_more_than_personal(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Requesting more than the being holds is Invalid and mutates nothing (no mint)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    ada.current_materials = 10.0
+
+    result = await deposit_to_home(world, event_bus, "wanderer_001", 25.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert result.startswith("Invalid:")
+    assert ada.current_materials == 10.0  # untouched
+    assert home.vault_materials == 0.0  # nothing minted into the vault
+    assert event_bus.get_events("wanderer_001") == []
+
+
+async def test_deposit_to_home_crossing_threshold_announces_once(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A deposit that lifts the vault to/over the hoard threshold emits one home_started_hoarding.
+
+    A second deposit while ALREADY hoarding must NOT re-announce (mirrors the per-agent
+    was_hoarding snapshot: only the crossing is announced).
+    """
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    home = world.get_home("home_ada")
+    assert home is not None
+    home.vault_materials = HOARDING_MATERIALS_THRESHOLD - 10.0  # just below
+    ada.current_materials = 100.0
+    assert home_is_hoarding(home) is False
+
+    await deposit_to_home(world, event_bus, "wanderer_001", 20.0)  # crosses to +10 over
+
+    assert home.vault_materials == HOARDING_MATERIALS_THRESHOLD + 10.0
+    assert home_is_hoarding(home) is True
+    started = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_started_hoarding"]
+    assert len(started) == 1
+    assert started[0].scope is ScopeType.LOCAL
+    assert started[0].region == "alpha"
+    assert started[0].timestamp == world.now()
+
+    # Deposit again while already hoarding -> no second announcement.
+    await deposit_to_home(world, event_bus, "wanderer_001", 20.0)
+    started_again = [
+        e for e in event_bus.get_events("wanderer_001") if e.type == "home_started_hoarding"
+    ]
+    assert started_again == []
+
+
+async def test_deposit_to_home_not_at_home_region_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A stakeholder standing away from its home cannot deposit (region check)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert world.move_agent("wanderer_001", "beta") is True  # walk away from the home
+    ada.current_materials = 100.0
+
+    result = await deposit_to_home(world, event_bus, "wanderer_001", 20.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert result.startswith("Invalid:")
+    assert ada.current_materials == 100.0 and home.vault_materials == 0.0  # nothing moved
+
+
+async def test_deposit_to_home_non_stakeholder_is_error(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A being that stakes no home (co-located with another's home or not) cannot deposit."""
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    boris = world.get_agent("wanderer_002")  # in alpha, but NOT a stakeholder of home_ada
+    assert boris is not None
+    boris.current_materials = 100.0
+
+    result = await deposit_to_home(world, event_bus, "wanderer_002", 20.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert result.startswith("Error:")
+    assert boris.current_materials == 100.0 and home.vault_materials == 0.0
+
+
+async def test_deposit_to_home_while_paralyzed_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A fallen being cannot tend its home's store (mirrors use_hearth's ALIVE guard)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    ada.current_materials = 100.0
+    world.modify_agent_energy("wanderer_001", -(ada.current_energy - 1.0))  # -> PARALYZED
+    assert ada.status is AgentStatus.PARALYZED
+
+    result = await deposit_to_home(world, event_bus, "wanderer_001", 20.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert result.startswith("Invalid:")
+    assert ada.current_materials == 100.0 and home.vault_materials == 0.0
+
+
+async def test_deposit_to_home_unknown_agent_is_error(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A missing being cannot deposit (defensive: the registry also guards this)."""
+    result = await deposit_to_home(world, event_bus, "ghost", 20.0)
+    assert result.startswith("Error:")
+
+
+async def test_deposit_to_home_non_positive_amount_is_rejected(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A zero/negative amount is rejected before any mutation (shared amount coercion)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    ada.current_materials = 100.0
+
+    result = await deposit_to_home(world, event_bus, "wanderer_001", -5.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert result.startswith("Invalid:")
+    assert ada.current_materials == 100.0 and home.vault_materials == 0.0
