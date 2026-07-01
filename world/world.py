@@ -301,7 +301,7 @@ class WorldState:
         return True
 
     def kill_agent(self, agent_id: str) -> bool:
-        """Mark an agent DEAD and clean up its pending mating proposals.
+        """Mark an agent DEAD, sweep its mating proposals, and prune its homes.
 
         The sole death writer (Sprint 6). Sets status to DEAD and stamps ``died_at``
         with the current world clock (so the world-tick can later decay the corpse),
@@ -309,14 +309,19 @@ class WorldState:
         where the dead agent is the *initiator*, the proposal is removed and its escrow is
         abandoned (not refunded to a corpse); where the dead agent is a *target*, the
         proposal is removed and the still-live initiator's escrow is refunded immediately
-        (rather than waiting for the world-tick timeout sweep). Emits no event (the caller
-        emits ``agent_died``).
+        (rather than waiting for the world-tick timeout sweep). Finally (Layer 2a), for
+        every home the dead agent holds a stake in it is detached via
+        :meth:`remove_stakeholder` -- silent state cleanup, like the proposal sweep. Emits
+        no event (the caller emits ``agent_died``).
 
         Mutates the agent's :attr:`~world.agents.AgentState.status` and
         :attr:`~world.agents.AgentState.died_at`, the escrow balances of any
         still-live initiators (via :meth:`modify_agent_energy` /
-        :meth:`modify_agent_materials`), and both :attr:`pending_proposals` and
-        :attr:`pending_proposal_targets`.
+        :meth:`modify_agent_materials`), both :attr:`pending_proposals` and
+        :attr:`pending_proposal_targets`, and, for every home the agent holds a stake in,
+        removes it from the home's ``stakeholders`` -- promoting the lowest-id survivor to
+        owner if it owned the home and stakeholders remain, and clamping the home's
+        integrity down to the new :func:`~world.homes.max_integrity`.
 
         Args:
             agent_id: Id of the agent to kill.
@@ -342,6 +347,12 @@ class WorldState:
                 elif resource_type is ResourceTypes.MATERIALS:
                     self.modify_agent_materials(initiator_id, quantity)
             self.remove_proposal(initiator_id, target_id)
+        # Prune the dead being from every home it holds a stake in (else a corpse keeps
+        # propping up a fortress). remove_stakeholder promotes a surviving stakeholder to
+        # owner on an owner's death and clamps integrity down to the smaller max_integrity(s).
+        for home in list(self.get_all_homes()):
+            if self.is_stakeholder(home.home_id, agent_id):
+                self.remove_stakeholder(home.home_id, agent_id)
         return True
 
     # ---- Mating proposal methods ----
