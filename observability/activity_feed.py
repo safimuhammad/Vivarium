@@ -31,7 +31,7 @@ from rich.table import Table
 from bus.events import Event
 from core.logging import get_logger
 from world.agents import AgentStatus, is_hoarding
-from world.homes import home_is_hoarding, max_integrity
+from world.homes import HomeStatus, home_is_hoarding, max_integrity
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -165,6 +165,9 @@ def render_world_table(world: WorldState) -> Table:
     for home in world.get_all_homes():
         cap = max_integrity(len(home.stakeholders))
         vault_hoard = " (hoarding)" if home_is_hoarding(home) else ""
+        # remnant_materials is meaningless while STANDING (world/homes.py) -- render a
+        # blank placeholder rather than a misleading "0.0" that reads as a real balance.
+        remnant_cell = f"{home.remnant_materials:.1f}" if home.status is HomeStatus.RUIN else "—"
         homes_table.add_row(
             home.home_id,
             home.owner_id,
@@ -174,7 +177,7 @@ def render_world_table(world: WorldState) -> Table:
             f"{home.integrity:.1f}/{cap:.1f}",
             f"{home.vault_materials:.1f}{vault_hoard}",
             str(len(home.breachers)),
-            f"{home.remnant_materials:.1f}",
+            remnant_cell,
         )
 
     layout = Table.grid(expand=True)

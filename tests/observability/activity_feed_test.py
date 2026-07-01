@@ -10,7 +10,12 @@ terminal) and is excluded from the fast suite.
 from __future__ import annotations
 
 from bus.events import Event, ScopeType
-from core.constants import HOARDING_MATERIALS_THRESHOLD, HOME_MAX_INTEGRITY
+from core.constants import (
+    HOARDING_MATERIALS_THRESHOLD,
+    HOME_BUILD_MATERIALS_COST,
+    HOME_MAX_INTEGRITY,
+    RUINS_SCAVENGE_FRACTION,
+)
 from observability.activity_feed import render_event, render_world_table
 from world.world import WorldState
 
@@ -235,7 +240,13 @@ def test_render_world_table_marks_a_hoarding_home_and_shows_contest_columns(
 
 
 def test_render_world_table_shows_a_ruin_row(world: WorldState) -> None:
-    """A RUIN renders its status + remnant (observer-facing)."""
+    """A RUIN renders its status + remnant (observer-facing).
+
+    The remnant check is column-anchored (split on the table's column separator and
+    indexed into the Remnant cell), not a bare substring: a bare ``"40.0" in text``
+    could coincidentally match some other cell, and a bare ``"40.0" in home_rows[0]``
+    would pass even if the value leaked into the wrong column.
+    """
     from rich.console import Console
 
     world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
@@ -243,3 +254,28 @@ def test_render_world_table_shows_a_ruin_row(world: WorldState) -> None:
     text = "".join(seg.text for seg in Console(width=250).render(render_world_table(world)))
     home_rows = [line for line in text.splitlines() if "home_ada" in line]
     assert len(home_rows) == 1 and "ruin" in home_rows[0].lower()
+    # Columns: '', Home, Owner, Region, Status, Stakeholders, Health, Vault, Breachers, Remnant, ''
+    cells = [cell.strip() for cell in home_rows[0].split("│")]
+    expected_remnant = RUINS_SCAVENGE_FRACTION * HOME_BUILD_MATERIALS_COST  # vault was 0.0
+    assert cells[9] == f"{expected_remnant:.1f}"  # remnant amount, in the Remnant column
+
+
+def test_render_world_table_blanks_remnant_for_a_standing_home(world: WorldState) -> None:
+    """A STANDING home's Remnant cell is a blank placeholder, not a misleading "0.0".
+
+    ``remnant_materials`` defaults to ``0.0`` and is documented as "meaningless while
+    STANDING" (``world/homes.py``); rendering it unconditionally would read as a real
+    zero balance. Anchored to the Remnant column (not a bare substring) the same way
+    the RUIN-row test above is.
+    """
+    from rich.console import Console
+
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    text = "".join(seg.text for seg in Console(width=250).render(render_world_table(world)))
+    home_rows = [line for line in text.splitlines() if "home_ada" in line]
+    assert len(home_rows) == 1
+    # Columns: '', Home, Owner, Region, Status, Stakeholders, Health, Vault, Breachers, Remnant, ''
+    cells = [cell.strip() for cell in home_rows[0].split("│")]
+    assert cells[9] == "—"  # placeholder, not "0.0"
