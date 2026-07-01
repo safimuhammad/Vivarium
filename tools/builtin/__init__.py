@@ -16,6 +16,7 @@ from tools.builtin.homes import (
     leave_home,
     pledge_home,
     use_hearth,
+    withdraw_from_home,
 )
 from tools.builtin.mating import accept_mating, initiate_mating, reject_mating
 from tools.builtin.movement import look_around, move
@@ -39,6 +40,7 @@ __all__ = [
     "speak",
     "transfer_resource",
     "use_hearth",
+    "withdraw_from_home",
 ]
 
 #: Canonical tool name -> implementation; the single source for the builtin set.
@@ -57,6 +59,7 @@ BUILTIN_TOOLS: dict[str, ToolFn] = {
     "pledge_home": pledge_home,
     "leave_home": leave_home,
     "deposit_to_home": deposit_to_home,
+    "withdraw_from_home": withdraw_from_home,
 }
 
 

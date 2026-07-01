@@ -1,5 +1,5 @@
 """Tests for :mod:`tools.builtin.homes` — ``build_home``, ``use_hearth``,
-``pledge_home``, ``leave_home``, ``deposit_to_home``.
+``pledge_home``, ``leave_home``, ``deposit_to_home``, ``withdraw_from_home``.
 
 ``build_home`` sinks materials to raise a private home in the being's region and
 emits ``home_built``. ``use_hearth`` burns a stakeholder's own materials at a home it
@@ -10,11 +10,16 @@ into a home's stakeholders (sharing its upkeep and hearth) and emits ``home_join
 and clamping integrity) and emits ``home_left``. ``deposit_to_home`` moves a
 stakeholder's personal materials into the home's shared vault (conserved: deduct
 personal first, then credit the vault) and emits ``home_started_hoarding`` only on
-the crossing into a home-level hoard. All five report lookup/precondition failures
-with ``Error:`` and rule violations with ``Invalid:``.
+the crossing into a home-level hoard. ``withdraw_from_home`` is the inverse: it moves
+materials from the vault back into personal stock (conserved: deduct the vault first,
+then credit personal) and is always silent (a withdrawal only lowers the vault, so it
+can never cross into a hoard). All six report lookup/precondition failures with
+``Error:`` and rule violations with ``Invalid:``.
 """
 
 from __future__ import annotations
+
+import pytest
 
 from bus.event_bus import EventBus
 from bus.events import ScopeType
@@ -26,7 +31,14 @@ from core.constants import (
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
 )
-from tools.builtin.homes import build_home, deposit_to_home, leave_home, pledge_home, use_hearth
+from tools.builtin.homes import (
+    build_home,
+    deposit_to_home,
+    leave_home,
+    pledge_home,
+    use_hearth,
+    withdraw_from_home,
+)
 from world.agents import AgentStatus, is_hoarding
 from world.homes import home_is_hoarding
 from world.world import WorldState
@@ -708,3 +720,174 @@ async def test_deposit_to_home_non_positive_amount_is_rejected(
     assert home is not None
     assert result.startswith("Invalid:")
     assert ada.current_materials == 100.0 and home.vault_materials == 0.0
+
+
+# ---- withdraw_from_home -----------------------------------------------------
+
+
+async def test_withdraw_from_home_moves_vault_to_personal_conserving(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A withdrawal moves materials vault -> personal, exactly (vault down == personal up)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.deposit_to_home_vault("home_ada", 60.0)
+    ada.current_materials = 10.0
+
+    result = await withdraw_from_home(world, event_bus, "wanderer_001", 25.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert home.vault_materials == 35.0  # vault down 25
+    assert ada.current_materials == 35.0  # personal up 25 (conserved: same 25 moved)
+    assert event_bus.get_events("wanderer_001") == []  # withdrawal is silent
+    assert result.startswith("You draw")
+
+
+async def test_withdraw_from_home_cannot_withdraw_more_than_vault(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Requesting more than the vault holds is Invalid and mutates nothing (no mint)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.deposit_to_home_vault("home_ada", 30.0)
+    ada.current_materials = 10.0
+
+    result = await withdraw_from_home(world, event_bus, "wanderer_001", 50.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert result.startswith("Invalid:")
+    assert home.vault_materials == 30.0  # untouched
+    assert ada.current_materials == 10.0  # nothing minted to personal
+
+
+async def test_withdraw_from_home_not_at_home_region_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.deposit_to_home_vault("home_ada", 40.0)
+    assert world.move_agent("wanderer_001", "beta") is True  # walk away
+
+    result = await withdraw_from_home(world, event_bus, "wanderer_001", 10.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert result.startswith("Invalid:")
+    assert home.vault_materials == 40.0  # nothing moved
+
+
+async def test_withdraw_from_home_non_stakeholder_is_error(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.deposit_to_home_vault("home_ada", 40.0)
+    boris = world.get_agent("wanderer_002")  # co-located, not a stakeholder
+    assert boris is not None
+    boris.current_materials = 5.0
+
+    result = await withdraw_from_home(world, event_bus, "wanderer_002", 10.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert result.startswith("Error:")
+    assert home.vault_materials == 40.0 and boris.current_materials == 5.0
+
+
+async def test_withdraw_from_home_while_paralyzed_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A fallen being cannot draw from its home's store (mirrors use_hearth's ALIVE guard)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.deposit_to_home_vault("home_ada", 40.0)
+    ada.current_materials = 10.0
+    world.modify_agent_energy("wanderer_001", -(ada.current_energy - 1.0))  # -> PARALYZED
+    assert ada.status is AgentStatus.PARALYZED
+
+    result = await withdraw_from_home(world, event_bus, "wanderer_001", 20.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert result.startswith("Invalid:")
+    assert home.vault_materials == 40.0 and ada.current_materials == 10.0
+
+
+async def test_withdraw_from_home_unknown_agent_is_error(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    result = await withdraw_from_home(world, event_bus, "ghost", 10.0)
+    assert result.startswith("Error:")
+
+
+async def test_withdraw_from_home_non_positive_amount_is_rejected(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A zero/negative amount is rejected before any mutation (shared amount coercion)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.deposit_to_home_vault("home_ada", 40.0)
+    ada.current_materials = 10.0
+
+    result = await withdraw_from_home(world, event_bus, "wanderer_001", -5.0)
+
+    home = world.get_home("home_ada")
+    assert home is not None
+    assert result.startswith("Invalid:")
+    assert home.vault_materials == 40.0 and ada.current_materials == 10.0
+
+
+async def test_deposit_then_withdraw_conserves_total_materials_and_energy(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """The single most valuable test: vault ops MOVE materials, never mint; energy is untouched.
+
+    Totals are summed across agents + regions + home vaults. A deposit then a withdrawal
+    leaves both the world's total materials AND its total energy exactly where they started
+    (region regen is not run here, so the sums are strictly invariant).
+    """
+
+    def total_materials(w: WorldState) -> float:
+        return (
+            sum(a.current_materials for a in w.get_all_agents())
+            + sum(r.current_materials for r in w.get_all_regions())
+            + sum(h.vault_materials for h in w.get_all_homes())
+        )
+
+    def total_energy(w: WorldState) -> float:
+        return sum(a.current_energy for a in w.get_all_agents()) + sum(
+            r.current_energy for r in w.get_all_regions()
+        )
+
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    ada.current_materials = 100.0
+    materials_before = total_materials(world)
+    energy_before = total_energy(world)
+
+    await deposit_to_home(world, event_bus, "wanderer_001", 40.0)
+    await withdraw_from_home(world, event_bus, "wanderer_001", 15.0)
+
+    assert total_materials(world) == pytest.approx(materials_before)  # nothing minted/lost
+    assert total_energy(world) == pytest.approx(energy_before)  # vault is materials-only

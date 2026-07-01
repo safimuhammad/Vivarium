@@ -1,7 +1,8 @@
 """Home tools: ``build_home`` (raise a private home), ``use_hearth`` (burn
 materials for energy at a home you share), ``pledge_home`` (join another's home as a
-stakeholder), ``leave_home`` (give up a stake, voluntarily), and ``deposit_to_home``
-(bank personal materials into the home's shared vault).
+stakeholder), ``leave_home`` (give up a stake, voluntarily), ``deposit_to_home``
+(bank personal materials into the home's shared vault), and ``withdraw_from_home``
+(draw materials back out of the vault into personal stock).
 
 Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
@@ -421,5 +422,69 @@ async def deposit_to_home(
     )
     return (
         f"You set {quantity} materials into your home's store. It now holds "
+        f"{home.vault_materials} materials; you hold {agent.current_materials}."
+    )
+
+
+async def withdraw_from_home(
+    world: WorldState, event_bus: EventBus, agent_id: str, amount: float
+) -> str:
+    """Draw materials from the being's home vault back into its personal stock.
+
+    A stakeholder standing where its home stands moves ``amount`` materials from the home's
+    vault into its own holding. Conserved (spec §12): the materials are deducted from the vault
+    FIRST, then credited to the being — the same amount moved, nothing minted. You cannot draw
+    out more than the vault holds. The vault is materials-only; energy is untouched.
+
+    Mutates world state:
+        * Deducts ``amount`` from the home's vault
+          (:meth:`~world.world.WorldState.withdraw_from_home_vault`), then adds it to the being's
+          materials (:meth:`~world.world.WorldState.modify_agent_materials`).
+
+    Emits events:
+        * None. A withdrawal only lowers the vault, so it can never cross into a hoard; per-op
+          withdrawals are silent (the balance is surfaced via the vault column and
+          ``look_around``).
+
+    Args:
+        world: The live world state.
+        event_bus: Unused; present for the uniform tool signature.
+        agent_id: Id of the withdrawing being.
+        amount: Materials to move from the vault into personal stock.
+
+    Returns:
+        A success sentence with the new balances; an ``"Error: "`` string if the being is
+        unknown or belongs to no home; an ``"Invalid: "`` string if the amount is not a
+        positive number, the being is fallen, it is not where its home stands, or the vault
+        holds fewer than that many materials (rejected calls mutate nothing).
+    """
+    quantity = _coerce_positive_amount(amount)
+    if isinstance(quantity, str):
+        return quantity
+    agent = world.get_agent(agent_id)
+    if agent is None:
+        return f"Error: Cannot find Agent {agent_id} in the world."
+    if agent.status is not AgentStatus.ALIVE:
+        return (
+            "Invalid: You are fallen and cannot tend a home's store; "
+            "only another being can restore you."
+        )
+    home = world.stakeholder_home_of(agent_id)
+    if home is None:
+        return "Error: You have no home here to draw materials from."
+    if home.region != agent.current_position:
+        return (
+            "Invalid: You are not where your home stands; you can draw from its store only there."
+        )
+    if quantity > home.vault_materials:
+        return (
+            f"Invalid: Your home's store holds only {home.vault_materials} materials; "
+            f"you cannot draw {quantity}."
+        )
+
+    world.withdraw_from_home_vault(home.home_id, quantity)  # deduct the source FIRST (conservation)
+    world.modify_agent_materials(agent_id, quantity)  # THEN credit personal stock
+    return (
+        f"You draw {quantity} materials from your home's store. It now holds "
         f"{home.vault_materials} materials; you hold {agent.current_materials}."
     )
