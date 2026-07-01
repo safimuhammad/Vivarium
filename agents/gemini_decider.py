@@ -38,6 +38,14 @@ from agents.decider import DECIDE_TIMEOUT_SECONDS, Decision, ToolCall
 #: the runner (see ``scripts/run.py``).
 GEMINI_API_KEY_ENV: str = "GEMINI_API_KEY"
 
+#: Sampling temperature for the hosted model. 1.0 is Gemini 3's recommended default
+#: (lowering it can degrade the model's reasoning); kept explicit for reproducible intent.
+DEFAULT_TEMPERATURE: float = 1.0
+#: Reasoning effort per decision (:class:`google.genai.types.ThinkingLevel`). ``"LOW"``
+#: suits a single perceive->act breath (fact-retrieval tier), keeping thinking-token cost
+#: and latency down; raise it for deeper deliberation.
+DEFAULT_THINKING_LEVEL: str = "LOW"
+
 
 def to_gemini_tools(tools: list[dict[str, Any]]) -> list[types.Tool]:
     """Translate OpenAI/Ollama tool schemas into Gemini tool declarations.
@@ -242,6 +250,8 @@ class GeminiDecider:
         *,
         api_key: str | None = None,
         timeout: float = DECIDE_TIMEOUT_SECONDS,
+        temperature: float = DEFAULT_TEMPERATURE,
+        thinking_level: str = DEFAULT_THINKING_LEVEL,
         client: _GeminiModels | None = None,
     ) -> None:
         """Initialise the decider.
@@ -253,12 +263,19 @@ class GeminiDecider:
                 logged.
             timeout: Per-decision wall-clock budget in seconds; on expiry
                 :meth:`decide` raises ``TimeoutError``.
+            temperature: Sampling temperature forwarded to the model (default
+                :data:`DEFAULT_TEMPERATURE`).
+            thinking_level: Reasoning effort forwarded as a
+                :class:`~google.genai.types.ThinkingLevel` (case-insensitive; default
+                :data:`DEFAULT_THINKING_LEVEL`).
             client: Async models client to use. Defaults to ``None``, which lazily
                 constructs ``genai.Client(...).aio.models`` on first call; tests inject
                 a double to avoid the network.
         """
         self.model: str = model
         self.timeout: float = timeout
+        self.temperature: float = temperature
+        self.thinking_level: str = thinking_level
         self._api_key: str | None = api_key
         self._client: _GeminiModels | None = client
 
@@ -300,7 +317,13 @@ class GeminiDecider:
                 _GeminiModels, genai.Client(api_key=key, http_options=http_options).aio.models
             )
 
-        config: dict[str, Any] = {"system_instruction": gemini_system_instruction(messages)}
+        config: dict[str, Any] = {
+            "system_instruction": gemini_system_instruction(messages),
+            "temperature": self.temperature,
+            "thinking_config": types.ThinkingConfig(
+                thinking_level=types.ThinkingLevel(self.thinking_level.upper())
+            ),
+        }
         if gemini_tools := to_gemini_tools(tools):
             config["tools"] = gemini_tools
 
