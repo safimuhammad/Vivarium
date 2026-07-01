@@ -25,6 +25,7 @@ from core.constants import (
     ATTACK_ENERGY_COST,
     COMPACTION_TRIGGER_TOKENS,
     GENESIS_SEED,
+    IDLE_AGING_ENERGY_COST,
     MATING_MAX_OFFSPRING,
     PARALYSIS_ENERGY_THRESHOLD,
     PROMPT_BUDGET_TOKENS,
@@ -1655,7 +1656,11 @@ def test_floor_overflow_net_truncates_block_to_fit(
 async def test_text_only_breath_emits_private_self_talk(
     world: WorldState, populated_registry: ToolRegistry
 ) -> None:
-    """A breath with words but no tool call publishes one PRIVATE self_talk event, free."""
+    """A breath with words but no tool call publishes one PRIVATE self_talk event.
+
+    The publish itself is free (no cost beyond the idle-aging every no-tool breath
+    already pays -- see the "Layer 1: idle-aging" tests below).
+    """
     log = InMemoryEventLog()
     event_bus = EventBus(world, event_log=log)
     event_bus.subscribe(ADA)
@@ -1670,7 +1675,8 @@ async def test_text_only_breath_emits_private_self_talk(
     assert self_talks[0].scope is ScopeType.PRIVATE
     assert self_talks[0].payload["message"] == "I wonder what lies past the hills."
     assert event_bus.get_events(ADA) == []  # delivered to no one, not even itself
-    assert _live(world, ADA).current_energy == energy_before  # self-talk is free
+    # Self-talk itself costs nothing extra; the idle breath it rides on still ages.
+    assert _live(world, ADA).current_energy == energy_before - IDLE_AGING_ENERGY_COST
 
 
 async def test_acting_breath_emits_no_self_talk(
@@ -1700,3 +1706,69 @@ async def test_resting_breath_emits_nothing(
     await agent.breathe()
 
     assert [e for e in log.events if e.type == "self_talk"] == []
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: idle-aging (a no-tool breath wears the being down a little)
+# ---------------------------------------------------------------------------
+
+
+async def test_idle_self_talk_breath_deducts_idle_aging_energy(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A text-only (no-tool) breath ages the being by IDLE_AGING_ENERGY_COST."""
+    agent = Agent(
+        ADA, world, event_bus, populated_registry, MockDecider([Decision(text="Musing.")]), pace=0.0
+    )
+    before = _live(world, ADA).current_energy
+    await agent.breathe()
+    assert _live(world, ADA).current_energy == before - IDLE_AGING_ENERGY_COST
+
+
+async def test_silent_rest_breath_also_ages(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """A blank, no-tool breath (silent rest) ages too — the idle signal is 'no tool call'."""
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider([Decision()]), pace=0.0)
+    before = _live(world, ADA).current_energy
+    await agent.breathe()
+    assert _live(world, ADA).current_energy == before - IDLE_AGING_ENERGY_COST
+
+
+async def test_tool_breath_does_not_incur_idle_aging(
+    world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
+) -> None:
+    """An active breath (a tool call) ages nothing extra — look_around costs no energy."""
+    agent = Agent(
+        ADA,
+        world,
+        event_bus,
+        populated_registry,
+        MockDecider([Decision(tool_calls=[ToolCall("look_around")])]),
+        pace=0.0,
+    )
+    before = _live(world, ADA).current_energy
+    await agent.breathe()
+    assert _live(world, ADA).current_energy == before  # no idle-aging on an active breath
+
+
+async def test_idle_breath_that_ages_into_paralysis_emits_agent_paralyzed(
+    world: WorldState,
+) -> None:
+    """An idle breath that ages a being to the paralysis threshold announces the collapse once."""
+    bus, registry, log = _wired(world, with_log=True)
+    assert log is not None
+    ada = _live(world, ADA)
+    # Sit her one aging-step above the threshold so a single idle breath fells her.
+    target = PARALYSIS_ENERGY_THRESHOLD + IDLE_AGING_ENERGY_COST
+    world.modify_agent_energy(ADA, -(ada.current_energy - target))
+    assert _live(world, ADA).status is AgentStatus.ALIVE
+    agent = Agent(
+        ADA, world, bus, registry, MockDecider([Decision(text="I rest a while.")]), pace=0.0
+    )
+
+    await agent.breathe()
+
+    assert _live(world, ADA).status is AgentStatus.PARALYZED
+    paralyzed = [event for event in log.events if event.type == "agent_paralyzed"]
+    assert len(paralyzed) == 1  # refresh_status announced the flip exactly once

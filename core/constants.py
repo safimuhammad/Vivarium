@@ -49,6 +49,17 @@ from memory.models import Importance
 GENERIC_ACTION_ENERGY_COST: Final[float] = 1.0
 """Energy cost of a generic action. [doc] (not yet charged in code)."""
 
+IDLE_AGING_ENERGY_COST: Final[float] = 1.0
+"""Energy an *idle* breath (no tool call — self-talk or silent rest) drains. [design —
+2026-07-01, Layer 1].
+
+Aging is the still-life fix: you cannot sit frozen forever for free. Scoped to idle
+breaths ONLY (an active breath already paid its action's energy); this is NOT an
+always-on metabolism. Gentle by design — from 100 energy it is ~95 idle breaths to the
+paralysis threshold. A world-rule dial; retune by observation. NOTE (reviewer): aging
+bites only literal idle breaths — free tool calls (harvest/look_around) never age — so do
+not crank this to force dynamism; it can't."""
+
 MOVE_ENERGY_COST: Final[float] = 5.0
 """Energy cost to move between regions. [doc].
 
@@ -118,6 +129,54 @@ as the other timing dials: long enough that a wandering partner can plausibly re
 within it, short enough that the world stays uncluttered. A world-rule dial; retune
 by observation.
 """
+
+# ---------------------------------------------------------------------------
+# Homes (Layer 1) — build/hearth/upkeep/decay dials
+# [design: docs/superpowers/specs/2026-07-01-materials-home-layer1-design.md]
+# Game-of-Life dials: first-guess values, tuned by observation. Stability: the
+# hearth must not be a strictly-dominant fountain, build cost competes with mating,
+# and a home must weather far more than one breath-gap before it collapses.
+# ---------------------------------------------------------------------------
+
+HOME_MAX_INTEGRITY: Final[float] = 100.0
+"""Upper bound on a home's integrity; a paid tick restores it to this cap. [design —
+2026-07-01, Layer 1]."""
+
+HOME_UPKEEP_MATERIALS_PER_SECOND: Final[float] = 0.1
+"""Materials a home draws from its owner's global stock per second, on the world-tick.
+[design — 2026-07-01, Layer 1].
+
+TIME-based (``owed = rate * (now - last_upkeep_at)``), so upkeep is tick-frequency-
+INDEPENDENT — the same wall-time draws the same materials whether the tick runs every
+1s or every 5s (generalizes the mating 60s->600s lesson). Drawn from stockpile so an
+absent/slow owner still pays — no death-spiral (upkeep is materials, never energy)."""
+
+HOME_DECAY_PER_MISSED_TICK: Final[float] = 10.0
+"""Integrity a home loses on a world-tick its owner cannot pay upkeep (broke, dead, or
+swept). [design — 2026-07-01, Layer 1].
+
+With :data:`HOME_MAX_INTEGRITY` = 100, a home weathers ~10 unpaid ticks before it
+collapses — deliberately far longer than an owner's breath gap so it never crumbles
+between breaths through no fault of its own. Retune upward if a slow sequential (Ollama)
+regime is revived, exactly like ``MATING_PROPOSAL_TIMEOUT_SECONDS``."""
+
+HOME_BUILD_MATERIALS_COST: Final[float] = 80.0
+"""Materials to raise a home. [design — 2026-07-01, Layer 1].
+
+Biased HIGH so homes are rare and precious, and it competes with mating (min 30
+materials) for the same scarce stock — a nest-vs-child tension. A world-rule dial."""
+
+HEARTH_MATERIALS_PER_USE: Final[float] = 20.0
+"""Maximum materials a single ``use_hearth`` burns. [design — 2026-07-01, Layer 1]."""
+
+HEARTH_ENERGY_PER_MATERIAL: Final[float] = 1.0
+"""Energy produced per material burned at a hearth (the conversion rate). [design —
+2026-07-01, Layer 1].
+
+The hearth CONVERTS a real, harvested/upkept stock (materials) into energy — it never
+mints energy from nothing: ``energy_gained = burned * this`` and the materials are
+destroyed first. Keep it <= a sustainable rate; lower it below 1.0 to burn some fuel as
+heat (mirroring how mating burns some of the committed resources). A world-rule dial."""
 
 # ---------------------------------------------------------------------------
 # Mating

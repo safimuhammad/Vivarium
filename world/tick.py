@@ -1,7 +1,7 @@
 """World-tick: one pure simulation step plus a thin async driver (design DD5).
 
 The world-tick is the slow, world-owned heartbeat that runs alongside the agents'
-breathing loops. Each step does two jobs:
+breathing loops. Each step does four jobs:
 
 #. **Regenerate resources** -- every region gains its per-tick rate (capped at
    ``max_*``) via :meth:`~world.world.WorldState.regenerate_resources`, so the
@@ -14,6 +14,10 @@ breathing loops. Each step does two jobs:
    passing announced with a LOCAL ``agent_decayed`` event in its region. A body
    lingers (locally perceivable) so an away being can return and find it, then
    returns to the earth as a heard beat -- and corpses never pile up (run-forever).
+#. **Sweep home upkeep/decay** -- each home draws time-based upkeep from its
+   owner's global materials stock; a home whose owner cannot pay decays, and
+   collapses (removed from the world, its passing announced with a LOCAL
+   ``home_collapsed`` event in its region) at integrity ``<= 0.0``.
 
 This lives as a *module function* taking both the world and the bus (NOT a
 :class:`~world.world.WorldState` method): the sweeps must publish events, and
@@ -35,7 +39,13 @@ import asyncio
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from core.constants import CORPSE_DECAY_SECONDS, MATING_PROPOSAL_TIMEOUT_SECONDS
+from core.constants import (
+    CORPSE_DECAY_SECONDS,
+    HOME_DECAY_PER_MISSED_TICK,
+    HOME_MAX_INTEGRITY,
+    HOME_UPKEEP_MATERIALS_PER_SECOND,
+    MATING_PROPOSAL_TIMEOUT_SECONDS,
+)
 from core.logging import get_logger
 from world.agents import AgentStatus
 from world.regions import ResourceTypes
@@ -45,7 +55,7 @@ logger = get_logger(__name__)
 
 
 async def tick(world: WorldState, event_bus: EventBus) -> None:
-    """Run one world-tick: regenerate resources and sweep timed-out proposals.
+    """Run one world-tick: regenerate, sweep proposals/corpses/home upkeep-decay.
 
     Mutates world state:
         * Regenerates every region's energy/materials (capped at ``max_*``).
@@ -57,6 +67,17 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
         * For each DEAD agent whose ``died_at`` is older than
           :data:`~core.constants.CORPSE_DECAY_SECONDS`, removes the body via
           :meth:`~world.world.WorldState.remove_agent`.
+        * For each home, computes time-based upkeep owed
+          (:data:`~core.constants.HOME_UPKEEP_MATERIALS_PER_SECOND` times elapsed
+          time since :attr:`~world.homes.Home.last_upkeep_at`). If the owner
+          exists, is not ``DEAD``, and holds enough materials, deducts the owed
+          amount via :meth:`~world.world.WorldState.modify_agent_materials`,
+          restores integrity to :data:`~core.constants.HOME_MAX_INTEGRITY` via
+          :meth:`~world.world.WorldState.modify_home_integrity`, and advances
+          ``last_upkeep_at`` to ``now``. Otherwise (broke, ``DEAD``, or swept
+          from the world) decrements integrity by
+          :data:`~core.constants.HOME_DECAY_PER_MISSED_TICK`; at ``<= 0.0``
+          removes the home via :meth:`~world.world.WorldState.remove_home`.
 
     Emits events:
         * One ``"mating_proposal_timeout"`` event
@@ -66,6 +87,10 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
           (:attr:`~bus.events.ScopeType.LOCAL`, stamped with the corpse's region and
           ``world.now()``, ``source`` = the removed agent) per decayed body, so a
           co-located being perceives the remains return to the earth.
+        * One ``"home_collapsed"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, ``region`` = the home's region,
+          ``source`` = the (former) owner's id, stamped with ``world.now()``) per
+          home whose integrity reached ``<= 0.0`` this tick.
         All events are published only after every refund/removal is complete.
 
     Args:
@@ -135,8 +160,43 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
             )
         )
 
+    # Sweep home upkeep/decay. Each home draws TIME-based upkeep from its owner's global
+    # materials stock (tick-frequency-independent: owed = rate * elapsed). A home whose
+    # owner cannot pay -- broke, DEAD, or swept from the world (modify_agent_materials
+    # no-ops for DEAD/missing, so the tick checks affordability itself and never assumes
+    # payment) -- loses integrity, and at <= 0 collapses: removed and its passing announced
+    # LOCALLY. Same snapshot-then-mutate discipline: mutate synchronously, defer the publish.
+    collapse_events: list[Event] = []
+    for home in list(world.get_all_homes()):
+        owed = HOME_UPKEEP_MATERIALS_PER_SECOND * (now - home.last_upkeep_at)
+        owner = world.get_agent(home.owner_id)
+        can_pay = (
+            owner is not None
+            and owner.status is not AgentStatus.DEAD
+            and owner.current_materials >= owed
+        )
+        if can_pay:
+            world.modify_agent_materials(home.owner_id, -owed)
+            world.modify_home_integrity(home.home_id, HOME_MAX_INTEGRITY)  # a fed home stays sound
+            home.last_upkeep_at = now
+        else:
+            world.modify_home_integrity(home.home_id, -HOME_DECAY_PER_MISSED_TICK)
+            if home.integrity <= 0.0:
+                region = home.region
+                world.remove_home(home.home_id)
+                collapse_events.append(
+                    Event(
+                        type="home_collapsed",
+                        source=home.owner_id,
+                        payload={"message": f"A home in {region} has crumbled to nothing."},
+                        scope=ScopeType.LOCAL,
+                        region=region,
+                        timestamp=now,
+                    )
+                )
+
     # All refunds/removals are done; publishing (the only ``await``) is safe now.
-    for event in (*timed_out_events, *decay_events):
+    for event in (*timed_out_events, *decay_events, *collapse_events):
         await event_bus.publish(event)
 
 

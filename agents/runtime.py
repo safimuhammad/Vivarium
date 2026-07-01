@@ -53,6 +53,7 @@ from core.constants import (
     COMPACTION_TARGET_TOKENS,
     COMPACTION_TRIGGER_TOKENS,
     DECIDE_BACKOFF_SECONDS,
+    IDLE_AGING_ENERGY_COST,
     MATING_COOLDOWN_SECONDS,
     MATING_MAX_OFFSPRING,
     PARALYSIS_ENERGY_THRESHOLD,
@@ -424,8 +425,10 @@ class Agent:
         A being may resolve a breath by simply speaking its mind -- free text with no
         tool call -- rather than acting. That utterance is perceivable (recorded by the
         log sink, shown in the feed) but routed to **no** other being: it is not
-        communication and costs nothing. Nothing is emitted when the breath took an
-        action (``decision.tool_calls`` non-empty) or was a silent rest (blank text).
+        communication, and emitting this event itself spends no energy -- though the
+        idle breath it rides on still ages the being (:data:`~core.constants.IDLE_AGING_ENERGY_COST`
+        in :meth:`breathe`). Nothing is emitted when the breath took an action
+        (``decision.tool_calls`` non-empty) or was a silent rest (blank text).
 
         Args:
             decision: The just-made decision for this breath.
@@ -922,6 +925,16 @@ class Agent:
                     self._last_prompt_tokens = decision.prompt_tokens  # actual-token net
                     await self.execute(decision.tool_calls)
                     await self._emit_self_talk(decision)
+                    # Aging: an *idle* breath — one that made no tool call (self-talk or
+                    # silent rest) — wears the being down a little. An active breath already
+                    # paid its action's energy, so it ages nothing extra. Placed here (right
+                    # after _emit_self_talk, before the reflect gate) so it reuses the idle
+                    # signal, not the method: mutually exclusive with execute()'s work,
+                    # reflection is a sub-step so never ages, and modify_agent_energy floors
+                    # at 0 and flips ALIVE->PARALYZED — announced by the trailing
+                    # refresh_status (DD4: the world has no bus).
+                    if not decision.tool_calls:
+                        self.world.modify_agent_energy(self.agent_id, -IDLE_AGING_ENERGY_COST)
                     # breath_count is incremented in the finally below, so during
                     # the k-th (1-indexed) breath it still holds k-1; +1 makes the
                     # reflection fire on breaths N, 2N, ... and never on the first.

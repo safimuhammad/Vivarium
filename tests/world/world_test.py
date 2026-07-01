@@ -19,6 +19,7 @@ import random
 
 import pytest
 
+from core.constants import HOME_MAX_INTEGRITY
 from core.rng import make_rng
 from tests.conftest import FakeClock
 from world.agents import AgentState, AgentStatus
@@ -664,3 +665,91 @@ def test_kill_target_refunds_live_initiator(world: WorldState) -> None:
     assert world.get_agent_proposals("wanderer_001", "wanderer_002") == {}
     assert initiator.current_energy == e0 + 50.0
     assert initiator.current_materials == m0 + 30.0
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: homes (keyed by home_id; sync, event-free)
+# ---------------------------------------------------------------------------
+
+
+def test_new_world_has_no_homes() -> None:
+    """A fresh world starts with an empty homes map."""
+    assert WorldState().get_all_homes() == []
+
+
+def test_build_home_adds_a_home_keyed_by_id(world: WorldState) -> None:
+    assert (
+        world.build_home(
+            "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+        )
+        is True
+    )
+    home = world.homes["h1"]
+    assert home.owner_id == "wanderer_001"
+    assert home.region == "alpha"
+    assert home.integrity == HOME_MAX_INTEGRITY
+    assert home.built_at == world.now()
+    assert home.last_upkeep_at == world.now()  # upkeep clock starts at build time
+
+
+def test_build_home_rejects_duplicate_id(world: WorldState) -> None:
+    assert (
+        world.build_home(
+            "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+        )
+        is True
+    )
+    assert (
+        world.build_home(
+            "h1", "wanderer_002", "beta", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+        )
+        is False
+    )  # no overwrite
+    assert world.homes["h1"].owner_id == "wanderer_001"
+
+
+def test_remove_home(world: WorldState) -> None:
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert world.remove_home("h1") is True
+    assert "h1" not in world.homes
+    assert world.remove_home("h1") is False  # already gone
+
+
+def test_modify_home_integrity_clamps_to_range(world: WorldState) -> None:
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=50.0)
+    assert world.modify_home_integrity("h1", 1000.0) is True
+    assert world.homes["h1"].integrity == HOME_MAX_INTEGRITY  # capped at max
+    assert world.modify_home_integrity("h1", -1000.0) is True
+    assert world.homes["h1"].integrity == 0.0  # floored at 0
+    assert world.modify_home_integrity("missing", 1.0) is False  # unknown home
+
+
+def test_home_of_finds_the_owners_home(world: WorldState) -> None:
+    assert world.home_of("wanderer_001") is None  # none yet
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    home = world.home_of("wanderer_001")
+    assert home is not None and home.home_id == "h1"
+    assert world.home_of("wanderer_002") is None  # not this being's home
+
+
+def test_homes_in_region_lists_all_homes_there(world: WorldState) -> None:
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.build_home(
+        "h2", "wanderer_002", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert {h.home_id for h in world.homes_in_region("alpha")} == {"h1", "h2"}
+    assert world.homes_in_region("beta") == []
+
+
+def test_get_all_homes(world: WorldState) -> None:
+    assert world.get_all_homes() == []
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert [h.home_id for h in world.get_all_homes()] == ["h1"]

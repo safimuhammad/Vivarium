@@ -86,3 +86,19 @@ def test_world_mechanics_grants_the_freedom_not_to_act() -> None:
     lowered = text.lower()
     for banned in ("simulation", "goal", "objective", "mission", "optim", "you should"):
         assert banned not in lowered
+
+
+def test_world_mechanics_describes_aging_and_the_home() -> None:
+    """The shell teaches L1 physics in-world (DD9): idling wears you down; a home + hearth."""
+    from agents.prompt import WORLD_MECHANICS
+
+    lowered = WORLD_MECHANICS.lower()
+    # Aging: stillness has a cost now (the still-life fix), stated as physics not strategy.
+    assert "ebbs away" in lowered
+    # The home affordances: build, hearth (materials -> energy), feed-or-it-crumbles.
+    assert "home" in lowered
+    assert "hearth" in lowered
+    assert "crumbles" in lowered
+    # DD9 still holds: no goals / strategy / simulation language slipped in.
+    for banned in FORBIDDEN_TERMS:
+        assert banned not in lowered

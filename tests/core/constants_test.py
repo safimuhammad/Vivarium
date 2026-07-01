@@ -153,3 +153,40 @@ def test_compaction_budgets_scale_with_window_and_keep_headroom() -> None:
     budget, trigger, target, hard = constants.compaction_budgets(window)
     assert 480_000 < trigger < 520_000  # compaction triggers at ~500K
     assert 0 < target < trigger < hard < budget < window
+
+
+def test_idle_aging_cost_present_and_gentle() -> None:
+    """Idle-aging is a small, positive energy cost — a fraction, not a hammer."""
+    assert isinstance(constants.IDLE_AGING_ENERGY_COST, float)
+    assert 0.0 < constants.IDLE_AGING_ENERGY_COST <= constants.MOVE_ENERGY_COST
+
+
+def test_home_integrity_dial_present() -> None:
+    """The home integrity ceiling exists and is a positive float."""
+    assert isinstance(constants.HOME_MAX_INTEGRITY, float)
+    assert constants.HOME_MAX_INTEGRITY > 0.0
+
+
+def test_home_upkeep_and_decay_dials_present_and_sane() -> None:
+    """Upkeep/decay dials exist; a home weathers many missed ticks before it collapses."""
+    assert isinstance(constants.HOME_UPKEEP_MATERIALS_PER_SECOND, float)
+    assert constants.HOME_UPKEEP_MATERIALS_PER_SECOND > 0.0
+    assert isinstance(constants.HOME_DECAY_PER_MISSED_TICK, float)
+    assert 0.0 < constants.HOME_DECAY_PER_MISSED_TICK <= constants.HOME_MAX_INTEGRITY
+    # Collapse-when-broke must be far slower than the owner's breath gap (the mating
+    # 60s->600s lesson): a home must not crumble between an owner's breaths.
+    assert constants.HOME_MAX_INTEGRITY / constants.HOME_DECAY_PER_MISSED_TICK >= 5.0
+
+
+def test_home_build_cost_competes_with_mating() -> None:
+    """Build cost is biased high and competes with mating for the same scarce materials."""
+    assert isinstance(constants.HOME_BUILD_MATERIALS_COST, float)
+    assert constants.HOME_BUILD_MATERIALS_COST >= constants.MATING_MIN_MATERIALS_CONTRIBUTION
+
+
+def test_hearth_dials_present_and_convert_without_minting() -> None:
+    """Hearth dials exist; a finite per-material rate converts a real stock, never mints."""
+    assert isinstance(constants.HEARTH_MATERIALS_PER_USE, float)
+    assert constants.HEARTH_MATERIALS_PER_USE > 0.0
+    assert isinstance(constants.HEARTH_ENERGY_PER_MATERIAL, float)
+    assert constants.HEARTH_ENERGY_PER_MATERIAL > 0.0

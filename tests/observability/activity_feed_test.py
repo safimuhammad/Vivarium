@@ -68,3 +68,27 @@ def test_render_self_talk_reads_as_a_private_thought() -> None:
         scope=ScopeType.PRIVATE,
     )
     assert render_event(event) == "[a1] 💭 I wonder what lies past the hills."
+
+
+def test_render_event_home_events_are_human_readable() -> None:
+    """Message-less home events fall back to a distinct verb per type."""
+    for etype, needle in (
+        ("home_built", "raised"),
+        ("hearth_used", "hearth"),
+        ("home_collapsed", "crumble"),
+    ):
+        event = Event(etype, "wanderer_001", {}, scope=ScopeType.LOCAL)  # no message -> verb
+        assert needle in render_event(event).lower()
+
+
+def test_render_world_table_shows_homes(world: WorldState) -> None:
+    """The world-table gains a homes section showing owner + integrity (observer-facing)."""
+    from rich.console import Console
+
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=42.0)
+    table = render_world_table(world)
+    text = "".join(seg.text for seg in Console(width=200).render(table))
+
+    assert "Homes" in text  # the section title
+    assert "home_ada" in text  # the home id (unique to the homes section)
+    assert "42.0" in text  # its integrity is visible to the observer

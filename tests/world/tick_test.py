@@ -21,11 +21,18 @@ import pytest
 import world.tick as tick_module
 from bus.event_bus import EventBus
 from bus.events import ScopeType
-from core.constants import CORPSE_DECAY_SECONDS, MATING_PROPOSAL_TIMEOUT_SECONDS
-from tests.conftest import FakeClock
+from core.constants import (
+    CORPSE_DECAY_SECONDS,
+    HOME_DECAY_PER_MISSED_TICK,
+    HOME_MAX_INTEGRITY,
+    HOME_UPKEEP_MATERIALS_PER_SECOND,
+    MATING_PROPOSAL_TIMEOUT_SECONDS,
+)
+from core.rng import make_rng
+from tests.conftest import SEED, FakeClock
 from tools.builtin.mating import initiate_mating, reject_mating
 from world.agents import AgentState, AgentStatus
-from world.regions import ResourceTypes
+from world.regions import Region, ResourceTypes
 from world.tick import _tick_once_resilient, tick
 from world.world import WorldState
 
@@ -260,3 +267,209 @@ async def test_tick_and_reject_interleave_yield_single_refund(
     # The proposal is gone and the maps are consistent.
     assert world.pending_proposals == {}
     assert world.get_proposed_targets("wanderer_001") == []
+
+
+# ---- Home upkeep / decay / collapse sweep ---------------------------------
+
+
+def _world_with_home(owner_materials: float) -> tuple[WorldState, EventBus, FakeClock]:
+    """A one-region world with a single owner who already owns a home.
+
+    The region has zero regen so only home-upkeep touches the owner's materials,
+    isolating the upkeep draw for the frequency-independence assertion.
+    """
+    clock = FakeClock()
+    region = Region(
+        name="alpha",
+        description="A field.",
+        connections=[],
+        energy_rate=0.0,
+        materials_rate=0.0,
+        current_energy=0.0,
+        current_materials=0.0,
+        max_energy=500.0,
+        max_materials=500.0,
+    )
+    owner = AgentState(
+        id="owner_1",
+        name="Owner",
+        persona="p",
+        current_position="alpha",
+        current_energy=100.0,
+        current_materials=owner_materials,
+        status=AgentStatus.ALIVE,
+    )
+    world = WorldState([region], [owner], rng=make_rng(SEED), clock=clock)
+    bus = EventBus(world)
+    bus.subscribe("owner_1")
+    world.build_home(
+        "home_1", "owner_1", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    return world, bus, clock
+
+
+async def test_tick_paid_upkeep_draws_materials_and_restores_integrity(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """A payable tick draws time-based upkeep from the owner and restores integrity."""
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.modify_home_integrity("home_ada", -40.0)  # a worn home: 100 -> 60
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    mats_before = ada.current_materials
+    fake_clock.advance(10.0)
+
+    await tick(world, event_bus)
+
+    home = world.home_of("wanderer_001")
+    assert home is not None
+    assert home.integrity == HOME_MAX_INTEGRITY  # a fed home is restored to sound
+    assert ada.current_materials == pytest.approx(
+        mats_before - HOME_UPKEEP_MATERIALS_PER_SECOND * 10.0
+    )
+    assert home.last_upkeep_at == world.now()
+
+
+async def test_tick_unpaid_upkeep_decays_integrity(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """A broke owner cannot pay, so nothing is drawn and the home decays one step."""
+    world.build_home(
+        "home_boris", "wanderer_002", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    world.modify_agent_materials("wanderer_002", -boris.current_materials)  # broke: 0 materials
+    fake_clock.advance(10.0)
+
+    await tick(world, event_bus)
+
+    home = world.home_of("wanderer_002")
+    assert home is not None
+    assert home.integrity == HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK
+    assert boris.current_materials == 0.0  # nothing drawn from a broke owner
+
+
+async def test_tick_partial_materials_upkeep_is_all_or_nothing(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """Holding SOME but not enough materials still cannot pay: no partial draw.
+
+    Upkeep is all-or-nothing -- an owner with ``0 < materials < owed`` is treated the
+    same as a broke owner (nothing is drawn, ``last_upkeep_at`` does not advance, and
+    the home decays one step), never a partial payment.
+    """
+    built_at = world.now()
+    world.build_home(
+        "home_boris", "wanderer_002", "alpha", built_at=built_at, integrity=HOME_MAX_INTEGRITY
+    )
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    world.modify_agent_materials("wanderer_002", -(boris.current_materials - 0.5))  # -> 0.5
+    assert boris.current_materials == 0.5
+    fake_clock.advance(10.0)  # owed = HOME_UPKEEP_MATERIALS_PER_SECOND * 10.0 == 1.0 > 0.5 held
+
+    await tick(world, event_bus)
+
+    home = world.home_of("wanderer_002")
+    assert home is not None
+    assert boris.current_materials == 0.5  # unchanged: no partial draw
+    assert home.last_upkeep_at == built_at  # NOT advanced
+    assert home.integrity == HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK
+
+
+async def test_tick_dead_owner_cannot_pay_decays_and_collapses(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """A DEAD owner cannot pay; a home worn to one step from ruin collapses and announces it."""
+    world.build_home(
+        "home_boris", "wanderer_002", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    # Wear it to exactly one missed-tick from collapse.
+    world.modify_home_integrity("home_boris", -(HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK))
+    world.kill_agent("wanderer_002")  # owner DEAD -> cannot pay
+    event_bus.get_events("wanderer_001")  # drain the co-located witness's inbox
+    fake_clock.advance(1.0)
+
+    await tick(world, event_bus)
+
+    assert world.home_of("wanderer_002") is None  # collapsed and removed
+    collapsed = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
+    assert len(collapsed) == 1
+    assert collapsed[0].scope is ScopeType.LOCAL
+    assert collapsed[0].region == "alpha"
+    assert collapsed[0].source == "wanderer_002"
+    assert collapsed[0].timestamp == world.now()
+
+
+async def test_tick_swept_owner_missing_decays_and_collapses(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """A swept (removed-from-world) owner cannot pay; the home decays to collapse."""
+    world.build_home(
+        "home_boris",
+        "wanderer_002",
+        "alpha",
+        built_at=world.now(),
+        integrity=HOME_DECAY_PER_MISSED_TICK,  # one missed tick from ruin
+    )
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    assert world.remove_agent(boris) is True  # corpse fully decayed away earlier
+    assert world.get_agent("wanderer_002") is None
+    event_bus.get_events("wanderer_001")
+    fake_clock.advance(1.0)
+
+    await tick(world, event_bus)
+
+    assert world.home_of("wanderer_002") is None
+    collapsed = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
+    assert len(collapsed) == 1
+
+
+async def test_tick_home_collapse_fires_once(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """Collapse is announced exactly once — the removed home cannot re-collapse next tick."""
+    world.build_home(
+        "home_boris",
+        "wanderer_002",
+        "alpha",
+        built_at=world.now(),
+        integrity=HOME_DECAY_PER_MISSED_TICK,
+    )
+    world.kill_agent("wanderer_002")
+
+    fake_clock.advance(1.0)
+    await tick(world, event_bus)
+    first = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
+    assert len(first) == 1
+
+    fake_clock.advance(1.0)
+    await tick(world, event_bus)
+    second = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
+    assert second == []
+    assert world.home_of("wanderer_002") is None
+
+
+async def test_tick_home_upkeep_is_frequency_independent() -> None:
+    """The same wall-time draws the same upkeep regardless of tick cadence."""
+    world_a, bus_a, clock_a = _world_with_home(100.0)
+    world_b, bus_b, clock_b = _world_with_home(100.0)
+
+    clock_a.advance(10.0)  # A: one tick after 10 seconds
+    await tick(world_a, bus_a)
+
+    for _ in range(10):  # B: ten one-second ticks over the same 10 seconds
+        clock_b.advance(1.0)
+        await tick(world_b, bus_b)
+
+    owner_a = world_a.get_agent("owner_1")
+    owner_b = world_b.get_agent("owner_1")
+    assert owner_a is not None and owner_b is not None
+    assert owner_a.current_materials == pytest.approx(owner_b.current_materials)
+    assert owner_a.current_materials == pytest.approx(
+        100.0 - HOME_UPKEEP_MATERIALS_PER_SECOND * 10.0
+    )
