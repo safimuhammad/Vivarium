@@ -105,3 +105,66 @@ strictly-dominant fountain; build cost competes with `MATING_MIN_MATERIALS_CONTR
    ownership-on-death is L2). Confirm this doesn't create a ghost/exploit in the interim.
 5. **Where aging hooks the breath loop** to reuse the self-talk idle-detection cleanly, without
    double-counting or affecting reflection breaths.
+
+## 8. Reviewer resolutions (Opus tech review, 2026-07-01) — these govern the plan
+
+**Verdict: sound to plan, with the changes below. No conservation holes** (hearth converts, never
+mints) provided materials are deducted *before* energy is credited.
+
+**Decisions (resolved):**
+1. **Hearth = an active `use_hearth` tool** (not passive rest). Recipe: require `home_of(agent)`
+   exists and `home.region == agent.current_position`; `m = min(materials, HEARTH_MATERIALS_PER_USE)`;
+   `modify_agent_materials(-m)` **then** `modify_agent_energy(+m * rate)` — bounded by materials
+   destroyed. Add a defensive not-ALIVE guard (`execute()` already blocks non-ALIVE tools, keeping
+   paralysis social).
+2. **Key homes by a stable `home_id`**, `owner_id` as a mutable field (L2 colonize = one field
+   write; owner-keying would force painful re-keys). Homes are rare → linear-scan lookups are free.
+3. **Upkeep = time-based accrual from the owner's global materials stock**, on the world-tick:
+   store `last_upkeep_at`; `owed = HOME_UPKEEP_MATERIALS_PER_SECOND * (now - last_upkeep_at)`. This
+   is tick-frequency-*independent* (generalizes the mating 60s→600s lesson) and drawn from stock so
+   an absent/slow owner still pays — no death-spiral. Decay advances **only when the owner cannot
+   pay** (broke, dead, or swept). Size integrity/decay so collapse-when-broke ≫ slowest breath gap.
+4. **Dead/missing owner = cannot-pay → decay → collapse** (confirmed safe: hearth is owner-elected
+   so a dead-owner home is inert; combat already loots the owner broke; `modify_agent_materials`
+   no-ops for DEAD/missing and returns `False`, so the tick must not assume payment succeeded).
+   Explicit tests for dead-owner and swept-owner.
+5. **Aging hook** in `breathe()` **right after `_emit_self_talk`, before the reflect gate**, keyed
+   on `not decision.tool_calls` (covers self-talk *and* silent rest; reuses the idle signal, not the
+   method): `if not decision.tool_calls: self.world.modify_agent_energy(self.agent_id, -IDLE_AGING_ENERGY_COST)`.
+   Guards satisfied by placement: ALIVE-only branch; real-decision (`else`) block; mutually exclusive
+   with `execute()` work; reflection is a sub-step so never aged; paralysis announced by the
+   following `refresh_status`.
+
+**Required changes vs §1–7 above:** key by `home_id` (not owner); time-based upkeep w/ `last_upkeep_at`;
+tick treats dead/missing owner as cannot-pay; **all `Home`/`WorldState` mutations are sync &
+event-free — the `tick()` orchestrates upkeep/decay and publishes `home_collapsed`** (WorldState has
+no bus, same as corpse-decay).
+
+**Known limitation to OBSERVE, not over-tune (important):** aging only bites *literal idle* breaths.
+`harvest_resources` and `look_around` cost **no energy** and are tool calls → *active* → never aged.
+So an agent can harvest/look forever without aging; aging's real job is only to make self-talk/rest
+cost something (consistent with "active = using tools"). Do **not** crank `IDLE_AGING_ENERGY_COST`
+to force dynamism — it can't. The hearth's value is *contingent on energy scarcity emerging*
+(crowding/local depletion); in an easy world, free harvest dominates and homes may rarely be built —
+an acceptable thing to *watch*, per the observe-don't-design ethos.
+
+**Build order:** **aging first** (stands alone, simplest, provides the pressure), then the home.
+
+**Implementation skeleton (the plan must cover):**
+- `Home` dataclass (`world/`, `slots=True`, mutable): `home_id, owner_id, region, integrity, built_at, last_upkeep_at`.
+- `WorldState` (sync, event-free): `homes: dict[str, Home]` by `home_id`; `build_home`, `remove_home`,
+  `modify_home_integrity` (clamp `[0, HOME_MAX_INTEGRITY]`), `home_of(agent_id)`, `home_in_region(region)`, `get_all_homes()`.
+- `tick()`: third sweep (after corpse-decay) — accrue upkeep from owner stock, advance decay on
+  cannot-pay, collapse at `integrity ≤ 0` (`remove_home` + publish `home_collapsed`), snapshot-then-mutate + deferred-publish like corpse-decay.
+- Tools `build_home` (no params) + `use_hearth` — in **both** `BUILTIN_TOOLS` and `TOOL_SCHEMAS`
+  (parity test); NL `Error:`/`Invalid:`/success returns.
+- Events (LOCAL): `home_built`, `hearth_used`, `home_collapsed` + verbs in `_EVENT_VERBS`. Aging stays silent.
+- `WORLD_MECHANICS` prose (DD9): idling wears you down; build a home; rest at the hearth to turn
+  materials into energy; feed it materials or it crumbles.
+- `render_world_table` gains a homes section (owner + integrity) — observer-facing hard requirement.
+- Constants: `IDLE_AGING_ENERGY_COST`, `HOME_BUILD_MATERIALS_COST` (≳ `MATING_MIN_MATERIALS_CONTRIBUTION=30`),
+  `HEARTH_MATERIALS_PER_USE`, `HEARTH_ENERGY_PER_USE`/rate, `HOME_UPKEEP_MATERIALS_PER_SECOND`,
+  `HOME_DECAY_PER_MISSED_TICK`, `HOME_MAX_INTEGRITY`.
+- Tests (beyond §6): tool-breath-does-not-age; aged-into-paralysis emits `agent_paralyzed`;
+  dead-owner & swept-owner decay→collapse; hearth partial-burn + exact conservation; tick-frequency
+  independence; collapse fires once; `build_home` recomputes `is_hoarding` correctly.
