@@ -272,6 +272,37 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    "pledge_home": {
+        "type": "function",
+        "function": {
+            "name": "pledge_home",
+            "description": (
+                "Pledge yourself to a home where you stand, joining it so you share its "
+                "upkeep and may rest at its hearth. A home tended by more beings stands sounder."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "home_id": {
+                        "type": "string",
+                        "description": "Id of the home in your place to join.",
+                    },
+                },
+                "required": ["home_id"],
+            },
+        },
+    },
+    "leave_home": {
+        "type": "function",
+        "function": {
+            "name": "leave_home",
+            "description": (
+                "Give up your place in the home you share; you no longer share its upkeep "
+                "or rest at its hearth."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
 }
 """Tool name -> Ollama function schema; its key set mirrors ``BUILTIN_TOOLS``."""
 

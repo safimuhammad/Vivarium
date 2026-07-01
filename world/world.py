@@ -25,12 +25,12 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from core.constants import HOME_MAX_INTEGRITY, PARALYSIS_ENERGY_THRESHOLD
+from core.constants import PARALYSIS_ENERGY_THRESHOLD
 from core.logging import get_logger
 from core.rng import Clock, SimContext, default_clock, make_rng
 
 from .agents import AgentState, AgentStatus
-from .homes import Home
+from .homes import Home, max_integrity
 from .regions import Region, ResourceTypes
 
 logger = get_logger(__name__)
@@ -301,7 +301,7 @@ class WorldState:
         return True
 
     def kill_agent(self, agent_id: str) -> bool:
-        """Mark an agent DEAD and clean up its pending mating proposals.
+        """Mark an agent DEAD, sweep its mating proposals, and prune its homes.
 
         The sole death writer (Sprint 6). Sets status to DEAD and stamps ``died_at``
         with the current world clock (so the world-tick can later decay the corpse),
@@ -309,14 +309,19 @@ class WorldState:
         where the dead agent is the *initiator*, the proposal is removed and its escrow is
         abandoned (not refunded to a corpse); where the dead agent is a *target*, the
         proposal is removed and the still-live initiator's escrow is refunded immediately
-        (rather than waiting for the world-tick timeout sweep). Emits no event (the caller
-        emits ``agent_died``).
+        (rather than waiting for the world-tick timeout sweep). Finally (Layer 2a), for
+        every home the dead agent holds a stake in it is detached via
+        :meth:`remove_stakeholder` -- silent state cleanup, like the proposal sweep. Emits
+        no event (the caller emits ``agent_died``).
 
         Mutates the agent's :attr:`~world.agents.AgentState.status` and
         :attr:`~world.agents.AgentState.died_at`, the escrow balances of any
         still-live initiators (via :meth:`modify_agent_energy` /
-        :meth:`modify_agent_materials`), and both :attr:`pending_proposals` and
-        :attr:`pending_proposal_targets`.
+        :meth:`modify_agent_materials`), both :attr:`pending_proposals` and
+        :attr:`pending_proposal_targets`, and, for every home the agent holds a stake in,
+        removes it from the home's ``stakeholders`` -- promoting the lowest-id survivor to
+        owner if it owned the home and stakeholders remain, and clamping the home's
+        integrity down to the new :func:`~world.homes.max_integrity`.
 
         Args:
             agent_id: Id of the agent to kill.
@@ -342,6 +347,12 @@ class WorldState:
                 elif resource_type is ResourceTypes.MATERIALS:
                     self.modify_agent_materials(initiator_id, quantity)
             self.remove_proposal(initiator_id, target_id)
+        # Prune the dead being from every home it holds a stake in (else a corpse keeps
+        # propping up a fortress). remove_stakeholder promotes a surviving stakeholder to
+        # owner on an owner's death and clamps integrity down to the smaller max_integrity(s).
+        for home in list(self.get_all_homes()):
+            if self.is_stakeholder(home.home_id, agent_id):
+                self.remove_stakeholder(home.home_id, agent_id)
         return True
 
     # ---- Mating proposal methods ----
@@ -582,7 +593,10 @@ class WorldState:
         Sync and event-free (the world has no bus, DD4): the caller (the
         ``build_home`` tool) publishes ``home_built``. ``last_upkeep_at`` is seeded to
         ``built_at`` so the world-tick's time-based upkeep accrues from the moment of
-        building. Mutates :attr:`homes`.
+        building. The builder is seeded as both :attr:`~world.homes.Home.owner_id`
+        and the sole entry in :attr:`~world.homes.Home.stakeholders` (Layer 2 shared
+        ownership starts as a one-being pool; others join later via
+        ``pledge_home``). Mutates :attr:`homes`.
 
         Args:
             home_id: Stable unique id (also the map key).
@@ -604,6 +618,7 @@ class WorldState:
             integrity=integrity,
             built_at=built_at,
             last_upkeep_at=built_at,
+            stakeholders=[owner_id],
         )
         return True
 
@@ -622,11 +637,13 @@ class WorldState:
         return False
 
     def modify_home_integrity(self, home_id: str, amount: float) -> bool:
-        """Add ``amount`` to a home's integrity, clamped to ``[0.0, HOME_MAX_INTEGRITY]``.
+        """Add ``amount`` to a home's integrity, clamped to ``[0.0, max_integrity(s)]``.
 
-        Mirrors :meth:`modify_region_energy`'s clamp discipline (homes are bounded
-        above as well as below). Mutates the home's
-        :attr:`~world.homes.Home.integrity`.
+        The upper bound is the home's stakeholder-scaled ceiling
+        (:func:`~world.homes.max_integrity` of ``len(stakeholders)``), so a home's soundness
+        grows (with diminishing returns) as beings pledge to it and shrinks when they leave.
+        Calling with ``amount=0.0`` re-clamps a home DOWN to a freshly reduced ceiling (used
+        by :meth:`remove_stakeholder`). Mutates the home's :attr:`~world.homes.Home.integrity`.
 
         Args:
             home_id: Id of the home to modify.
@@ -638,7 +655,8 @@ class WorldState:
         home = self.homes.get(home_id)
         if home is None:
             return False
-        home.integrity = min(max(home.integrity + amount, 0.0), HOME_MAX_INTEGRITY)
+        cap = max_integrity(len(home.stakeholders))
+        home.integrity = min(max(home.integrity + amount, 0.0), cap)
         return True
 
     def home_of(self, agent_id: str) -> Home | None:
@@ -655,6 +673,107 @@ class WorldState:
         """
         for home in self.homes.values():
             if home.owner_id == agent_id:
+                return home
+        return None
+
+    def get_home(self, home_id: str) -> Home | None:
+        """Look up a home by id.
+
+        Args:
+            home_id: Home id to look up.
+
+        Returns:
+            The :class:`~world.homes.Home`, or ``None`` if unknown.
+        """
+        return self.homes.get(home_id)
+
+    def add_stakeholder(self, home_id: str, agent_id: str) -> bool:
+        """Add ``agent_id`` as a stakeholder of a home (idempotent). Mutates :attr:`homes`.
+
+        A being pledges into a home to share its upkeep and hearth. Idempotent: a repeat
+        pledge does not double-list the being. Does NOT raise the integrity ceiling for the
+        current integrity — the tick heals a paid home up to the new, larger
+        :func:`~world.homes.max_integrity` over time.
+
+        Args:
+            home_id: Id of the home to join.
+            agent_id: Id of the joining being.
+
+        Returns:
+            ``True`` if the home exists (whether or not it was a no-op duplicate);
+            ``False`` if the home is unknown.
+        """
+        home = self.homes.get(home_id)
+        if home is None:
+            return False
+        if agent_id not in home.stakeholders:
+            home.stakeholders.append(agent_id)
+        return True
+
+    def remove_stakeholder(self, home_id: str, agent_id: str) -> bool:
+        """Remove ``agent_id`` from a home; promote a new owner if needed; clamp integrity.
+
+        The single prune+promote+clamp primitive shared by voluntary departure
+        (:func:`~tools.builtin.homes.leave_home`) and death (:meth:`kill_agent`):
+
+        #. Remove ``agent_id`` from :attr:`~world.homes.Home.stakeholders`.
+        #. If it was the ``owner_id`` and stakeholders remain, promote the lowest-id
+           survivor to owner (else the home would keep a departed/dead ghost as owner).
+        #. Clamp integrity DOWN to the smaller :func:`~world.homes.max_integrity` (a home
+           with fewer tenders is softer), via ``modify_home_integrity(home_id, 0.0)``.
+
+        A home whose last stakeholder is removed keeps a (now ownerless-in-practice) owner
+        field but has no living payer, so the world-tick decays it to collapse (spec §6).
+        Vault/structure removal on collapse is unchanged (ruins are 2c). Mutates
+        :attr:`homes`.
+
+        Args:
+            home_id: Id of the home to detach from.
+            agent_id: Id of the being to remove.
+
+        Returns:
+            ``True`` if the home exists and ``agent_id`` was a stakeholder that was removed;
+            ``False`` if the home is unknown or ``agent_id`` was not a stakeholder.
+        """
+        home = self.homes.get(home_id)
+        if home is None or agent_id not in home.stakeholders:
+            return False
+        home.stakeholders.remove(agent_id)
+        if agent_id == home.owner_id and home.stakeholders:
+            home.owner_id = min(home.stakeholders)
+        self.modify_home_integrity(home_id, 0.0)  # re-clamp DOWN to the new, smaller ceiling
+        return True
+
+    def is_stakeholder(self, home_id: str, agent_id: str) -> bool:
+        """Return whether ``agent_id`` is a stakeholder of a home (pure read).
+
+        Args:
+            home_id: Id of the home to check.
+            agent_id: Id of the being to check.
+
+        Returns:
+            ``True`` if the home exists and ``agent_id`` is in its stakeholders.
+        """
+        home = self.homes.get(home_id)
+        return home is not None and agent_id in home.stakeholders
+
+    def stakeholder_home_of(self, agent_id: str) -> Home | None:
+        """Return the home ``agent_id`` holds a stake in (owner or pledged), or ``None``.
+
+        The stakeholder-aware counterpart to the owner-only :meth:`home_of`. Used by
+        ``build_home`` and ``pledge_home`` (the shared at-most-one-home precondition),
+        ``use_hearth`` (rest at the home you share), and ``leave_home`` (the home you can
+        leave). A being belongs to at most one home in practice; the first match is
+        returned.
+
+        Args:
+            agent_id: Id of the being to look up.
+
+        Returns:
+            The :class:`~world.homes.Home` it holds a stake in, or ``None``.
+        """
+        for home in self.homes.values():
+            if agent_id in home.stakeholders:
                 return home
         return None
 

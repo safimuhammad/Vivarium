@@ -753,3 +753,232 @@ def test_get_all_homes(world: WorldState) -> None:
         "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
     )
     assert [h.home_id for h in world.get_all_homes()] == ["h1"]
+
+
+def test_build_home_seeds_owner_as_first_stakeholder(world: WorldState) -> None:
+    """The builder is the home's owner AND its first stakeholder (L2 shared-ownership seed)."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert world.homes["h1"].stakeholders == ["wanderer_001"]
+
+
+def test_modify_home_integrity_clamp_scales_with_stakeholders(world: WorldState) -> None:
+    """The integrity clamp ceiling grows with stakeholder count (max_integrity), not a flat max."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    # One stakeholder: the ceiling is the L1 max (100).
+    assert world.modify_home_integrity("h1", 1000.0) is True
+    assert world.homes["h1"].integrity == HOME_MAX_INTEGRITY
+    # A second stakeholder lifts the ceiling to M(2)=150 (set directly; add_stakeholder is Task 3).
+    world.homes["h1"].stakeholders.append("wanderer_002")
+    assert world.modify_home_integrity("h1", 1000.0) is True
+    assert world.homes["h1"].integrity == 150.0
+    # Clamping is still floored at 0.
+    assert world.modify_home_integrity("h1", -1000.0) is True
+    assert world.homes["h1"].integrity == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Layer 2a: stakeholders (sync, event-free)
+# ---------------------------------------------------------------------------
+
+
+def test_get_home_returns_home_or_none(world: WorldState) -> None:
+    assert world.get_home("h1") is None
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    home = world.get_home("h1")
+    assert home is not None and home.home_id == "h1"
+
+
+def test_add_stakeholder_is_idempotent_no_duplicate(world: WorldState) -> None:
+    """A being joins once; a duplicate pledge is a no-op (no double-listing)."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert world.add_stakeholder("h1", "wanderer_002") is True
+    assert world.add_stakeholder("h1", "wanderer_002") is True  # dup -> no-op
+    assert world.homes["h1"].stakeholders == ["wanderer_001", "wanderer_002"]  # exactly once
+    assert world.add_stakeholder("missing", "wanderer_002") is False  # unknown home
+
+
+def test_is_stakeholder_and_stakeholder_home_of(world: WorldState) -> None:
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.add_stakeholder("h1", "wanderer_002")
+    assert world.is_stakeholder("h1", "wanderer_001") is True  # owner is a stakeholder
+    assert world.is_stakeholder("h1", "wanderer_002") is True
+    assert world.is_stakeholder("h1", "ghost") is False
+    assert world.is_stakeholder("missing", "wanderer_001") is False
+    found = world.stakeholder_home_of("wanderer_002")
+    assert found is not None and found.home_id == "h1"
+    assert world.stakeholder_home_of("ghost") is None
+
+
+def test_remove_stakeholder_of_nonowner_clamps_down(world: WorldState) -> None:
+    """Removing a non-owner stakeholder shrinks the ceiling and clamps integrity down."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.add_stakeholder("h1", "wanderer_002")  # [001, 002] -> M(2)=150
+    world.modify_home_integrity("h1", 100.0)  # heal up to 150
+    assert world.homes["h1"].integrity == 150.0
+
+    assert world.remove_stakeholder("h1", "wanderer_002") is True
+
+    home = world.homes["h1"]
+    assert home.stakeholders == ["wanderer_001"]
+    assert home.owner_id == "wanderer_001"  # owner unchanged
+    assert home.integrity == 100.0  # clamped DOWN to M(1)
+
+
+def test_remove_stakeholder_of_owner_promotes_lowest_id_survivor(world: WorldState) -> None:
+    """Removing the owner promotes the lowest-id remaining stakeholder and clamps."""
+    world.add_agent(make_agent("wanderer_003"))
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.add_stakeholder("h1", "wanderer_003")
+    world.add_stakeholder("h1", "wanderer_002")  # stakeholders: [001, 003, 002] -> M(3)=175
+    world.modify_home_integrity("h1", 100.0)  # heal up to 175
+    assert world.homes["h1"].integrity == 175.0
+
+    assert world.remove_stakeholder("h1", "wanderer_001") is True  # remove the OWNER
+
+    home = world.homes["h1"]
+    assert "wanderer_001" not in home.stakeholders
+    assert home.owner_id == "wanderer_002"  # promoted: min of {002, 003}
+    assert home.integrity == 150.0  # clamped DOWN to M(2)
+
+
+def test_remove_stakeholder_of_last_stakeholder_leaves_empty_standing_home(
+    world: WorldState,
+) -> None:
+    """Removing the sole stakeholder empties the home but does NOT delete it.
+
+    The last-stakeholder-leaves case is the mainline path for the death (Task 5) and
+    ``leave_home`` (Task 7) callers when a being lived alone: no survivor to promote,
+    so ``owner_id`` is left pointing at the departed/dead being (a ghost owner in
+    practice), and integrity clamps to ``max_integrity(0) == max_integrity(1)`` -- the
+    home keeps existing, empty, for the tick's upkeep to find no solvent payer and
+    decay it (spec §6); this method never calls ``remove_home``.
+    """
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+
+    assert world.remove_stakeholder("h1", "wanderer_001") is True
+
+    home = world.get_home("h1")
+    assert home is not None  # still exists -- not deleted
+    assert home.stakeholders == []
+    assert home.owner_id == "wanderer_001"  # ghost owner, left as-is (no survivor to promote)
+    assert home.integrity == HOME_MAX_INTEGRITY  # clamped to M(0) == M(1) == 100
+
+
+def test_remove_stakeholder_rejects_unknown_and_nonmember(world: WorldState) -> None:
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert world.remove_stakeholder("h1", "ghost") is False  # not a stakeholder
+    assert world.remove_stakeholder("missing", "wanderer_001") is False  # unknown home
+
+
+# ---------------------------------------------------------------------------
+# Layer 2a: kill_agent prunes homes (Task 5)
+# ---------------------------------------------------------------------------
+
+
+def test_kill_agent_prunes_owner_promotes_survivor_and_clamps(world: WorldState) -> None:
+    """Killing an owner prunes it, promotes the lowest-id survivor, and clamps integrity down."""
+    world.add_agent(make_agent("wanderer_003"))
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.add_stakeholder("h1", "wanderer_003")
+    world.add_stakeholder("h1", "wanderer_002")  # [001, 003, 002] -> M(3)=175
+    world.modify_home_integrity("h1", 100.0)  # heal up to 175
+    assert world.homes["h1"].integrity == 175.0
+
+    assert world.kill_agent("wanderer_001") is True  # kill the OWNER
+
+    home = world.homes["h1"]
+    assert "wanderer_001" not in home.stakeholders  # pruned at kill-time
+    assert home.owner_id == "wanderer_002"  # promoted: min survivor
+    assert home.integrity == 150.0  # clamped DOWN to M(2)
+
+
+def test_kill_agent_prunes_nonowner_stakeholder_and_clamps(world: WorldState) -> None:
+    """Killing a non-owner stakeholder prunes + clamps but leaves the owner unchanged."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.add_stakeholder("h1", "wanderer_002")  # [001, 002] -> M(2)=150
+    world.modify_home_integrity("h1", 100.0)  # heal up to 150
+
+    assert world.kill_agent("wanderer_002") is True  # non-owner
+
+    home = world.homes["h1"]
+    assert "wanderer_002" not in home.stakeholders
+    assert home.owner_id == "wanderer_001"  # unchanged
+    assert home.integrity == 100.0  # clamped to M(1)
+
+
+def test_kill_agent_sole_owner_leaves_ownerless_decaying_home(world: WorldState) -> None:
+    """A slain sole owner is pruned; the home keeps a ghost owner and will decay via the tick."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+
+    assert world.kill_agent("wanderer_001") is True
+
+    home = world.homes["h1"]
+    assert home.stakeholders == []  # no one left to pay
+    assert home.owner_id == "wanderer_001"  # ghost owner (dead) — the tick decays the home out
+
+
+def test_kill_agent_prunes_stakeholder_from_every_home_it_holds(world: WorldState) -> None:
+    """A being staked in several homes is pruned from every one of them at kill-time."""
+    world.add_agent(make_agent("wanderer_003"))
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.build_home(
+        "h2", "wanderer_002", "beta", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.add_stakeholder("h1", "wanderer_003")  # [001, 003] -> M(2)=150
+    world.add_stakeholder("h2", "wanderer_003")  # [002, 003] -> M(2)=150
+    world.modify_home_integrity("h1", 100.0)  # heal up to 150
+    world.modify_home_integrity("h2", 100.0)  # heal up to 150
+    assert world.homes["h1"].integrity == 150.0
+    assert world.homes["h2"].integrity == 150.0
+
+    assert world.kill_agent("wanderer_003") is True  # staked in both h1 and h2
+
+    h1, h2 = world.homes["h1"], world.homes["h2"]
+    assert "wanderer_003" not in h1.stakeholders
+    assert "wanderer_003" not in h2.stakeholders
+    assert h1.owner_id == "wanderer_001"  # unchanged -- wanderer_003 owned neither
+    assert h2.owner_id == "wanderer_002"  # unchanged
+    assert h1.integrity == HOME_MAX_INTEGRITY  # both clamped DOWN to M(1)
+    assert h2.integrity == HOME_MAX_INTEGRITY
+
+
+def test_kill_agent_with_no_home_stake_is_a_safe_noop_for_homes(world: WorldState) -> None:
+    """Killing a being that holds no stake in any home leaves every home untouched."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.modify_home_integrity("h1", -20.0)  # dent it so an accidental re-clamp would show
+    before = world.homes["h1"].integrity
+
+    assert world.kill_agent("wanderer_002") is True  # exists, but not a stakeholder of h1
+
+    home = world.homes["h1"]
+    assert home.stakeholders == ["wanderer_001"]  # untouched
+    assert home.owner_id == "wanderer_001"  # untouched
+    assert home.integrity == before  # untouched

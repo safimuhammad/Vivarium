@@ -32,6 +32,7 @@ from core.rng import make_rng
 from tests.conftest import SEED, FakeClock
 from tools.builtin.mating import initiate_mating, reject_mating
 from world.agents import AgentState, AgentStatus
+from world.homes import max_integrity
 from world.regions import Region, ResourceTypes
 from world.tick import _tick_once_resilient, tick
 from world.world import WorldState
@@ -473,3 +474,160 @@ async def test_tick_home_upkeep_is_frequency_independent() -> None:
     assert owner_a.current_materials == pytest.approx(
         100.0 - HOME_UPKEEP_MATERIALS_PER_SECOND * 10.0
     )
+
+
+# ---- Collective-pool home upkeep (L2a) ------------------------------------
+
+
+def _home_world(*balances: tuple[str, float]) -> tuple[WorldState, EventBus, FakeClock]:
+    """A zero-regen one-region world with the given (agent_id, materials) beings in ``alpha``.
+
+    Zero regen isolates the upkeep draw. The first being owns a home (and is its first
+    stakeholder); the caller adds the rest as stakeholders as needed.
+    """
+    clock = FakeClock()
+    region = Region(
+        name="alpha",
+        description="A field.",
+        connections=[],
+        energy_rate=0.0,
+        materials_rate=0.0,
+        current_energy=0.0,
+        current_materials=0.0,
+        max_energy=1000.0,
+        max_materials=1000.0,
+    )
+    beings = [
+        AgentState(
+            id=aid,
+            name=aid.title(),
+            persona="p",
+            current_position="alpha",
+            current_energy=100.0,
+            current_materials=mats,
+            status=AgentStatus.ALIVE,
+        )
+        for aid, mats in balances
+    ]
+    world = WorldState([region], beings, rng=make_rng(SEED), clock=clock)
+    bus = EventBus(world)
+    for aid, _ in balances:
+        bus.subscribe(aid)
+    world.build_home(
+        "h1", balances[0][0], "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    return world, bus, clock
+
+
+async def test_tick_collective_upkeep_solvent_owner_covers_alone() -> None:
+    """A solvent owner covers upkeep alone (draw stops early); a co-stakeholder is untouched."""
+    world, bus, clock = _home_world(("owner_1", 100.0), ("wanderer_9", 50.0))
+    world.add_stakeholder("h1", "wanderer_9")  # [owner_1, wanderer_9] -> M(2)=150
+    clock.advance(10.0)  # owed = 0.1 * 10 = 1.0
+
+    await tick(world, bus)
+
+    owner = world.get_agent("owner_1")
+    friend = world.get_agent("wanderer_9")
+    home = world.get_home("h1")
+    assert owner is not None and friend is not None and home is not None
+    assert owner.current_materials == pytest.approx(
+        99.0
+    )  # owner covered all 1.0 (draw broke early)
+    assert friend.current_materials == pytest.approx(50.0)  # untouched — never reached
+    assert home.integrity == 150.0  # healed to M(2)
+    assert home.last_upkeep_at == world.now()  # advanced on a covered tick
+
+
+async def test_tick_collective_upkeep_draws_across_payers_in_order() -> None:
+    """Owed is drawn owner-first, then the next stakeholder covers the remainder; heals to M(2)."""
+    world, bus, clock = _home_world(("owner_1", 0.5), ("wanderer_9", 100.0))
+    world.add_stakeholder("h1", "wanderer_9")  # [owner_1, wanderer_9] -> M(2)=150
+    clock.advance(10.0)  # owed = 1.0
+
+    await tick(world, bus)
+
+    owner = world.get_agent("owner_1")
+    friend = world.get_agent("wanderer_9")
+    home = world.get_home("h1")
+    assert owner is not None and friend is not None and home is not None
+    assert owner.current_materials == pytest.approx(0.0)  # owner paid all 0.5 it had
+    assert friend.current_materials == pytest.approx(99.5)  # covered the remaining 0.5
+    assert home.integrity == 150.0  # healed to M(2)
+    assert home.last_upkeep_at == world.now()
+
+
+async def test_tick_collective_upkeep_none_decays_and_freezes() -> None:
+    """When the whole pool cannot cover owed, nothing is drawn, integrity decays, clock freezes."""
+    world, bus, clock = _home_world(("owner_1", 0.2), ("wanderer_9", 0.1))
+    world.add_stakeholder("h1", "wanderer_9")  # pool = 0.3
+    home_before = world.get_home("h1")
+    assert home_before is not None
+    frozen_at = home_before.last_upkeep_at
+    clock.advance(10.0)  # owed = 1.0 > 0.3
+
+    await tick(world, bus)
+
+    owner = world.get_agent("owner_1")
+    friend = world.get_agent("wanderer_9")
+    home = world.get_home("h1")
+    assert owner is not None and friend is not None and home is not None
+    assert owner.current_materials == pytest.approx(0.2)  # untouched (all-or-nothing)
+    assert friend.current_materials == pytest.approx(0.1)  # untouched
+    assert home.integrity == HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK  # decayed one step
+    assert home.last_upkeep_at == frozen_at  # frozen: arrears accrue (back-rent)
+
+
+async def test_tick_ownerless_home_with_no_living_payers_decays_to_collapse() -> None:
+    """A home whose only stakeholder left (ghost owner) has no payer, so it decays and collapses."""
+    world, bus, clock = _home_world(("owner_1", 100.0))
+    world.modify_home_integrity("h1", -(HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK))  # -> 10
+    world.remove_stakeholder("h1", "owner_1")  # last stakeholder gone; owner stays ghost
+    bus.get_events("owner_1")  # drain
+    clock.advance(1.0)
+
+    await tick(world, bus)
+
+    assert world.get_home("h1") is None  # collapsed and removed
+    collapsed = [e for e in bus.get_events("owner_1") if e.type == "home_collapsed"]
+    assert len(collapsed) == 1
+    assert collapsed[0].scope is ScopeType.LOCAL and collapsed[0].region == "alpha"
+
+
+async def test_tick_promoted_costakeholder_pays_upkeep_after_owner_death() -> None:
+    """``kill_agent`` prunes+promotes; the promoted survivor alone then covers upkeep.
+
+    Conservation-critical permutation: a home has two stakeholders -- an owner about to
+    die and a solvent co-stakeholder. ``kill_agent`` prunes the dead owner from
+    ``stakeholders`` and promotes the co-stakeholder to owner (:meth:`WorldState.
+    remove_stakeholder`) BEFORE the next tick runs. The tick must then draw upkeep from
+    the promoted survivor alone (the dead owner is filtered out as non-living), heal the
+    home to the NEW one-stakeholder ceiling (:func:`~world.homes.max_integrity`, not the
+    stale two-stakeholder one), advance ``last_upkeep_at``, and leave the dead agent's
+    own balance untouched (``kill_agent`` never mutates materials; the tick's payer loop
+    skips ``DEAD`` agents).
+    """
+    world, bus, clock = _home_world(("owner_1", 100.0), ("wanderer_9", 50.0))
+    world.add_stakeholder("h1", "wanderer_9")  # [owner_1, wanderer_9] -> M(2)=150
+    world.modify_home_integrity("h1", -50.0)  # wear it down: 100 -> 50 (below both ceilings)
+
+    world.kill_agent("owner_1")  # prunes owner_1, promotes wanderer_9 to owner
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.owner_id == "wanderer_9"  # promoted (sole survivor)
+    assert home.stakeholders == ["wanderer_9"]
+    assert home.integrity == 50.0  # re-clamp to M(1)=100 is a no-op here (50 < 100)
+    clock.advance(10.0)  # owed = HOME_UPKEEP_MATERIALS_PER_SECOND * 10 = 1.0
+
+    await tick(world, bus)
+
+    survivor = world.get_agent("wanderer_9")
+    dead_owner = world.get_agent("owner_1")
+    home_after = world.get_home("h1")
+    assert survivor is not None and dead_owner is not None and home_after is not None
+    assert survivor.current_materials == pytest.approx(49.0)  # paid the full 1.0 owed, alone
+    assert home_after.integrity == max_integrity(1)  # healed to the NEW one-stakeholder ceiling
+    assert home_after.last_upkeep_at == world.now()  # advanced: a covered tick
+    assert dead_owner.current_materials == pytest.approx(100.0)  # untouched by death or upkeep
+    assert [e for e in bus.get_events("wanderer_9") if e.type == "home_collapsed"] == []

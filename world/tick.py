@@ -14,10 +14,14 @@ breathing loops. Each step does four jobs:
    passing announced with a LOCAL ``agent_decayed`` event in its region. A body
    lingers (locally perceivable) so an away being can return and find it, then
    returns to the earth as a heard beat -- and corpses never pile up (run-forever).
-#. **Sweep home upkeep/decay** -- each home draws time-based upkeep from its
-   owner's global materials stock; a home whose owner cannot pay decays, and
-   collapses (removed from the world, its passing announced with a LOCAL
-   ``home_collapsed`` event in its region) at integrity ``<= 0.0``.
+#. **Sweep home upkeep/decay** -- each home draws time-based upkeep from the
+   COLLECTIVE pool of its living stakeholders (owner first when still a
+   stakeholder, then the rest by id), all-or-nothing; a home the pool cannot
+   cover decays and its ``last_upkeep_at`` freezes (arrears accrue), while a
+   covered home heals to its stakeholder-scaled ceiling
+   (:func:`~world.homes.max_integrity`). Either way, collapse (removed from the
+   world, its passing announced with a LOCAL ``home_collapsed`` event in its
+   region) still happens at integrity ``<= 0.0``.
 
 This lives as a *module function* taking both the world and the bus (NOT a
 :class:`~world.world.WorldState` method): the sweeps must publish events, and
@@ -42,12 +46,12 @@ from bus.events import Event, ScopeType
 from core.constants import (
     CORPSE_DECAY_SECONDS,
     HOME_DECAY_PER_MISSED_TICK,
-    HOME_MAX_INTEGRITY,
     HOME_UPKEEP_MATERIALS_PER_SECOND,
     MATING_PROPOSAL_TIMEOUT_SECONDS,
 )
 from core.logging import get_logger
-from world.agents import AgentStatus
+from world.agents import AgentState, AgentStatus
+from world.homes import max_integrity
 from world.regions import ResourceTypes
 from world.world import WorldState
 
@@ -69,15 +73,24 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
           :meth:`~world.world.WorldState.remove_agent`.
         * For each home, computes time-based upkeep owed
           (:data:`~core.constants.HOME_UPKEEP_MATERIALS_PER_SECOND` times elapsed
-          time since :attr:`~world.homes.Home.last_upkeep_at`). If the owner
-          exists, is not ``DEAD``, and holds enough materials, deducts the owed
-          amount via :meth:`~world.world.WorldState.modify_agent_materials`,
-          restores integrity to :data:`~core.constants.HOME_MAX_INTEGRITY` via
+          time since :attr:`~world.homes.Home.last_upkeep_at`) and draws it from
+          the COLLECTIVE pool of the home's living stakeholders, in a
+          deterministic order (the owner first when it is still a stakeholder,
+          then the rest by id). All-or-nothing: if the pooled materials of every
+          living (non-``DEAD``, non-missing) stakeholder cannot cover ``owed``,
+          nothing is drawn from anyone. Otherwise draws ``owed`` across the
+          ordered payers via :meth:`~world.world.WorldState.modify_agent_materials`
+          (each pays ``min(their materials, remaining owed)`` until covered),
+          heals integrity to the stakeholder-scaled ceiling
+          (:func:`~world.homes.max_integrity` of ``len(stakeholders)``) via
           :meth:`~world.world.WorldState.modify_home_integrity`, and advances
-          ``last_upkeep_at`` to ``now``. Otherwise (broke, ``DEAD``, or swept
-          from the world) decrements integrity by
-          :data:`~core.constants.HOME_DECAY_PER_MISSED_TICK`; at ``<= 0.0``
-          removes the home via :meth:`~world.world.WorldState.remove_home`.
+          ``last_upkeep_at`` to ``now``. When the pool cannot cover ``owed``,
+          decrements integrity by :data:`~core.constants.HOME_DECAY_PER_MISSED_TICK`
+          and deliberately leaves ``last_upkeep_at`` frozen so the shortfall
+          accrues as arrears (back-rent); at ``<= 0.0`` removes the home via
+          :meth:`~world.world.WorldState.remove_home`. Conservation: materials are
+          only ever destroyed (drawn from payers, never minted) or left in place;
+          energy is untouched by this sweep.
 
     Emits events:
         * One ``"mating_proposal_timeout"`` event
@@ -160,27 +173,41 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
             )
         )
 
-    # Sweep home upkeep/decay. Each home draws TIME-based upkeep from its owner's global
-    # materials stock (tick-frequency-independent: owed = rate * elapsed). A home whose
-    # owner cannot pay -- broke, DEAD, or swept from the world (modify_agent_materials
-    # no-ops for DEAD/missing, so the tick checks affordability itself and never assumes
-    # payment) -- loses integrity, and at <= 0 collapses: removed and its passing announced
-    # LOCALLY. Same snapshot-then-mutate discipline: mutate synchronously, defer the publish.
+    # Sweep home upkeep/decay (COLLECTIVE pool, L2a). owed = rate * elapsed is drawn from the
+    # home's living stakeholders in a deterministic order (the owner first when it is still a
+    # stakeholder, then the rest by id) — ALL-OR-NOTHING: if the pooled materials cannot cover
+    # owed, nothing is drawn, the home loses integrity, and last_upkeep_at is FROZEN so the
+    # arrears accrue (back-rent). A covered home is healed to its stakeholder-scaled ceiling
+    # max_integrity(s) and last_upkeep_at advances. A departed/ghost owner (owner_id not in
+    # stakeholders) never pays. Collapse (<= 0) still just removes the home (ruins are 2c).
+    # Same snapshot-then-mutate discipline: mutate synchronously, defer the publish.
     collapse_events: list[Event] = []
     for home in list(world.get_all_homes()):
         owed = HOME_UPKEEP_MATERIALS_PER_SECOND * (now - home.last_upkeep_at)
-        owner = world.get_agent(home.owner_id)
-        can_pay = (
-            owner is not None
-            and owner.status is not AgentStatus.DEAD
-            and owner.current_materials >= owed
-        )
-        if can_pay:
-            world.modify_agent_materials(home.owner_id, -owed)
-            world.modify_home_integrity(home.home_id, HOME_MAX_INTEGRITY)  # a fed home stays sound
-            home.last_upkeep_at = now
+        others = sorted(s for s in home.stakeholders if s != home.owner_id)
+        ordered = ([home.owner_id] if home.owner_id in home.stakeholders else []) + others
+        # Capture the (id, AgentState) of each living payer once — no re-lookup in the draw
+        # loop (avoids an unreachable None-guard and keeps mypy happy without a re-narrow).
+        living: list[tuple[str, AgentState]] = []
+        available = 0.0
+        for payer_id in ordered:
+            payer = world.get_agent(payer_id)
+            if payer is not None and payer.status is not AgentStatus.DEAD:
+                living.append((payer_id, payer))
+                available += payer.current_materials
+        if living and available >= owed:
+            remaining = owed
+            for payer_id, payer in living:
+                if remaining <= 0.0:
+                    break  # owed already covered; leave the remaining payers untouched
+                pay = min(payer.current_materials, remaining)
+                world.modify_agent_materials(payer_id, -pay)
+                remaining -= pay
+            world.modify_home_integrity(home.home_id, max_integrity(len(home.stakeholders)))
+            home.last_upkeep_at = now  # advance only on a covered tick
         else:
             world.modify_home_integrity(home.home_id, -HOME_DECAY_PER_MISSED_TICK)
+            # last_upkeep_at is deliberately NOT advanced here (frozen: back-rent accrues).
             if home.integrity <= 0.0:
                 region = home.region
                 world.remove_home(home.home_id)
