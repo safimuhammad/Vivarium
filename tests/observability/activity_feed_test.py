@@ -10,6 +10,7 @@ terminal) and is excluded from the fast suite.
 from __future__ import annotations
 
 from bus.events import Event, ScopeType
+from core.constants import HOME_MAX_INTEGRITY
 from observability.activity_feed import render_event, render_world_table
 from world.world import WorldState
 
@@ -92,3 +93,43 @@ def test_render_world_table_shows_homes(world: WorldState) -> None:
     assert "Homes" in text  # the section title
     assert "home_ada" in text  # the home id (unique to the homes section)
     assert "42.0" in text  # its integrity is visible to the observer
+
+
+def test_render_event_shared_home_events_are_human_readable() -> None:
+    """Message-less shared-home events fall back to a distinct verb per type."""
+    for etype, needle in (("home_joined", "joined"), ("home_left", "left")):
+        event = Event(etype, "wanderer_002", {}, scope=ScopeType.LOCAL)  # no message -> verb
+        assert needle in render_event(event).lower()
+
+
+def test_render_world_table_shows_stakeholders_and_scaled_health(world: WorldState) -> None:
+    """The homes section surfaces stakeholder count + integrity/max (observer-facing)."""
+    from rich.console import Console
+
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.add_stakeholder("home_ada", "wanderer_002")  # 2 stakeholders -> ceiling 150
+    world.modify_home_integrity("home_ada", 1000.0)  # heal up to 150
+    table = render_world_table(world)
+    text = "".join(seg.text for seg in Console(width=200).render(table))
+
+    assert "Stakeholders" in text  # the new column
+    assert "Health" in text  # integrity/max column header
+    assert "2" in text  # stakeholder count
+    assert "150.0" in text  # the stakeholder-scaled ceiling M(2)
+
+
+def test_render_world_table_homes_section_renders_cleanly_with_zero_homes(
+    world: WorldState,
+) -> None:
+    """The homes section (with its new columns) renders with no rows and no error."""
+    from rich.console import Console
+
+    assert world.get_all_homes() == []  # world fixture builds no homes
+    table = render_world_table(world)
+    text = "".join(seg.text for seg in Console(width=200).render(table))
+
+    assert "Homes" in text  # section title still present
+    assert "Stakeholders" in text  # new column header still present
+    assert "Health" in text  # new column header still present

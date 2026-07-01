@@ -31,6 +31,7 @@ from rich.table import Table
 from bus.events import Event
 from core.logging import get_logger
 from world.agents import AgentStatus
+from world.homes import max_integrity
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -59,6 +60,8 @@ _EVENT_VERBS: dict[str, str] = {
     "home_built": "raised a home",
     "hearth_used": "rested at the hearth",
     "home_collapsed": "watched a home crumble",
+    "home_joined": "joined a home",
+    "home_left": "left a home",
     "harvest": "harvested resources",
     "move": "moved",
     "resource_transferred": "transferred resources",
@@ -98,8 +101,8 @@ def render_world_table(world: WorldState) -> Table:
 
     Pure (read-only): builds three stacked sub-tables -- agents
     (id/status/energy/materials/position), regions (name/energy/materials), and
-    homes (id/owner/region/integrity) -- inside a grid so the whole snapshot is a
-    single ``rich.table.Table`` renderable. Does not mutate the world.
+    homes (id/owner/region/stakeholders/health) -- inside a grid so the whole
+    snapshot is a single ``rich.table.Table`` renderable. Does not mutate the world.
 
     Args:
         world: The world whose agents, regions, and homes to snapshot.
@@ -146,13 +149,16 @@ def render_world_table(world: WorldState) -> Table:
     homes_table.add_column("Home")
     homes_table.add_column("Owner")
     homes_table.add_column("Region")
-    homes_table.add_column("Integrity", justify="right")
+    homes_table.add_column("Stakeholders", justify="right")
+    homes_table.add_column("Health", justify="right")
     for home in world.get_all_homes():
+        cap = max_integrity(len(home.stakeholders))
         homes_table.add_row(
             home.home_id,
             home.owner_id,
             home.region,
-            f"{home.integrity:.1f}",
+            str(len(home.stakeholders)),
+            f"{home.integrity:.1f}/{cap:.1f}",
         )
 
     layout = Table.grid(expand=True)
