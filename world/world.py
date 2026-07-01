@@ -665,6 +665,106 @@ class WorldState:
                 return home
         return None
 
+    def get_home(self, home_id: str) -> Home | None:
+        """Look up a home by id.
+
+        Args:
+            home_id: Home id to look up.
+
+        Returns:
+            The :class:`~world.homes.Home`, or ``None`` if unknown.
+        """
+        return self.homes.get(home_id)
+
+    def add_stakeholder(self, home_id: str, agent_id: str) -> bool:
+        """Add ``agent_id`` as a stakeholder of a home (idempotent). Mutates :attr:`homes`.
+
+        A being pledges into a home to share its upkeep and hearth. Idempotent: a repeat
+        pledge does not double-list the being. Does NOT raise the integrity ceiling for the
+        current integrity — the tick heals a paid home up to the new, larger
+        :func:`~world.homes.max_integrity` over time.
+
+        Args:
+            home_id: Id of the home to join.
+            agent_id: Id of the joining being.
+
+        Returns:
+            ``True`` if the home exists (whether or not it was a no-op duplicate);
+            ``False`` if the home is unknown.
+        """
+        home = self.homes.get(home_id)
+        if home is None:
+            return False
+        if agent_id not in home.stakeholders:
+            home.stakeholders.append(agent_id)
+        return True
+
+    def remove_stakeholder(self, home_id: str, agent_id: str) -> bool:
+        """Remove ``agent_id`` from a home; promote a new owner if needed; clamp integrity.
+
+        The single prune+promote+clamp primitive shared by voluntary departure
+        (:func:`~tools.builtin.homes.leave_home`) and death (:meth:`kill_agent`):
+
+        #. Remove ``agent_id`` from :attr:`~world.homes.Home.stakeholders`.
+        #. If it was the ``owner_id`` and stakeholders remain, promote the lowest-id
+           survivor to owner (else the home would keep a departed/dead ghost as owner).
+        #. Clamp integrity DOWN to the smaller :func:`~world.homes.max_integrity` (a home
+           with fewer tenders is softer), via ``modify_home_integrity(home_id, 0.0)``.
+
+        A home whose last stakeholder is removed keeps a (now ownerless-in-practice) owner
+        field but has no living payer, so the world-tick decays it to collapse (spec §6).
+        Vault/structure removal on collapse is unchanged (ruins are 2c). Mutates
+        :attr:`homes`.
+
+        Args:
+            home_id: Id of the home to detach from.
+            agent_id: Id of the being to remove.
+
+        Returns:
+            ``True`` if the home exists and ``agent_id`` was a stakeholder that was removed;
+            ``False`` if the home is unknown or ``agent_id`` was not a stakeholder.
+        """
+        home = self.homes.get(home_id)
+        if home is None or agent_id not in home.stakeholders:
+            return False
+        home.stakeholders.remove(agent_id)
+        if agent_id == home.owner_id and home.stakeholders:
+            home.owner_id = min(home.stakeholders)
+        self.modify_home_integrity(home_id, 0.0)  # re-clamp DOWN to the new, smaller ceiling
+        return True
+
+    def is_stakeholder(self, home_id: str, agent_id: str) -> bool:
+        """Return whether ``agent_id`` is a stakeholder of a home (pure read).
+
+        Args:
+            home_id: Id of the home to check.
+            agent_id: Id of the being to check.
+
+        Returns:
+            ``True`` if the home exists and ``agent_id`` is in its stakeholders.
+        """
+        home = self.homes.get(home_id)
+        return home is not None and agent_id in home.stakeholders
+
+    def stakeholder_home_of(self, agent_id: str) -> Home | None:
+        """Return the home ``agent_id`` holds a stake in (owner or pledged), or ``None``.
+
+        The stakeholder-aware counterpart to the owner-only :meth:`home_of` (which stays
+        owner-only for the ``build_home`` "already own one" check). Used by ``use_hearth``
+        (rest at the home you share) and ``leave_home`` (the home you can leave). A being
+        belongs to at most one home in practice; the first match is returned.
+
+        Args:
+            agent_id: Id of the being to look up.
+
+        Returns:
+            The :class:`~world.homes.Home` it holds a stake in, or ``None``.
+        """
+        for home in self.homes.values():
+            if agent_id in home.stakeholders:
+                return home
+        return None
+
     def homes_in_region(self, region: str) -> list[Home]:
         """Return every home standing in ``region`` (empty if none).
 
