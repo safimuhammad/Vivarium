@@ -190,3 +190,28 @@ def test_hearth_dials_present_and_convert_without_minting() -> None:
     assert constants.HEARTH_MATERIALS_PER_USE > 0.0
     assert isinstance(constants.HEARTH_ENERGY_PER_MATERIAL, float)
     assert constants.HEARTH_ENERGY_PER_MATERIAL > 0.0
+
+
+def test_home_health_constants_present_and_honor_anti_blob() -> None:
+    """The stakeholder-health dials exist and lock the anti-blob / L1-parity invariants.
+
+    Spec §12.
+    """
+    # The formula (world/homes.py:max_integrity) does float arithmetic on all three dials.
+    assert isinstance(constants.HOME_HEALTH_BASE, float)
+    assert isinstance(constants.HOME_HEALTH_CEIL, float)
+    assert isinstance(constants.HOME_HEALTH_DIMINISH, float)
+    # L1-parity: a lone (single-stakeholder) home must be byte-for-byte the L1 home, or
+    # Layer 2a silently reintroduces a strength delta for the common one-owner case.
+    assert constants.HOME_HEALTH_BASE == constants.HOME_MAX_INTEGRITY
+    # Anti-blob: the ceiling is at most 2x base, so many contestable homes (territory)
+    # always out-defend one unraidable mega-commune -- the core stability property of 2a.
+    assert constants.HOME_HEALTH_CEIL <= 2 * constants.HOME_HEALTH_BASE
+    # The ceiling must strictly exceed base, or adding stakeholders buys zero extra
+    # health and the whole shared-ownership incentive collapses.
+    assert constants.HOME_HEALTH_BASE < constants.HOME_HEALTH_CEIL
+    # Genuine diminishing returns: each extra stakeholder must add STRICTLY LESS health
+    # than the last (0 excluded) while never fully closing the gap to the ceiling in
+    # finite stakeholders (1 excluded), and the curve must not be so shallow that a
+    # second stakeholder alone nearly reaches the cap (<= 0.5, per Task 2's formula).
+    assert 0.0 < constants.HOME_HEALTH_DIMINISH <= 0.5
