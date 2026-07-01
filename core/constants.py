@@ -179,6 +179,29 @@ destroyed first. Keep it <= a sustainable rate; lower it below 1.0 to burn some 
 heat (mirroring how mating burns some of the committed resources). A world-rule dial."""
 
 # ---------------------------------------------------------------------------
+# Homes (Layer 2a) — shared ownership / stakeholder-scaled health
+# [design: docs/superpowers/specs/2026-07-01-materials-home-layer2-design.md §12]
+# ---------------------------------------------------------------------------
+
+HOME_HEALTH_BASE: Final[float] = 100.0
+"""Integrity ceiling of a lone (single-stakeholder) home. [design — 2026-07-01, Layer 2 §12].
+
+Equals :data:`HOME_MAX_INTEGRITY` by design, so a solo home is exactly the L1 home; the
+constants test locks ``HOME_HEALTH_BASE == HOME_MAX_INTEGRITY``."""
+
+HOME_HEALTH_CEIL: Final[float] = 200.0
+"""Asymptotic integrity ceiling as stakeholders grow. [design — 2026-07-01, Layer 2 §12].
+
+Kept ``<= 2 * HOME_HEALTH_BASE`` (anti-blob): many contestable homes (territory) must beat
+one unraidable mega-commune, so communal health has hard diminishing returns and a low cap."""
+
+HOME_HEALTH_DIMINISH: Final[float] = 0.5
+"""Diminishing-returns base for stakeholder-scaled health. [design — 2026-07-01, Layer 2 §12].
+
+``max_integrity(s) = BASE + (CEIL-BASE) * (1 - DIMINISH ** (s-1))`` → M(1)=100, M(2)=150,
+M(3)=175, M(4)=187.5. Smaller = faster diminishing returns; kept ``<= 0.5``. A world-rule dial."""
+
+# ---------------------------------------------------------------------------
 # Mating
 # ---------------------------------------------------------------------------
 

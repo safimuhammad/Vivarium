@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from world.homes import Home
+import pytest
+
+from core.constants import HOME_HEALTH_BASE, HOME_HEALTH_CEIL
+from world.homes import Home, max_integrity
 
 
 def test_home_is_constructible_and_mutable() -> None:
@@ -46,3 +49,16 @@ def test_home_still_uses_slots_with_stakeholders() -> None:
     """slots=True holds after adding the list field (no per-instance __dict__)."""
     home = Home("h", "o", "r", 1.0, 2.0, 3.0)
     assert not hasattr(home, "__dict__")
+
+
+def test_max_integrity_scales_with_stakeholders_and_is_capped() -> None:
+    """M(s) matches the governing formula for s=1..cap and never reaches the ceiling."""
+    assert max_integrity(1) == HOME_HEALTH_BASE  # a lone home == the L1 home (100)
+    assert max_integrity(2) == 150.0
+    assert max_integrity(3) == 175.0
+    assert max_integrity(4) == pytest.approx(187.5)
+    # Degenerate/empty guard: never a 0-cap, never below base.
+    assert max_integrity(0) == HOME_HEALTH_BASE
+    # Strictly increasing but always below the anti-blob ceiling — forever.
+    assert HOME_HEALTH_BASE < max_integrity(2) < max_integrity(3) < HOME_HEALTH_CEIL
+    assert max_integrity(50) < HOME_HEALTH_CEIL

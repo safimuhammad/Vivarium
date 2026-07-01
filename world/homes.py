@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from core.constants import HOME_HEALTH_BASE, HOME_HEALTH_CEIL, HOME_HEALTH_DIMINISH
+
 
 @dataclass(slots=True)
 class Home:
@@ -48,3 +50,30 @@ class Home:
     built_at: float
     last_upkeep_at: float
     stakeholders: list[str] = field(default_factory=list)
+
+
+def max_integrity(stakeholder_count: int) -> float:
+    """Return a home's integrity ceiling for a given number of stakeholders.
+
+    Pure (no side effects). A communal home is sounder than a lone shelter, but with
+    diminishing returns and a hard ceiling (spec §12, fork 2): a home with more beings
+    tending it is harder to wear down, yet no size makes it an unraidable blob. The
+    formula asymptotes toward — but never reaches — :data:`~core.constants.HOME_HEALTH_CEIL`::
+
+        max_integrity(s) = BASE + (CEIL - BASE) * (1 - DIMINISH ** (s - 1))   for s >= 1
+
+    A count ``<= 1`` (a lone home, or the degenerate/empty case after the last stakeholder
+    departs) returns :data:`~core.constants.HOME_HEALTH_BASE`, so the ceiling is never a
+    0-cap and a solo home is exactly the L1 home.
+
+    Args:
+        stakeholder_count: The home's number of stakeholders (``len(home.stakeholders)``).
+
+    Returns:
+        The integrity ceiling (a float in ``[HOME_HEALTH_BASE, HOME_HEALTH_CEIL)``).
+    """
+    if stakeholder_count <= 1:
+        return HOME_HEALTH_BASE
+    return HOME_HEALTH_BASE + (HOME_HEALTH_CEIL - HOME_HEALTH_BASE) * (
+        1.0 - HOME_HEALTH_DIMINISH ** (stakeholder_count - 1)
+    )

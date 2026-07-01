@@ -761,3 +761,20 @@ def test_build_home_seeds_owner_as_first_stakeholder(world: WorldState) -> None:
         "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
     )
     assert world.homes["h1"].stakeholders == ["wanderer_001"]
+
+
+def test_modify_home_integrity_clamp_scales_with_stakeholders(world: WorldState) -> None:
+    """The integrity clamp ceiling grows with stakeholder count (max_integrity), not a flat max."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    # One stakeholder: the ceiling is the L1 max (100).
+    assert world.modify_home_integrity("h1", 1000.0) is True
+    assert world.homes["h1"].integrity == HOME_MAX_INTEGRITY
+    # A second stakeholder lifts the ceiling to M(2)=150 (set directly; add_stakeholder is Task 3).
+    world.homes["h1"].stakeholders.append("wanderer_002")
+    assert world.modify_home_integrity("h1", 1000.0) is True
+    assert world.homes["h1"].integrity == 150.0
+    # Clamping is still floored at 0.
+    assert world.modify_home_integrity("h1", -1000.0) is True
+    assert world.homes["h1"].integrity == 0.0

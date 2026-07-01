@@ -25,12 +25,12 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from core.constants import HOME_MAX_INTEGRITY, PARALYSIS_ENERGY_THRESHOLD
+from core.constants import PARALYSIS_ENERGY_THRESHOLD
 from core.logging import get_logger
 from core.rng import Clock, SimContext, default_clock, make_rng
 
 from .agents import AgentState, AgentStatus
-from .homes import Home
+from .homes import Home, max_integrity
 from .regions import Region, ResourceTypes
 
 logger = get_logger(__name__)
@@ -626,11 +626,13 @@ class WorldState:
         return False
 
     def modify_home_integrity(self, home_id: str, amount: float) -> bool:
-        """Add ``amount`` to a home's integrity, clamped to ``[0.0, HOME_MAX_INTEGRITY]``.
+        """Add ``amount`` to a home's integrity, clamped to ``[0.0, max_integrity(s)]``.
 
-        Mirrors :meth:`modify_region_energy`'s clamp discipline (homes are bounded
-        above as well as below). Mutates the home's
-        :attr:`~world.homes.Home.integrity`.
+        The upper bound is the home's stakeholder-scaled ceiling
+        (:func:`~world.homes.max_integrity` of ``len(stakeholders)``), so a home's soundness
+        grows (with diminishing returns) as beings pledge to it and shrinks when they leave.
+        Calling with ``amount=0.0`` re-clamps a home DOWN to a freshly reduced ceiling (used
+        by :meth:`remove_stakeholder`). Mutates the home's :attr:`~world.homes.Home.integrity`.
 
         Args:
             home_id: Id of the home to modify.
@@ -642,7 +644,8 @@ class WorldState:
         home = self.homes.get(home_id)
         if home is None:
             return False
-        home.integrity = min(max(home.integrity + amount, 0.0), HOME_MAX_INTEGRITY)
+        cap = max_integrity(len(home.stakeholders))
+        home.integrity = min(max(home.integrity + amount, 0.0), cap)
         return True
 
     def home_of(self, agent_id: str) -> Home | None:
