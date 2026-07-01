@@ -1017,3 +1017,10 @@ def test_withdraw_from_home_vault_caps_at_balance_and_floors_at_zero(world: Worl
     world.deposit_to_home_vault("h1", 30.0)
     assert world.withdraw_from_home_vault("h1", 1000.0) is True
     assert world.homes["h1"].vault_materials == 0.0
+
+
+def test_build_home_seeds_last_integrity_at_to_built_at(world: WorldState) -> None:
+    """build_home seeds last_integrity_at = built_at so incremental repair/decay accrues from
+    build time."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=1234.0, integrity=HOME_MAX_INTEGRITY)
+    assert world.homes["h1"].last_integrity_at == 1234.0

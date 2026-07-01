@@ -97,3 +97,16 @@ def test_home_is_hoarding_above_threshold_is_true() -> None:
     home = Home("h", "o", "r", 1.0, 2.0, 3.0)
     home.vault_materials = HOARDING_MATERIALS_THRESHOLD + 50.0
     assert home_is_hoarding(home) is True
+
+
+def test_home_has_last_integrity_at_defaulting_zero() -> None:
+    """A Home carries last_integrity_at (the incremental repair/decay clock), defaulting 0.0."""
+    home = Home("h", "o", "r", 1.0, 2.0, 3.0)
+    assert home.last_integrity_at == 0.0
+    home.last_integrity_at = 42.0
+    assert home.last_integrity_at == 42.0
+
+
+def test_home_still_uses_slots_with_last_integrity_at() -> None:
+    """slots=True holds after adding last_integrity_at (no per-instance __dict__)."""
+    assert not hasattr(Home("h", "o", "r", 1.0, 2.0, 3.0), "__dict__")

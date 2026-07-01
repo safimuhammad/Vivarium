@@ -50,6 +50,12 @@ class Home:
             bank materials in via ``deposit_to_home`` and draw them out via
             ``withdraw_from_home``; the balance counts toward hoarding at the HOME level
             (:func:`home_is_hoarding`). There is no energy vault (the hearth supplies energy).
+        last_integrity_at: World-clock time (seconds) integrity was last recomputed. The
+            world-tick advances this to ``now`` on EVERY step (covered and missed) and derives
+            BOTH incremental repair (``+HOME_REPAIR_PER_SECOND*elapsed``) and time-based decay
+            (``-HOME_DECAY_PER_SECOND*elapsed``) from ``elapsed = now - last_integrity_at`` — kept
+            distinct from ``last_upkeep_at`` (which freezes on a miss for arrears) so decay cannot
+            accelerate. Seeded ``= built_at`` in :meth:`~world.world.WorldState.build_home`.
     """
 
     home_id: str
@@ -60,6 +66,7 @@ class Home:
     last_upkeep_at: float
     stakeholders: list[str] = field(default_factory=list)
     vault_materials: float = 0.0
+    last_integrity_at: float = 0.0
 
 
 def max_integrity(stakeholder_count: int) -> float:

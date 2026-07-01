@@ -16,12 +16,19 @@ breathing loops. Each step does four jobs:
    returns to the earth as a heard beat -- and corpses never pile up (run-forever).
 #. **Sweep home upkeep/decay** -- each home draws time-based upkeep from the
    COLLECTIVE pool of its living stakeholders (owner first when still a
-   stakeholder, then the rest by id), all-or-nothing; a home the pool cannot
-   cover decays and its ``last_upkeep_at`` freezes (arrears accrue), while a
-   covered home heals to its stakeholder-scaled ceiling
-   (:func:`~world.homes.max_integrity`). Either way, collapse (removed from the
-   world, its passing announced with a LOCAL ``home_collapsed`` event in its
-   region) still happens at integrity ``<= 0.0``.
+   stakeholder, then the rest by id), all-or-nothing. A covered home is repaired
+   incrementally (:data:`~core.constants.HOME_REPAIR_PER_SECOND` times elapsed,
+   clamped to its stakeholder-scaled ceiling via :func:`~world.homes.max_integrity`)
+   and its ``last_upkeep_at`` advances; a home the pool cannot cover instead decays
+   incrementally (:data:`~core.constants.HOME_DECAY_PER_SECOND` times elapsed) and
+   ``last_upkeep_at`` freezes (arrears accrue). Both branches measure ``elapsed``
+   from :attr:`~world.homes.Home.last_integrity_at` -- advanced to ``now`` on
+   **every** tick, covered or missed -- rather than from the arrears clock
+   ``last_upkeep_at``, which is what prevents decay from accelerating (a frozen
+   ``last_upkeep_at`` would make each successive missed tick measure a larger
+   ``elapsed`` and so decay faster, a death-spiral). Either way, collapse (removed
+   from the world, its passing announced with a LOCAL ``home_collapsed`` event in
+   its region) still happens at integrity ``<= 0.0``.
 
 This lives as a *module function* taking both the world and the bus (NOT a
 :class:`~world.world.WorldState` method): the sweeps must publish events, and
@@ -45,13 +52,13 @@ from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
     CORPSE_DECAY_SECONDS,
-    HOME_DECAY_PER_MISSED_TICK,
+    HOME_DECAY_PER_SECOND,
+    HOME_REPAIR_PER_SECOND,
     HOME_UPKEEP_MATERIALS_PER_SECOND,
     MATING_PROPOSAL_TIMEOUT_SECONDS,
 )
 from core.logging import get_logger
 from world.agents import AgentState, AgentStatus
-from world.homes import max_integrity
 from world.regions import ResourceTypes
 from world.world import WorldState
 
@@ -81,16 +88,25 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
           nothing is drawn from anyone. Otherwise draws ``owed`` across the
           ordered payers via :meth:`~world.world.WorldState.modify_agent_materials`
           (each pays ``min(their materials, remaining owed)`` until covered),
-          heals integrity to the stakeholder-scaled ceiling
-          (:func:`~world.homes.max_integrity` of ``len(stakeholders)``) via
-          :meth:`~world.world.WorldState.modify_home_integrity`, and advances
-          ``last_upkeep_at`` to ``now``. When the pool cannot cover ``owed``,
-          decrements integrity by :data:`~core.constants.HOME_DECAY_PER_MISSED_TICK`
-          and deliberately leaves ``last_upkeep_at`` frozen so the shortfall
-          accrues as arrears (back-rent); at ``<= 0.0`` removes the home via
-          :meth:`~world.world.WorldState.remove_home`. Conservation: materials are
-          only ever destroyed (drawn from payers, never minted) or left in place;
-          energy is untouched by this sweep.
+          **incrementally** repairs integrity by
+          :data:`~core.constants.HOME_REPAIR_PER_SECOND` times ``elapsed`` (where
+          ``elapsed = now - last_integrity_at``) via
+          :meth:`~world.world.WorldState.modify_home_integrity` -- which clamps to
+          the stakeholder-scaled ceiling (:func:`~world.homes.max_integrity` of
+          ``len(stakeholders)``), so a funded home simply sits at its ceiling --
+          and advances ``last_upkeep_at`` to ``now``. When the pool cannot cover
+          ``owed``, instead **incrementally** decrements integrity by
+          :data:`~core.constants.HOME_DECAY_PER_SECOND` times the SAME ``elapsed``
+          and deliberately leaves ``last_upkeep_at`` frozen so the shortfall accrues
+          as arrears (back-rent); at ``<= 0.0`` removes the home via
+          :meth:`~world.world.WorldState.remove_home`. Either branch then advances
+          :attr:`~world.homes.Home.last_integrity_at` to ``now`` -- this happens on
+          EVERY home EVERY tick (covered or missed), which is what keeps ``elapsed``
+          (and so decay) from accelerating across consecutive missed ticks: measuring
+          it from the arrears clock ``last_upkeep_at`` instead (which freezes on a
+          miss) would make each successive missed tick see a larger, unbounded
+          ``elapsed``. Conservation: materials are only ever destroyed (drawn from
+          payers, never minted) or left in place; energy is untouched by this sweep.
 
     Emits events:
         * One ``"mating_proposal_timeout"`` event
@@ -173,16 +189,23 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
             )
         )
 
-    # Sweep home upkeep/decay (COLLECTIVE pool, L2a). owed = rate * elapsed is drawn from the
-    # home's living stakeholders in a deterministic order (the owner first when it is still a
-    # stakeholder, then the rest by id) — ALL-OR-NOTHING: if the pooled materials cannot cover
-    # owed, nothing is drawn, the home loses integrity, and last_upkeep_at is FROZEN so the
-    # arrears accrue (back-rent). A covered home is healed to its stakeholder-scaled ceiling
-    # max_integrity(s) and last_upkeep_at advances. A departed/ghost owner (owner_id not in
-    # stakeholders) never pays. Collapse (<= 0) still just removes the home (ruins are 2c).
-    # Same snapshot-then-mutate discipline: mutate synchronously, defer the publish.
+    # Sweep home upkeep/decay (COLLECTIVE pool, L2a; incremental time-based repair/decay, L2c).
+    # owed = rate * elapsed(last_upkeep_at) is drawn from the home's living stakeholders in a
+    # deterministic order (the owner first when it is still a stakeholder, then the rest by id)
+    # — ALL-OR-NOTHING: if the pooled materials cannot cover owed, nothing is drawn. A covered
+    # home is repaired INCREMENTALLY (+HOME_REPAIR_PER_SECOND * elapsed, auto-clamped to
+    # max_integrity(s) by modify_home_integrity) and last_upkeep_at advances; an uncovered home
+    # decays INCREMENTALLY instead (-HOME_DECAY_PER_SECOND * elapsed) and last_upkeep_at is
+    # FROZEN so arrears accrue (back-rent). Both branches measure elapsed from
+    # last_integrity_at — NOT last_upkeep_at — and advance last_integrity_at to now on EVERY
+    # home EVERY tick (both branches), which is the fix for the decay-acceleration bug: deriving
+    # elapsed from the arrears clock would grow unboundedly across consecutive missed ticks
+    # (last_upkeep_at stays frozen), making decay accelerate. A departed/ghost owner (owner_id
+    # not in stakeholders) never pays. Collapse (<= 0) still just removes the home (ruins are a
+    # later 2c task). Same snapshot-then-mutate discipline: mutate synchronously, defer publish.
     collapse_events: list[Event] = []
     for home in list(world.get_all_homes()):
+        elapsed = now - home.last_integrity_at
         owed = HOME_UPKEEP_MATERIALS_PER_SECOND * (now - home.last_upkeep_at)
         others = sorted(s for s in home.stakeholders if s != home.owner_id)
         ordered = ([home.owner_id] if home.owner_id in home.stakeholders else []) + others
@@ -203,14 +226,16 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
                 pay = min(payer.current_materials, remaining)
                 world.modify_agent_materials(payer_id, -pay)
                 remaining -= pay
-            world.modify_home_integrity(home.home_id, max_integrity(len(home.stakeholders)))
+            # Incremental repair (NOT heal-to-full): +rate*elapsed, clamped to max_integrity(s).
+            world.modify_home_integrity(home.home_id, HOME_REPAIR_PER_SECOND * elapsed)
             home.last_upkeep_at = now  # advance only on a covered tick
         else:
-            world.modify_home_integrity(home.home_id, -HOME_DECAY_PER_MISSED_TICK)
+            # Time-based decay from last_integrity_at (advanced every tick) — cannot accelerate.
+            world.modify_home_integrity(home.home_id, -HOME_DECAY_PER_SECOND * elapsed)
             # last_upkeep_at is deliberately NOT advanced here (frozen: back-rent accrues).
             if home.integrity <= 0.0:
                 region = home.region
-                world.remove_home(home.home_id)
+                world.remove_home(home.home_id)  # Task 5 repurposes this to world.make_ruin(...)
                 collapse_events.append(
                     Event(
                         type="home_collapsed",
@@ -221,6 +246,7 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
                         timestamp=now,
                     )
                 )
+        home.last_integrity_at = now  # advance EVERY tick (covered AND missed) — MANDATORY #1
 
     # All refunds/removals are done; publishing (the only ``await``) is safe now.
     for event in (*timed_out_events, *decay_events, *collapse_events):

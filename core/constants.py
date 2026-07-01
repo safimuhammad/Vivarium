@@ -151,14 +151,28 @@ INDEPENDENT — the same wall-time draws the same materials whether the tick run
 1s or every 5s (generalizes the mating 60s->600s lesson). Drawn from stockpile so an
 absent/slow owner still pays — no death-spiral (upkeep is materials, never energy)."""
 
-HOME_DECAY_PER_MISSED_TICK: Final[float] = 10.0
-"""Integrity a home loses on a world-tick its owner cannot pay upkeep (broke, dead, or
-swept). [design — 2026-07-01, Layer 1].
+HOME_REPAIR_PER_SECOND: Final[float] = 10.0
+"""Integrity a covered home heals per second on the world-tick (incremental repair).
+[design — 2026-07-01, Layer 2c].
 
-With :data:`HOME_MAX_INTEGRITY` = 100, a home weathers ~10 unpaid ticks before it
-collapses — deliberately far longer than an owner's breath gap so it never crumbles
-between breaths through no fault of its own. Retune upward if a slow sequential (Ollama)
-regime is revived, exactly like ``MATING_PROPOSAL_TIMEOUT_SECONDS``."""
+TIME-based: a covered tick adds ``HOME_REPAIR_PER_SECOND * (now - last_integrity_at)``
+(clamped to the stakeholder-scaled ceiling), so repair is tick-frequency-INDEPENDENT and
+a funded home stays at its ceiling regardless of cadence. Replaces L1's heal-to-full so
+break-in can accumulate (a breach no longer heals away before the next attempt). At +50
+per 5s tick a worn home recovers in a couple of covered ticks. A world-rule dial; the
+single most break-in-sensitive value — tune in the LIVE run."""
+
+HOME_DECAY_PER_SECOND: Final[float] = 2.0
+"""Integrity an unpaid home loses per second on the world-tick (time-based decay).
+[design — 2026-07-01, Layer 2c].
+
+TIME-based: a missed tick subtracts ``HOME_DECAY_PER_SECOND * (now - last_integrity_at)``.
+Set to reproduce the retired ``HOME_DECAY_PER_MISSED_TICK`` (10.0) at the default 5s tick
+(10/5 = 2.0/s), so a broke ``M(1)=100`` home still collapses in ~50s. Measuring from
+``last_integrity_at`` (advanced EVERY tick) — NOT from the arrears clock ``last_upkeep_at``
+(frozen on a miss) — is what keeps decay from accelerating into a death-spiral. A
+world-rule dial; retune upward for a slow sequential (Ollama) regime, like
+``MATING_PROPOSAL_TIMEOUT_SECONDS``."""
 
 HOME_BUILD_MATERIALS_COST: Final[float] = 80.0
 """Materials to raise a home. [design — 2026-07-01, Layer 1].

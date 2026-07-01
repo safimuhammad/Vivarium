@@ -167,15 +167,19 @@ def test_home_integrity_dial_present() -> None:
     assert constants.HOME_MAX_INTEGRITY > 0.0
 
 
-def test_home_upkeep_and_decay_dials_present_and_sane() -> None:
-    """Upkeep/decay dials exist; a home weathers many missed ticks before it collapses."""
+def test_home_upkeep_repair_and_decay_dials_present_and_sane() -> None:
+    """Upkeep + incremental repair/decay dials exist; repair out-paces decay; collapse is slow."""
     assert isinstance(constants.HOME_UPKEEP_MATERIALS_PER_SECOND, float)
     assert constants.HOME_UPKEEP_MATERIALS_PER_SECOND > 0.0
-    assert isinstance(constants.HOME_DECAY_PER_MISSED_TICK, float)
-    assert 0.0 < constants.HOME_DECAY_PER_MISSED_TICK <= constants.HOME_MAX_INTEGRITY
-    # Collapse-when-broke must be far slower than the owner's breath gap (the mating
-    # 60s->600s lesson): a home must not crumble between an owner's breaths.
-    assert constants.HOME_MAX_INTEGRITY / constants.HOME_DECAY_PER_MISSED_TICK >= 5.0
+    assert isinstance(constants.HOME_REPAIR_PER_SECOND, float)
+    assert isinstance(constants.HOME_DECAY_PER_SECOND, float)
+    # A funded home must out-heal its wear, or a covered tick could still net-lose integrity.
+    assert constants.HOME_REPAIR_PER_SECOND > constants.HOME_DECAY_PER_SECOND > 0.0
+    # Collapse-when-broke must be far slower than a breath gap (the mating 60s->600s lesson):
+    # M(1)=100 at 2.0/s decays over 50s, many breaths.
+    assert constants.HOME_MAX_INTEGRITY / constants.HOME_DECAY_PER_SECOND >= 5.0
+    # The flat per-missed-tick dial is retired in favour of the per-second dial.
+    assert not hasattr(constants, "HOME_DECAY_PER_MISSED_TICK")
 
 
 def test_home_build_cost_competes_with_mating() -> None:

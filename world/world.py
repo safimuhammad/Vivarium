@@ -593,10 +593,13 @@ class WorldState:
         Sync and event-free (the world has no bus, DD4): the caller (the
         ``build_home`` tool) publishes ``home_built``. ``last_upkeep_at`` is seeded to
         ``built_at`` so the world-tick's time-based upkeep accrues from the moment of
-        building. The builder is seeded as both :attr:`~world.homes.Home.owner_id`
-        and the sole entry in :attr:`~world.homes.Home.stakeholders` (Layer 2 shared
-        ownership starts as a one-being pool; others join later via
-        ``pledge_home``). Mutates :attr:`homes`.
+        building; ``last_integrity_at`` is seeded to ``built_at`` too, so the tick's
+        incremental repair/decay (:data:`~core.constants.HOME_REPAIR_PER_SECOND` /
+        :data:`~core.constants.HOME_DECAY_PER_SECOND`) also accrues from the moment of
+        building, not from an unset clock. The builder is seeded as both
+        :attr:`~world.homes.Home.owner_id` and the sole entry in
+        :attr:`~world.homes.Home.stakeholders` (Layer 2 shared ownership starts as a
+        one-being pool; others join later via ``pledge_home``). Mutates :attr:`homes`.
 
         Args:
             home_id: Stable unique id (also the map key).
@@ -619,6 +622,7 @@ class WorldState:
             built_at=built_at,
             last_upkeep_at=built_at,
             stakeholders=[owner_id],
+            last_integrity_at=built_at,
         )
         return True
 
