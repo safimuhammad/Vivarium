@@ -5,14 +5,15 @@ event (to the origin) and an ``agent_entered_region`` event (to the destination)
 It charges :data:`~core.constants.MOVE_ENERGY_COST` energy on a successful move,
 validating existence, adjacency and sufficient energy *before* mutating, and only
 deducting once the relocation succeeds. ``look_around`` is a read-only dashboard
-that emits no event.
+that emits no event; it additionally shows a being its own co-located home's vault
+balance (L2b) when the being holds a stake in a home standing in its current region.
 """
 
 from __future__ import annotations
 
 from bus.event_bus import EventBus
 from bus.events import ScopeType
-from core.constants import MOVE_ENERGY_COST
+from core.constants import HOME_MAX_INTEGRITY, MOVE_ENERGY_COST
 from tools.builtin.movement import look_around, move
 from world.agents import AgentState, AgentStatus
 from world.regions import Region
@@ -148,3 +149,45 @@ async def test_look_around_in_unknown_region_returns_error(
     )
     result = await look_around(world, event_bus, "lost")
     assert result.startswith("Error:")
+
+
+async def test_look_around_shows_own_home_vault_when_co_located(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A stakeholder standing at its home sees its vault balance in look_around."""
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.deposit_to_home_vault("home_ada", 120.0)
+
+    result = await look_around(world, event_bus, "wanderer_001")
+
+    assert "store" in result.lower()  # the home-store line is present
+    assert "120.0" in result  # the vault balance is visible to the being
+
+
+async def test_look_around_without_a_co_located_home_shows_no_vault_line(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A being that stakes no home in its region gets no home-store line."""
+    result = await look_around(world, event_bus, "wanderer_002")
+    assert "your home here" not in result.lower()
+
+
+async def test_look_around_with_home_staked_in_a_different_region_shows_no_vault_line(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A stakeholder whose home stands in another region gets no vault line while away.
+
+    Distinguishes "no vault line because no home at all" (the test above) from "no
+    vault line because the staked home isn't HERE" -- both must suppress the line,
+    but only the co-located case should ever show it.
+    """
+    world.build_home(
+        "home_boris", "wanderer_002", "beta", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.deposit_to_home_vault("home_boris", 40.0)
+
+    result = await look_around(world, event_bus, "wanderer_002")  # wanderer_002 is in alpha
+
+    assert "your home here" not in result.lower()
