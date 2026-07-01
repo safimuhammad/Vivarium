@@ -57,6 +57,7 @@ _EVENT_VERBS: dict[str, str] = {
     "agent_paralyzed": "was paralyzed",
     "agent_born": "was born",
     "agent_started_hoarding": "started hoarding",
+    "home_started_hoarding": "began to hold a great store",
     "home_built": "raised a home",
     "hearth_used": "rested at the hearth",
     "home_collapsed": "watched a home crumble",
@@ -101,7 +102,7 @@ def render_world_table(world: WorldState) -> Table:
 
     Pure (read-only): builds three stacked sub-tables -- agents
     (id/status/energy/materials/position), regions (name/energy/materials), and
-    homes (id/owner/region/stakeholders/health) -- inside a grid so the whole
+    homes (id/owner/region/stakeholders/health/vault) -- inside a grid so the whole
     snapshot is a single ``rich.table.Table`` renderable. Does not mutate the world.
 
     Args:
@@ -151,6 +152,7 @@ def render_world_table(world: WorldState) -> Table:
     homes_table.add_column("Region")
     homes_table.add_column("Stakeholders", justify="right")
     homes_table.add_column("Health", justify="right")
+    homes_table.add_column("Vault", justify="right")
     for home in world.get_all_homes():
         cap = max_integrity(len(home.stakeholders))
         homes_table.add_row(
@@ -159,6 +161,7 @@ def render_world_table(world: WorldState) -> Table:
             home.region,
             str(len(home.stakeholders)),
             f"{home.integrity:.1f}/{cap:.1f}",
+            f"{home.vault_materials:.1f}",
         )
 
     layout = Table.grid(expand=True)
