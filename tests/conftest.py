@@ -252,7 +252,7 @@ def mock_decider() -> MockDecider:
     return MockDecider(
         [
             Decision(tool_calls=[ToolCall("look_around")]),
-            Decision(tool_calls=[ToolCall("wait")]),
+            Decision(tool_calls=[ToolCall("look_around")]),
         ]
     )
 

@@ -1,9 +1,7 @@
-"""Tests for :mod:`tools.builtin.communication` -- ``speak`` and ``wait``.
+"""Tests for :mod:`tools.builtin.communication` -- ``speak``.
 
 ``speak`` mutates speaker energy and publishes a ``speak`` event (LOCAL when
-broadcasting, TARGETED when addressed to one agent). ``wait`` is a pure
-perception no-op that returns a randomized rest phrase routed through
-``world.rng`` (so it is reproducible from a seed) and emits no event.
+broadcasting, TARGETED when addressed to one agent).
 """
 
 from __future__ import annotations
@@ -11,11 +9,7 @@ from __future__ import annotations
 from bus.event_bus import EventBus
 from bus.events import ScopeType
 from core.constants import SPEAK_ENERGY_COST
-from core.rng import make_rng
-from tests.conftest import SEED, FakeClock
-from tools.builtin.communication import speak, wait
-from world.agents import AgentState, AgentStatus
-from world.regions import Region
+from tools.builtin.communication import speak
 from world.world import WorldState
 
 
@@ -101,50 +95,10 @@ async def test_speak_blocked_when_paralyzed(world: WorldState, event_bus: EventB
     assert not event_bus.get_events("wanderer_001")  # nothing published
 
 
-async def test_wait_returns_phrase_and_emits_no_event(
-    world: WorldState, event_bus: EventBus
-) -> None:
-    """``wait`` returns guidance text and publishes nothing."""
-    result = await wait(world, event_bus, "wanderer_001")
-    assert isinstance(result, str)
-    assert "look_around" in result
-    assert event_bus.get_events("wanderer_001") == []
+def test_wait_tool_is_retired() -> None:
+    """`wait` is gone from both the tool registry set and the schema set (kept in lock-step)."""
+    from agents.tool_schemas import TOOL_SCHEMAS
+    from tools.builtin import BUILTIN_TOOLS
 
-
-async def test_wait_is_deterministic_for_same_seed() -> None:
-    """Same seed -> same ``wait`` phrase (randomness routes through world.rng)."""
-
-    def build() -> WorldState:
-        regions = [
-            Region(
-                name="alpha",
-                description="A",
-                connections=[],
-                energy_rate=1.0,
-                materials_rate=1.0,
-                current_energy=100.0,
-                current_materials=100.0,
-                max_energy=500.0,
-                max_materials=500.0,
-            )
-        ]
-        agents = [
-            AgentState(
-                id="a1",
-                name="A1",
-                persona="p",
-                current_position="alpha",
-                current_energy=100.0,
-                current_materials=50.0,
-                status=AgentStatus.ALIVE,
-            )
-        ]
-        return WorldState(regions, agents, rng=make_rng(SEED), clock=FakeClock())
-
-    world_a = build()
-    world_b = build()
-    bus_a = EventBus(world_a)
-    bus_b = EventBus(world_b)
-    first = [await wait(world_a, bus_a, "a1") for _ in range(5)]
-    second = [await wait(world_b, bus_b, "a1") for _ in range(5)]
-    assert first == second
+    assert "wait" not in BUILTIN_TOOLS
+    assert "wait" not in TOOL_SCHEMAS

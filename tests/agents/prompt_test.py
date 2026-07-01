@@ -13,7 +13,6 @@ TOOL_NAMES: list[str] = [
     "look_around",
     "move",
     "speak",
-    "wait",
     "harvest_resources",
     "transfer_resource",
     "attack",

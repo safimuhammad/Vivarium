@@ -49,7 +49,7 @@ def test_resource_type_params_constrained_to_enum() -> None:
 
 
 def test_schemas_for_returns_requested_schemas_in_order() -> None:
-    names = ["wait", "move"]
+    names = ["speak", "move"]
     result: list[dict[str, Any]] = schemas_for(names)
     assert [schema["function"]["name"] for schema in result] == names
 

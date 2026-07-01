@@ -1,4 +1,4 @@
-"""Communication tools: ``speak`` (broadcast/whisper) and ``wait`` (rest).
+"""Communication tool: ``speak`` (broadcast to a region, or whisper to one being).
 
 Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
@@ -13,17 +13,6 @@ from bus.events import Event, ScopeType
 from core.constants import SPEAK_ENERGY_COST
 from world.agents import AgentStatus
 from world.world import WorldState
-
-WAIT_PHRASES: tuple[str, ...] = (
-    "Resting",
-    "Rejuvinating",
-    "Looksmaxing",
-    "Observing a peaceful world",
-    "The world is chaotic take a break",
-    "Contemplating",
-    "Lost in thoughts",
-)
-"""Flavour phrases for :func:`wait`; one is chosen via ``world.rng`` per call."""
 
 
 async def speak(
@@ -90,27 +79,3 @@ async def speak(
     await event_bus.publish(event)
     destination = target if target else f"Region|{agent_state.current_position}"
     return f"Your message was sent to {destination}"
-
-
-async def wait(world: WorldState, event_bus: EventBus, agent_id: str) -> str:
-    """Pass time without acting, returning a randomized rest phrase.
-
-    Mutates world state:
-        * Nothing.
-
-    Emits events:
-        * Nothing.
-
-    Args:
-        world: The live world state (used only for its seeded ``rng``).
-        event_bus: Unused; present for the uniform tool signature.
-        agent_id: Id of the resting agent; unused beyond the uniform signature.
-
-    Returns:
-        A flavour phrase (selected via ``world.rng`` for reproducibility) plus a
-        hint to use ``look_around``.
-    """
-    return (
-        f"{world.rng.choice(WAIT_PHRASES)}\n"
-        "As Time passes by slowly, use `look_around` for stats and nearby information"
-    )

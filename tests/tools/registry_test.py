@@ -155,7 +155,6 @@ async def test_register_builtins_registers_all_tools(registry: ToolRegistry) -> 
     expected = {
         "attack",
         "speak",
-        "wait",
         "move",
         "look_around",
         "harvest_resources",

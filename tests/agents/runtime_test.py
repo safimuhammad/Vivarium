@@ -297,7 +297,7 @@ async def test_decide_with_unschemad_tool_rolls_back_perception(
         return "ok"  # pragma: no cover - schemas_for fails before this is invoked
 
     populated_registry.register("rogue_tool_without_schema", rogue)
-    decider = ScriptedDecider([Decision(tool_calls=[ToolCall("wait")])])
+    decider = ScriptedDecider([Decision(tool_calls=[ToolCall("look_around")])])
     agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
 
     await agent.breathe()  # must not raise despite the missing schema
@@ -312,9 +312,9 @@ async def test_no_two_consecutive_user_turns_across_mixed_breaths(
 ) -> None:
     decider = ScriptedDecider(
         [
-            Decision(tool_calls=[ToolCall("wait")]),
+            Decision(tool_calls=[ToolCall("look_around")]),
             RuntimeError("blip"),
-            Decision(tool_calls=[ToolCall("wait")]),
+            Decision(tool_calls=[ToolCall("look_around")]),
         ]
     )
     agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
@@ -330,7 +330,7 @@ async def test_no_two_consecutive_user_turns_across_mixed_breaths(
 async def test_two_tool_decision_is_correctly_id_paired(
     world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
 ) -> None:
-    decider = MockDecider([Decision(tool_calls=[ToolCall("look_around"), ToolCall("wait")])])
+    decider = MockDecider([Decision(tool_calls=[ToolCall("look_around"), ToolCall("look_around")])])
     agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
 
     await agent.breathe()
@@ -342,7 +342,7 @@ async def test_two_tool_decision_is_correctly_id_paired(
     assert all(call_ids)
     assert len(set(call_ids)) == 2  # ids are distinct per call
     assert [m["tool_call_id"] for m in tool_messages] == call_ids
-    assert [m["tool_name"] for m in tool_messages] == ["look_around", "wait"]
+    assert [m["tool_name"] for m in tool_messages] == ["look_around", "look_around"]
 
 
 async def test_failed_decide_backs_off_instead_of_busy_looping(
@@ -764,7 +764,7 @@ async def test_breath_into_paralysis_emits_event_and_loop_survives(world: WorldS
 async def test_run_does_not_act_for_dead_agent(
     world: WorldState, event_bus: EventBus, populated_registry: ToolRegistry
 ) -> None:
-    decider = MockDecider([Decision(tool_calls=[ToolCall("wait")])])
+    decider = MockDecider([Decision(tool_calls=[ToolCall("look_around")])])
     agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
     world.update_agent_status(ADA, AgentStatus.DEAD)
 
@@ -907,7 +907,7 @@ async def test_memories_live_in_resident_block_not_perception(
         world,
         event_bus,
         populated_registry,
-        MockDecider([Decision(tool_calls=[ToolCall("wait")])]),
+        MockDecider([Decision(tool_calls=[ToolCall("look_around")])]),
         memory=memory_store,
     )
 
@@ -948,7 +948,7 @@ async def test_resident_block_byte_stable_across_a_breath(
         world,
         event_bus,
         populated_registry,
-        MockDecider([Decision(tool_calls=[ToolCall("wait")])]),
+        MockDecider([Decision(tool_calls=[ToolCall("look_around")])]),
         memory=memory_store,
     )
     block_before = dict(agent.lifecycle_history[1])
@@ -968,7 +968,7 @@ async def test_reflection_refreshes_resident_block(
     memory_store: FileMemoryStore,
 ) -> None:
     decider = ReflectAwareDecider(
-        action=Decision(tool_calls=[ToolCall("wait")]),
+        action=Decision(tool_calls=[ToolCall("look_around")]),
         reflection=Decision(
             tool_calls=[
                 ToolCall(
@@ -1016,7 +1016,7 @@ async def test_reflection_fires_on_nth_breath_and_persists(
 
     monkeypatch.setattr(runtime_module, "REFLECT_EVERY_N_BREATHS", 2)
     decider = ReflectAwareDecider(
-        action=Decision(tool_calls=[ToolCall("wait")]),
+        action=Decision(tool_calls=[ToolCall("look_around")]),
         reflection=Decision(
             tool_calls=[ToolCall("remember", {"content": "I trust no one.", "importance": "high"})]
         ),
@@ -1039,7 +1039,7 @@ async def test_reflection_does_not_fire_before_nth_breath(
 ) -> None:
     # Default cadence is 12; a single breath must not reflect.
     decider = ReflectAwareDecider(
-        action=Decision(tool_calls=[ToolCall("wait")]),
+        action=Decision(tool_calls=[ToolCall("look_around")]),
         reflection=Decision(
             tool_calls=[ToolCall("remember", {"content": "premature", "importance": "low"})]
         ),
@@ -1100,7 +1100,7 @@ async def test_system_turn_byte_stable_across_breaths_without_revise(
         world,
         event_bus,
         populated_registry,
-        MockDecider([Decision(tool_calls=[ToolCall("wait")])]),
+        MockDecider([Decision(tool_calls=[ToolCall("look_around")])]),
         memory=memory_store,
     )
     before = agent.lifecycle_history[0]["content"]
@@ -1321,7 +1321,9 @@ class CompactionScriptDecider:
             return Decision(text=self.recap_text)
         if "remember" in names:  # the reflection call
             return Decision()
-        return Decision(text="I wait.", thinking=self.thinking, tool_calls=[ToolCall("wait")])
+        return Decision(
+            text="I wait.", thinking=self.thinking, tool_calls=[ToolCall("look_around")]
+        )
 
 
 def _shrink_budget(monkeypatch: pytest.MonkeyPatch, **overrides: int) -> None:
