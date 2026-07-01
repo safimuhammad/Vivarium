@@ -122,3 +122,20 @@ def test_world_mechanics_describes_sharing_a_home() -> None:
     # DD9 still holds: no goals / strategy / simulation language slipped in.
     for banned in FORBIDDEN_TERMS:
         assert banned not in lowered
+
+
+def test_world_mechanics_describes_the_home_vault() -> None:
+    """L2b physics (DD9): a shared home can hold a store you bank into and draw back out.
+
+    A home heavy with a great store is noticeable (the no-laundering / raid-target signal),
+    stated as physics, not goals or strategy.
+    """
+    from agents.prompt import WORLD_MECHANICS
+
+    lowered = WORLD_MECHANICS.lower()
+    assert "store" in lowered  # a home can hold a common store
+    assert "draw" in lowered  # you may draw materials back out
+    assert "notice" in lowered  # a heavy store draws notice (perceivable, no laundering)
+    # DD9 still holds: no goals / strategy / simulation language slipped in.
+    for banned in FORBIDDEN_TERMS:
+        assert banned not in lowered
