@@ -435,13 +435,14 @@ class Agent:
             (:attr:`~bus.events.ScopeType.PRIVATE`, stamped ``world.now()``) when
             ``decision`` is text-only; otherwise none.
         """
-        if decision.tool_calls or not decision.text.strip():
+        stripped = decision.text.strip()
+        if decision.tool_calls or not stripped:
             return
         await self.event_bus.publish(
             Event(
                 type="self_talk",
                 source=self.agent_id,
-                payload={"message": decision.text.strip()},
+                payload={"message": stripped},
                 scope=ScopeType.PRIVATE,
                 timestamp=self.world.now(),
             )

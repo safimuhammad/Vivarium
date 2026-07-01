@@ -84,5 +84,5 @@ def test_world_mechanics_grants_the_freedom_not_to_act() -> None:
     assert "no one but yourself" in text
     # DD9: still no goals / strategy / simulation language.
     lowered = text.lower()
-    for banned in ("simulation", "goal", "objective", "mission", "optimi", "you should"):
+    for banned in ("simulation", "goal", "objective", "mission", "optim", "you should"):
         assert banned not in lowered
