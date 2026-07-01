@@ -38,6 +38,9 @@ WORLD_MECHANICS: str = (
     "the same place as them.\n"
     "- You can gather energy and materials from the land where you stand, and you can hand "
     "some of your own to a being beside you.\n"
+    "- Where you stand, you may raise a home of your own if you hold materials enough to "
+    "build it. You can rest at its hearth to turn some of your materials into energy. A home "
+    "must be kept fed with materials, or in time it crumbles away to nothing.\n"
     "- You can speak to those in your place: say something for everyone there to hear, or "
     "direct it to one being alone so only they hear it.\n"
     "- You can strike a being beside you to drain their energy, though striking costs you "
@@ -46,7 +49,9 @@ WORLD_MECHANICS: str = (
     "your energy and materials, a new being — a child — comes into the world. This asks "
     "much of you both, and there are limits to how often, and how many times, it can be done.\n"
     "- You are never compelled to act. You may let a moment simply pass and rest, "
-    "or turn something over in your own mind — words meant for no one but yourself."
+    "or turn something over in your own mind — words meant for no one but yourself. Yet "
+    "stillness is not free: when you let moment after moment pass without acting, a little "
+    "of your energy quietly ebbs away."
 )
 
 
