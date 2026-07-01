@@ -30,8 +30,8 @@ from rich.table import Table
 
 from bus.events import Event
 from core.logging import get_logger
-from world.agents import AgentStatus
-from world.homes import max_integrity
+from world.agents import AgentStatus, is_hoarding
+from world.homes import home_is_hoarding, max_integrity
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -70,6 +70,10 @@ _EVENT_VERBS: dict[str, str] = {
     "mating_accepted": "accepted a mating proposal",
     "mating_rejected": "rejected a mating proposal",
     "look_around": "looked around",
+    "home_breached": "broke into a home",
+    "home_thieved": "stripped a home of its store",
+    "home_colonized": "seized a home",
+    "ruins_scavenged": "picked over ruins",
 }
 """Fallback templates per event type when an event carries no ``message`` payload."""
 
@@ -102,8 +106,9 @@ def render_world_table(world: WorldState) -> Table:
 
     Pure (read-only): builds three stacked sub-tables -- agents
     (id/status/energy/materials/position), regions (name/energy/materials), and
-    homes (id/owner/region/stakeholders/health/vault) -- inside a grid so the whole
-    snapshot is a single ``rich.table.Table`` renderable. Does not mutate the world.
+    homes (id/owner/region/status/stakeholders/health/vault/breachers/remnant) --
+    inside a grid so the whole snapshot is a single ``rich.table.Table`` renderable.
+    Does not mutate the world.
 
     Args:
         world: The world whose agents, regions, and homes to snapshot.
@@ -127,11 +132,12 @@ def render_world_table(world: WorldState) -> Table:
     agents_table.add_column("Materials", justify="right")
     agents_table.add_column("Region")
     for agent in roster:
+        hoard = " (hoarding)" if is_hoarding(agent) else ""
         agents_table.add_row(
             agent.id,
             agent.status.value,
             f"{agent.current_energy:.1f}",
-            f"{agent.current_materials:.1f}",
+            f"{agent.current_materials:.1f}{hoard}",
             agent.current_position,
         )
 
@@ -150,18 +156,25 @@ def render_world_table(world: WorldState) -> Table:
     homes_table.add_column("Home")
     homes_table.add_column("Owner")
     homes_table.add_column("Region")
+    homes_table.add_column("Status")
     homes_table.add_column("Stakeholders", justify="right")
     homes_table.add_column("Health", justify="right")
     homes_table.add_column("Vault", justify="right")
+    homes_table.add_column("Breachers", justify="right")
+    homes_table.add_column("Remnant", justify="right")
     for home in world.get_all_homes():
         cap = max_integrity(len(home.stakeholders))
+        vault_hoard = " (hoarding)" if home_is_hoarding(home) else ""
         homes_table.add_row(
             home.home_id,
             home.owner_id,
             home.region,
+            home.status.value,
             str(len(home.stakeholders)),
             f"{home.integrity:.1f}/{cap:.1f}",
-            f"{home.vault_materials:.1f}",
+            f"{home.vault_materials:.1f}{vault_hoard}",
+            str(len(home.breachers)),
+            f"{home.remnant_materials:.1f}",
         )
 
     layout = Table.grid(expand=True)

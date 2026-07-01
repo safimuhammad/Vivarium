@@ -10,7 +10,7 @@ terminal) and is excluded from the fast suite.
 from __future__ import annotations
 
 from bus.events import Event, ScopeType
-from core.constants import HOME_MAX_INTEGRITY
+from core.constants import HOARDING_MATERIALS_THRESHOLD, HOME_MAX_INTEGRITY
 from observability.activity_feed import render_event, render_world_table
 from world.world import WorldState
 
@@ -149,6 +149,9 @@ def test_render_world_table_homes_section_renders_cleanly_with_zero_homes(
     assert "Stakeholders" in text  # new column header still present
     assert "Health" in text  # new column header still present
     assert "Vault" in text  # new column header still present with zero homes
+    assert (
+        "Status" in text and "Breachers" in text and "Remnant" in text
+    )  # new columns with zero homes
 
 
 def test_render_event_home_started_hoarding_is_human_readable() -> None:
@@ -172,3 +175,59 @@ def test_render_world_table_shows_vault_column(world: WorldState) -> None:
     home_rows = [line for line in text.splitlines() if "home_ada" in line]
     assert len(home_rows) == 1
     assert "120.0" in home_rows[0]  # the vault balance appears IN the home's row
+
+
+def test_render_event_contest_verbs_are_human_readable() -> None:
+    """Message-less contest events fall back to a distinct verb per type (not the raw type)."""
+    for etype, needle in (
+        ("home_breached", "broke into a home"),
+        ("home_thieved", "stripped a home"),
+        ("home_colonized", "seized a home"),
+        ("ruins_scavenged", "picked over ruins"),
+    ):
+        event = Event(etype, "wanderer_002", {}, scope=ScopeType.LOCAL)
+        assert needle in render_event(event).lower()
+
+
+def test_render_world_table_marks_a_hoarding_agent(world: WorldState) -> None:
+    """The agents section marks a being over a hoarding threshold (carried-2b consistency)."""
+    from rich.console import Console
+
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    ada.current_materials = HOARDING_MATERIALS_THRESHOLD  # hoarding on materials
+    text = "".join(seg.text for seg in Console(width=200).render(render_world_table(world)))
+    ada_rows = [line for line in text.splitlines() if "wanderer_001" in line]
+    assert ada_rows and "hoarding" in ada_rows[0].lower()
+
+
+def test_render_world_table_marks_a_hoarding_home_and_shows_contest_columns(
+    world: WorldState,
+) -> None:
+    """The homes section marks a hoarding vault and shows Status/Breachers/Remnant."""
+    from rich.console import Console
+
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.deposit_to_home_vault("home_ada", HOARDING_MATERIALS_THRESHOLD + 5.0)  # hoarding home
+    world.record_breacher("home_ada", "wanderer_002")
+    text = "".join(seg.text for seg in Console(width=250).render(render_world_table(world)))
+
+    assert "Status" in text and "Breachers" in text and "Remnant" in text  # new columns
+    home_rows = [line for line in text.splitlines() if "home_ada" in line]
+    assert len(home_rows) == 1
+    assert "standing" in home_rows[0].lower()
+    assert "hoarding" in home_rows[0].lower()  # vault-hoard marker
+    assert "1" in home_rows[0]  # one breacher
+
+
+def test_render_world_table_shows_a_ruin_row(world: WorldState) -> None:
+    """A RUIN renders its status + remnant (observer-facing)."""
+    from rich.console import Console
+
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("home_ada")
+    text = "".join(seg.text for seg in Console(width=250).render(render_world_table(world)))
+    home_rows = [line for line in text.splitlines() if "home_ada" in line]
+    assert len(home_rows) == 1 and "ruin" in home_rows[0].lower()
