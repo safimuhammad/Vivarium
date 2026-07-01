@@ -150,6 +150,7 @@ async def test_mock_decider_returns_scripted_decisions_in_order_and_cycles(
     assert second.tool_calls[0].name == "look_around"
     assert third.tool_calls[0].name == "look_around"  # cycled back to the start
     assert mock_decider.history == [first, second, third]
+    assert first is not second  # proves decider advanced from index 0 to index 1
     assert first is third  # index 0 again, not a fresh Decision -> proves the wrap
 
 
