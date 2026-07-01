@@ -49,6 +49,17 @@ from memory.models import Importance
 GENERIC_ACTION_ENERGY_COST: Final[float] = 1.0
 """Energy cost of a generic action. [doc] (not yet charged in code)."""
 
+IDLE_AGING_ENERGY_COST: Final[float] = 1.0
+"""Energy an *idle* breath (no tool call — self-talk or silent rest) drains. [design —
+2026-07-01, Layer 1].
+
+Aging is the still-life fix: you cannot sit frozen forever for free. Scoped to idle
+breaths ONLY (an active breath already paid its action's energy); this is NOT an
+always-on metabolism. Gentle by design — from 100 energy it is ~95 idle breaths to the
+paralysis threshold. A world-rule dial; retune by observation. NOTE (reviewer): aging
+bites only literal idle breaths — free tool calls (harvest/look_around) never age — so do
+not crank this to force dynamism; it can't."""
+
 MOVE_ENERGY_COST: Final[float] = 5.0
 """Energy cost to move between regions. [doc].
 

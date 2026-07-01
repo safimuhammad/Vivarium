@@ -153,3 +153,9 @@ def test_compaction_budgets_scale_with_window_and_keep_headroom() -> None:
     budget, trigger, target, hard = constants.compaction_budgets(window)
     assert 480_000 < trigger < 520_000  # compaction triggers at ~500K
     assert 0 < target < trigger < hard < budget < window
+
+
+def test_idle_aging_cost_present_and_gentle() -> None:
+    """Idle-aging is a small, positive energy cost — a fraction, not a hammer."""
+    assert isinstance(constants.IDLE_AGING_ENERGY_COST, float)
+    assert 0.0 < constants.IDLE_AGING_ENERGY_COST <= constants.MOVE_ENERGY_COST
