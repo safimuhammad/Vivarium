@@ -535,8 +535,10 @@ async def break_in(
           :meth:`~world.world.WorldState.withdraw_from_home_vault`, then credits each recipient's
           share via :meth:`~world.world.WorldState.modify_agent_materials` (conserved — the vault
           is debited for the WHOLE balance before any recipient is credited, and the shares plus
-          the final striker's remainder sum to exactly that balance). The home's ``status`` is
-          left ``STANDING``.
+          the final striker's remainder sum to exactly that balance). Deliberately does NOT call
+          ``make_ruin`` — ``home.status`` is never touched here, so it stays whatever it already
+          was (``STANDING``); ruining is the world-tick's job (Task 5), and doing it here would
+          double-count the just-emptied vault into a ruin remnant.
 
     Emits events:
         * On a breach (integrity ``<= 0``): one ``"home_breached"`` event
