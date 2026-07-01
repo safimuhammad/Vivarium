@@ -160,6 +160,12 @@ collapses — deliberately far longer than an owner's breath gap so it never cru
 between breaths through no fault of its own. Retune upward if a slow sequential (Ollama)
 regime is revived, exactly like ``MATING_PROPOSAL_TIMEOUT_SECONDS``."""
 
+HOME_BUILD_MATERIALS_COST: Final[float] = 80.0
+"""Materials to raise a home. [design — 2026-07-01, Layer 1].
+
+Biased HIGH so homes are rare and precious, and it competes with mating (min 30
+materials) for the same scarce stock — a nest-vs-child tension. A world-rule dial."""
+
 # ---------------------------------------------------------------------------
 # Mating
 # ---------------------------------------------------------------------------

@@ -176,3 +176,9 @@ def test_home_upkeep_and_decay_dials_present_and_sane() -> None:
     # Collapse-when-broke must be far slower than the owner's breath gap (the mating
     # 60s->600s lesson): a home must not crumble between an owner's breaths.
     assert constants.HOME_MAX_INTEGRITY / constants.HOME_DECAY_PER_MISSED_TICK >= 5.0
+
+
+def test_home_build_cost_competes_with_mating() -> None:
+    """Build cost is biased high and competes with mating for the same scarce materials."""
+    assert isinstance(constants.HOME_BUILD_MATERIALS_COST, float)
+    assert constants.HOME_BUILD_MATERIALS_COST >= constants.MATING_MIN_MATERIALS_CONTRIBUTION

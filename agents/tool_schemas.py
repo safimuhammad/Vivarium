@@ -20,6 +20,7 @@ from typing import Any
 from core.constants import (
     ATTACK_DAMAGE,
     ATTACK_ENERGY_COST,
+    HOME_BUILD_MATERIALS_COST,
     MATING_MAX_OFFSPRING,
     MATING_MIN_ENERGY_CONTRIBUTION,
     MATING_MIN_MATERIALS_CONTRIBUTION,
@@ -245,6 +246,17 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "required": ["target", "message"],
             },
+        },
+    },
+    "build_home": {
+        "type": "function",
+        "function": {
+            "name": "build_home",
+            "description": (
+                "Raise a home of your own where you stand. It costs "
+                f"{HOME_BUILD_MATERIALS_COST:.0f} materials, and you may hold only one home."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
 }
