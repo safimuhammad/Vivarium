@@ -753,3 +753,11 @@ def test_get_all_homes(world: WorldState) -> None:
         "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
     )
     assert [h.home_id for h in world.get_all_homes()] == ["h1"]
+
+
+def test_build_home_seeds_owner_as_first_stakeholder(world: WorldState) -> None:
+    """The builder is the home's owner AND its first stakeholder (L2 shared-ownership seed)."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert world.homes["h1"].stakeholders == ["wanderer_001"]

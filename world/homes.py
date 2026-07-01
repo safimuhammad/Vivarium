@@ -15,7 +15,7 @@ field, so an L2 colonize is a single field write rather than a painful re-key.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(slots=True)
@@ -35,6 +35,10 @@ class Home:
         last_upkeep_at: World-clock time (seconds) upkeep was last drawn; the
             world-tick accrues ``rate * (now - last_upkeep_at)`` materials from the
             owner's stock each step it can pay.
+        stakeholders: Ids of every being bought into the home (Layer 2). The builder
+            is the owner AND the first stakeholder; others join via ``pledge_home``.
+            Upkeep is drawn across this pool and the integrity ceiling scales with its
+            length (:func:`max_integrity`).
     """
 
     home_id: str
@@ -43,3 +47,4 @@ class Home:
     integrity: float
     built_at: float
     last_upkeep_at: float
+    stakeholders: list[str] = field(default_factory=list)

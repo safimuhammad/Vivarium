@@ -32,3 +32,17 @@ def test_home_uses_slots() -> None:
     """slots=True: no per-instance __dict__ (small memory/access win, like the peers)."""
     home = Home("h", "o", "r", 1.0, 2.0, 3.0)
     assert not hasattr(home, "__dict__")
+
+
+def test_home_has_stakeholders_defaulting_empty() -> None:
+    """A Home carries a mutable stakeholders list, defaulting empty (invariant is the world's)."""
+    home = Home("h", "o", "r", 1.0, 2.0, 3.0)
+    assert home.stakeholders == []
+    home.stakeholders.append("wanderer_002")
+    assert home.stakeholders == ["wanderer_002"]
+
+
+def test_home_still_uses_slots_with_stakeholders() -> None:
+    """slots=True holds after adding the list field (no per-instance __dict__)."""
+    home = Home("h", "o", "r", 1.0, 2.0, 3.0)
+    assert not hasattr(home, "__dict__")
