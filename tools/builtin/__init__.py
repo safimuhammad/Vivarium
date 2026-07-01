@@ -16,6 +16,7 @@ from tools.builtin.homes import (
     deposit_to_home,
     leave_home,
     pledge_home,
+    scavenge_ruins,
     use_hearth,
     withdraw_from_home,
 )
@@ -39,6 +40,7 @@ __all__ = [
     "pledge_home",
     "register_builtins",
     "reject_mating",
+    "scavenge_ruins",
     "speak",
     "transfer_resource",
     "use_hearth",
@@ -63,6 +65,7 @@ BUILTIN_TOOLS: dict[str, ToolFn] = {
     "deposit_to_home": deposit_to_home,
     "withdraw_from_home": withdraw_from_home,
     "break_in": break_in,
+    "scavenge_ruins": scavenge_ruins,
 }
 
 

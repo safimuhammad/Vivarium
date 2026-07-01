@@ -28,6 +28,7 @@ from core.constants import (
     HOME_REPAIR_PER_SECOND,
     HOME_UPKEEP_MATERIALS_PER_SECOND,
     MATING_PROPOSAL_TIMEOUT_SECONDS,
+    RUINS_PERSIST_SECONDS,
 )
 from core.rng import make_rng
 from tests.conftest import SEED, FakeClock
@@ -397,7 +398,8 @@ async def test_tick_dead_owner_cannot_pay_decays_and_collapses(
 
     await tick(world, event_bus)
 
-    assert world.home_of("wanderer_002") is None  # collapsed and removed
+    ruin = world.get_home("home_boris")
+    assert ruin is not None and ruin.status is HomeStatus.RUIN  # collapse now leaves a ruin
     collapsed = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
     assert len(collapsed) == 1
     assert collapsed[0].scope is ScopeType.LOCAL
@@ -426,7 +428,8 @@ async def test_tick_swept_owner_missing_decays_and_collapses(
 
     await tick(world, event_bus)
 
-    assert world.home_of("wanderer_002") is None
+    ruin = world.get_home("home_boris")
+    assert ruin is not None and ruin.status is HomeStatus.RUIN  # collapse now leaves a ruin
     collapsed = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
     assert len(collapsed) == 1
 
@@ -448,12 +451,19 @@ async def test_tick_home_collapse_fires_once(
     await tick(world, event_bus)
     first = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
     assert len(first) == 1
+    ruin = world.get_home("home_boris")
+    assert ruin is not None and ruin.status is HomeStatus.RUIN  # collapse leaves a ruin, not None
 
-    fake_clock.advance(1.0)
+    fake_clock.advance(1.0)  # still well within the persist window
     await tick(world, event_bus)
     second = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
     assert second == []
-    assert world.home_of("wanderer_002") is None
+    ruin_again = world.get_home("home_boris")
+    assert ruin_again is not None and ruin_again.status is HomeStatus.RUIN  # still lingering
+
+    fake_clock.advance(RUINS_PERSIST_SECONDS + 1.0)  # now past the persist window
+    await tick(world, event_bus)
+    assert world.get_home("home_boris") is None  # ruin swept after the persist window
 
 
 async def test_tick_home_upkeep_is_frequency_independent() -> None:
@@ -589,7 +599,8 @@ async def test_tick_ownerless_home_with_no_living_payers_decays_to_collapse() ->
 
     await tick(world, bus)
 
-    assert world.get_home("h1") is None  # collapsed and removed
+    ruin = world.get_home("h1")
+    assert ruin is not None and ruin.status is HomeStatus.RUIN  # collapse now leaves a ruin
     collapsed = [e for e in bus.get_events("owner_1") if e.type == "home_collapsed"]
     assert len(collapsed) == 1
     assert collapsed[0].scope is ScopeType.LOCAL and collapsed[0].region == "alpha"
@@ -741,3 +752,23 @@ async def test_tick_keeps_breachers_while_not_fully_repaired() -> None:
     home = world.get_home("h1")
     assert home is not None and home.integrity == 40.0
     assert home.breachers == {"wanderer_9"}  # not cleared
+
+
+# ---- Ruin sweep (L2c Task 5) -----------------------------------------------
+
+
+async def test_tick_sweeps_a_ruin_after_the_persist_window(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """A ruin lingers (scavengeable) until older than RUINS_PERSIST_SECONDS, then the tick
+    removes it."""
+    world.build_home("home_boris", "wanderer_002", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("home_boris")
+
+    fake_clock.advance(RUINS_PERSIST_SECONDS - 1.0)
+    await tick(world, event_bus)
+    assert world.get_home("home_boris") is not None  # still lingering
+
+    fake_clock.advance(2.0)  # now past the window
+    await tick(world, event_bus)
+    assert world.get_home("home_boris") is None  # swept

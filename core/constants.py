@@ -239,6 +239,21 @@ BREAKIN_MATERIALS_COST: Final[float] = 10.0
 Layer 2c]. Per-attempt cost (25 mat-equiv with energy) keeps typical vaults net-negative to raid;
 only a hoard-tier (~300) vault repays a coordinated breach after the split + repair leakage."""
 
+RUINS_SCAVENGE_FRACTION: Final[float] = 0.5
+"""Fraction of a collapsed home's ``HOME_BUILD_MATERIALS_COST + vault`` that survives as a
+scavengeable remnant. [design — 2026-07-01, Layer 2c].
+
+MUST be ``< 1`` (a hard conservation floor, asserted): a build->collapse->scavenge loop must be a
+NET LOSS (build 80 -> recover 40), never a materials farm. The non-recovered fraction is the sink.
+Also converts 2b's untraceable collapse-destroys-the-vault loss into a partial, perceivable,
+scavengeable remnant. A world-rule dial."""
+
+RUINS_PERSIST_SECONDS: Final[float] = 120.0
+"""How long a ruin lingers (scavengeable) before the world-tick sweeps it. [design — 2026-07-01,
+Layer 2c]. Mirrors :data:`CORPSE_DECAY_SECONDS`: long enough for a passer-by to find and pick it
+over, short enough that ruins never clutter the world without bound (run-forever). A world-rule
+dial."""
+
 # ---------------------------------------------------------------------------
 # Mating
 # ---------------------------------------------------------------------------

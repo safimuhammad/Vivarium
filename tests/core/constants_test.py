@@ -228,3 +228,12 @@ def test_breakin_dials_present_and_positive() -> None:
     assert isinstance(constants.BREAKIN_ENERGY_COST, float) and constants.BREAKIN_ENERGY_COST > 0.0
     assert isinstance(constants.BREAKIN_MATERIALS_COST, float)
     assert constants.BREAKIN_MATERIALS_COST > 0.0
+
+
+def test_ruins_dials_present_and_conserving() -> None:
+    """The ruins dials exist; the scavenge fraction is strictly < 1 (a build->ruin farm is a net
+    loss)."""
+    assert isinstance(constants.RUINS_SCAVENGE_FRACTION, float)
+    assert 0.0 < constants.RUINS_SCAVENGE_FRACTION < 1.0  # < 1 is the hard conservation floor
+    assert isinstance(constants.RUINS_PERSIST_SECONDS, float)
+    assert constants.RUINS_PERSIST_SECONDS > 0.0

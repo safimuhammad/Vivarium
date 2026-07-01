@@ -25,7 +25,11 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from core.constants import PARALYSIS_ENERGY_THRESHOLD
+from core.constants import (
+    HOME_BUILD_MATERIALS_COST,
+    PARALYSIS_ENERGY_THRESHOLD,
+    RUINS_SCAVENGE_FRACTION,
+)
 from core.logging import get_logger
 from core.rng import Clock, SimContext, default_clock, make_rng
 
@@ -783,6 +787,60 @@ class WorldState:
             home_id, 0.0
         )  # re-clamp to the new ceiling (a ~0 integrity is unchanged)
         return True
+
+    def make_ruin(self, home_id: str) -> bool:
+        """Collapse a home into a scavengeable ruin. Sync, event-free.
+
+        The sole ruin-maker, called only from the world-tick collapse path (a thieved home is left
+        STANDING — MANDATORY #2 — so a split vault is never double-counted here). Computes the
+        remnant as :data:`~core.constants.RUINS_SCAVENGE_FRACTION` of
+        ``HOME_BUILD_MATERIALS_COST + vault_materials`` (fraction ``< 1`` — the rest is a
+        permanent sink), then zeroes the vault (consumed into the remnant), clears stakeholders +
+        breachers (a ruin is neither tended nor contestable), and marks it ``RUIN`` stamped with
+        ``now``. Mutates :attr:`~world.homes.Home.remnant_materials` / ``vault_materials`` /
+        ``stakeholders`` / ``breachers`` / ``status`` / ``ruined_at``.
+
+        Args:
+            home_id: Id of the home to ruin.
+
+        Returns:
+            ``True`` if the home exists and was ruined; ``False`` if the home is unknown.
+        """
+        home = self.homes.get(home_id)
+        if home is None:
+            return False
+        home.remnant_materials = RUINS_SCAVENGE_FRACTION * (
+            HOME_BUILD_MATERIALS_COST + home.vault_materials
+        )
+        home.vault_materials = 0.0
+        home.stakeholders = []
+        home.breachers.clear()
+        home.status = HomeStatus.RUIN
+        home.ruined_at = self.now()
+        return True
+
+    def scavenge_ruin(self, home_id: str, amount: float) -> float:
+        """Draw up to ``amount`` materials from a ruin's remnant, returning the actual taken.
+
+        Sync, event-free. The caller (the ``scavenge_ruins`` tool) credits the returned amount to
+        the scavenger's personal stock (deduct-remnant-first — nothing minted). Caps the draw at
+        what remains (so a ruin never goes negative). Mutates
+        :attr:`~world.homes.Home.remnant_materials`.
+
+        Args:
+            home_id: Id of the ruin to draw from.
+            amount: Materials the scavenger asked for.
+
+        Returns:
+            The actual materials removed from the remnant (``0.0`` for an unknown home or an
+            empty ruin).
+        """
+        home = self.homes.get(home_id)
+        if home is None:
+            return 0.0
+        taken = max(0.0, min(amount, home.remnant_materials))
+        home.remnant_materials -= taken
+        return taken
 
     def deposit_to_home_vault(self, home_id: str, amount: float) -> bool:
         """Add ``amount`` to a home's vault, flooring at 0.0. Sync and event-free.

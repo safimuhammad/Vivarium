@@ -41,6 +41,7 @@ from tools.builtin.homes import (
     deposit_to_home,
     leave_home,
     pledge_home,
+    scavenge_ruins,
     use_hearth,
     withdraw_from_home,
 )
@@ -1378,3 +1379,114 @@ async def test_break_in_colonize_non_breaching_is_a_pure_battering_no_seizure(
     colonized = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_colonized"]
     assert colonized == []  # the intent never fires on a non-breaching blow
     assert "batter" in result.lower()
+
+
+# ---- scavenge_ruins (L2c Task 5) -------------------------------------------
+
+
+async def test_scavenge_ruins_moves_remnant_to_personal_conserving(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A co-located being draws remnant -> personal, exactly (remnant down == personal up);
+    ruins_scavenged fires."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("h1")
+    remnant = world.homes["h1"].remnant_materials
+    boris = world.get_agent("wanderer_002")  # co-located, anyone may scavenge
+    assert boris is not None
+    boris.current_materials = 0.0
+
+    result = await scavenge_ruins(world, event_bus, "wanderer_002", "h1", 15.0)
+
+    assert world.homes["h1"].remnant_materials == pytest.approx(remnant - 15.0)
+    assert boris.current_materials == pytest.approx(15.0)  # moved, not minted
+    scav = [e for e in event_bus.get_events("wanderer_002") if e.type == "ruins_scavenged"]
+    assert len(scav) == 1 and scav[0].scope is ScopeType.LOCAL and scav[0].region == "alpha"
+    assert result.startswith("You pick")
+
+
+async def test_scavenge_ruins_unknown_agent_is_error(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A missing being cannot scavenge (defensive: the registry also guards this)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("h1")
+    remnant_before = world.homes["h1"].remnant_materials
+
+    result = await scavenge_ruins(world, event_bus, "ghost", "h1", 5.0)
+
+    assert result.startswith("Error:")
+    assert world.homes["h1"].remnant_materials == remnant_before  # nothing taken
+
+
+async def test_scavenge_ruins_while_paralyzed_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A fallen being cannot pick over ruins (mirrors the other home tools' ALIVE guard)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("h1")
+    remnant_before = world.homes["h1"].remnant_materials
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    world.modify_agent_energy("wanderer_002", -(boris.current_energy - 1.0))  # -> PARALYZED
+    assert boris.status is AgentStatus.PARALYZED
+
+    result = await scavenge_ruins(world, event_bus, "wanderer_002", "h1", 5.0)
+
+    assert result.startswith("Invalid:")
+    assert world.homes["h1"].remnant_materials == remnant_before  # nothing taken
+
+
+async def test_scavenge_ruins_non_positive_amount_is_rejected(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A zero/negative amount is rejected before any mutation (shared amount coercion)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("h1")
+    remnant_before = world.homes["h1"].remnant_materials
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    materials_before = boris.current_materials
+
+    result = await scavenge_ruins(world, event_bus, "wanderer_002", "h1", -5.0)
+
+    assert result.startswith("Invalid:")
+    assert world.homes["h1"].remnant_materials == remnant_before  # nothing taken
+    assert boris.current_materials == materials_before  # nothing minted
+
+
+async def test_scavenge_ruins_guards(world: WorldState, event_bus: EventBus) -> None:
+    """Guards: unknown ruins (Error), a STANDING home (Invalid), not co-located (Invalid),
+    picked-clean (Invalid)."""
+    world.build_home("standing", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    world.build_home("ruin", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("ruin")
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    no_ruin = await scavenge_ruins(world, event_bus, "wanderer_002", "nope", 5.0)
+    assert no_ruin.startswith("Error:")
+    still_standing = await scavenge_ruins(world, event_bus, "wanderer_002", "standing", 5.0)
+    assert still_standing.startswith("Invalid:")
+    assert world.move_agent("wanderer_002", "beta") is True
+    assert (await scavenge_ruins(world, event_bus, "wanderer_002", "ruin", 5.0)).startswith(
+        "Invalid:"
+    )  # not co-located
+    assert world.move_agent("wanderer_002", "alpha") is True
+    world.scavenge_ruin("ruin", world.homes["ruin"].remnant_materials)  # empty it
+    assert (await scavenge_ruins(world, event_bus, "wanderer_002", "ruin", 5.0)).startswith(
+        "Invalid:"
+    )  # picked clean
+
+
+async def test_scavenge_ruins_caps_at_remnant(world: WorldState, event_bus: EventBus) -> None:
+    """Over-asking takes only what remains (no mint)."""
+    world.build_home("ruin", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("ruin")
+    remnant = world.homes["ruin"].remnant_materials
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    boris.current_materials = 0.0
+    await scavenge_ruins(world, event_bus, "wanderer_002", "ruin", 10_000.0)
+    assert boris.current_materials == pytest.approx(remnant)  # only what remained
+    assert world.homes["ruin"].remnant_materials == 0.0

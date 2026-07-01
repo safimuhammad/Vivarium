@@ -378,6 +378,31 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "scavenge_ruins": {
+        "type": "function",
+        "function": {
+            "name": "scavenge_ruins",
+            "description": (
+                "Pick over the ruins of a fallen home in your place for what materials still lie "
+                "in it, drawing some into your own holding. You cannot take more than the ruins "
+                "hold."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_home": {
+                        "type": "string",
+                        "description": "Id of the ruins in your place to pick over.",
+                    },
+                    "amount": {
+                        "type": "number",
+                        "description": "How many materials to draw from the ruins.",
+                    },
+                },
+                "required": ["target_home", "amount"],
+            },
+        },
+    },
 }
 """Tool name -> Ollama function schema; its key set mirrors ``BUILTIN_TOOLS``."""
 

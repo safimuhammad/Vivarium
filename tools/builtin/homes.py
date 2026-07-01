@@ -2,12 +2,16 @@
 materials for energy at a home you share), ``pledge_home`` (join another's home as a
 stakeholder), ``leave_home`` (give up a stake, voluntarily), ``deposit_to_home``
 (bank personal materials into the home's shared vault), ``withdraw_from_home``
-(draw materials back out of the vault into personal stock), and ``break_in`` (a
+(draw materials back out of the vault into personal stock), ``break_in`` (a
 co-located non-stakeholder pays a pure-sink cost to wear at a STANDING home's
 integrity, breaching it at ``<= 0``; a ``"thieve"`` breach splits the vault among
 co-located living breachers and leaves the home STANDING at ~0 (Task 4a), while a
 ``"colonize"`` breach seizes the home for the final striker and every currently-homeless
-co-located living breacher, evicting the prior owner + stakeholders (Task 4b)).
+co-located living breacher, evicting the prior owner + stakeholders (Task 4b)), and
+``scavenge_ruins`` (any co-located ALIVE being draws materials from a fallen home's
+``remnant_materials`` into its own stock, deduct-remnant-first and capped at what
+remains -- the collapse path that turns a home's integrity reaching ``<= 0`` into a
+RUIN, rather than destroying it outright, is Task 5).
 
 Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
@@ -713,4 +717,74 @@ async def break_in(
         f"You batter the home {home.home_id}; its soundness drops to {home.integrity:.1f} but it "
         f"still stands. You spent {BREAKIN_ENERGY_COST:.0f} energy and "
         f"{BREAKIN_MATERIALS_COST:.0f} materials."
+    )
+
+
+async def scavenge_ruins(
+    world: WorldState, event_bus: EventBus, agent_id: str, target_home: str, amount: float
+) -> str:
+    """Pick over the ruins of a fallen home where you stand, drawing materials into your own stock.
+
+    Any co-located ALIVE being (a ruin has no owner to bar entry) draws up to ``amount`` materials
+    from the ruin's ``remnant_materials``. Conserved: the remnant is deducted FIRST via
+    :meth:`~world.world.WorldState.scavenge_ruin` (which caps at what remains), then the actual
+    taken is credited to the scavenger — the same amount moved, nothing minted.
+
+    Mutates world state:
+        * Deducts the actual taken from the ruin's remnant, then credits it to the being's
+          materials.
+
+    Emits events:
+        * One ``"ruins_scavenged"`` event (:attr:`~bus.events.ScopeType.LOCAL`, source = the
+          scavenger, region = the ruin's region, stamped ``world.now()``).
+
+    Args:
+        world: The live world state.
+        event_bus: The bus the resulting event is published to.
+        agent_id: Id of the scavenging being.
+        target_home: Id of the co-located ruin to pick over.
+        amount: Materials to draw from the remnant (capped at what remains).
+
+    Returns:
+        A success sentence with the new balances; an ``"Error: "`` string if the being or ruin is
+        unknown; an ``"Invalid: "`` string if the amount is not positive, the being is fallen, the
+        target still stands, it is not co-located, or the ruin is already picked clean (rejected
+        calls mutate nothing).
+    """
+    quantity = _coerce_positive_amount(amount)
+    if isinstance(quantity, str):
+        return quantity
+    agent = world.get_agent(agent_id)
+    if agent is None:
+        return f"Error: Cannot find Agent {agent_id} in the world."
+    if agent.status is not AgentStatus.ALIVE:
+        return (
+            "Invalid: You are fallen and cannot pick over ruins; "
+            "only another being can restore you."
+        )
+    home = world.get_home(target_home)
+    if home is None:
+        return "Error: There are no such ruins here to pick over."
+    if home.status is not HomeStatus.RUIN:
+        return "Invalid: That home still stands; there are no ruins here to pick over."
+    if home.region != agent.current_position:
+        return "Invalid: You are not where those ruins lie."
+    if home.remnant_materials <= 0.0:
+        return "Invalid: These ruins have already been picked clean."
+
+    taken = world.scavenge_ruin(target_home, quantity)  # deduct the remnant FIRST (conservation)
+    world.modify_agent_materials(agent_id, taken)  # THEN credit personal stock
+    await event_bus.publish(
+        Event(
+            "ruins_scavenged",
+            agent_id,
+            {"message": f"{agent.name} picks {taken} materials from the ruins in {home.region}."},
+            scope=ScopeType.LOCAL,
+            region=home.region,
+            timestamp=world.now(),
+        )
+    )
+    return (
+        f"You pick {taken} materials from the ruins. They hold {home.remnant_materials} more; "
+        f"you hold {agent.current_materials}."
     )
