@@ -105,16 +105,20 @@ def test_world_mechanics_describes_aging_and_the_home() -> None:
 
 
 def test_world_mechanics_describes_sharing_a_home() -> None:
-    """L2a physics (DD9): a home can be shared.
+    """L2a physics (DD9): a home can be shared, with a diminishing, bounded benefit.
 
-    A being may pledge to join it, or leave it; sharing hardens it.
+    A being may pledge to join it, or give it up; sharing hardens it, but each
+    additional stakeholder helps less than the last — there is no unbounded gain
+    from piling everyone into one home.
     """
     from agents.prompt import WORLD_MECHANICS
 
     lowered = WORLD_MECHANICS.lower()
     assert "pledge" in lowered  # you may join another's home
     assert "share" in lowered  # sharing its keep + hearth
+    assert "give up" in lowered  # you may also leave a home you share
     assert "sounder" in lowered or "wear down" in lowered  # health scales with stakeholders
+    assert "less than the last" in lowered  # diminishing returns: a bounded, not unbounded, gain
     # DD9 still holds: no goals / strategy / simulation language slipped in.
     for banned in FORBIDDEN_TERMS:
         assert banned not in lowered
