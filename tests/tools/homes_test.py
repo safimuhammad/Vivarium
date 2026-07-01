@@ -33,8 +33,10 @@ from core.constants import (
     HOARDING_MATERIALS_THRESHOLD,
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
+    RUINS_PERSIST_SECONDS,
 )
-from tests.conftest import FakeClock
+from core.rng import make_rng
+from tests.conftest import SEED, FakeClock
 from tools.builtin.homes import (
     break_in,
     build_home,
@@ -47,6 +49,7 @@ from tools.builtin.homes import (
 )
 from world.agents import AgentState, AgentStatus, is_hoarding
 from world.homes import HomeStatus, home_is_hoarding
+from world.regions import Region
 from world.tick import tick
 from world.world import WorldState
 
@@ -1490,3 +1493,119 @@ async def test_scavenge_ruins_caps_at_remnant(world: WorldState, event_bus: Even
     await scavenge_ruins(world, event_bus, "wanderer_002", "ruin", 10_000.0)
     assert boris.current_materials == pytest.approx(remnant)  # only what remained
     assert world.homes["ruin"].remnant_materials == 0.0
+
+
+# ---- full raid lifecycle conservation property test (L2c Task 7) ----------
+
+
+async def test_full_raid_lifecycle_conserves_materials_and_never_mints_energy(
+    fake_clock: FakeClock,
+) -> None:
+    """The whole contest layer conserves: build -> deposit -> coordinated break_in -> thieve ->
+    collapse-to-ruin -> scavenge -> sweep never RAISES total materials (only region regen would,
+    and it is zero here) and never mints energy.
+
+    Total materials counts each STANDING home's immobilised structure (HOME_BUILD_MATERIALS_COST) +
+    vault and each RUIN's remnant, so a build (agent -> structure) and a ruin (structure -> partial
+    remnant + sink) are a move-or-sink, never a mint. break_in cost + upkeep + the ruin fraction are
+    the only sinks; the total is asserted strictly non-increasing at every step.
+    """
+    region = Region(
+        name="alpha",
+        description="A field.",
+        connections=[],
+        energy_rate=0.0,
+        materials_rate=0.0,
+        current_energy=0.0,
+        current_materials=0.0,
+        max_energy=10_000.0,
+        max_materials=10_000.0,  # zero regen -> totals strictly non-increasing
+    )
+    beings = [
+        AgentState(
+            id=aid,
+            name=aid.title(),
+            persona="p",
+            current_position="alpha",
+            current_energy=500.0,
+            current_materials=300.0,
+            status=AgentStatus.ALIVE,
+        )
+        for aid in ("owner_1", "raider_1", "raider_2", "raider_3")
+    ]
+    # owner_1 has exactly enough to build + fill the vault, so it is BROKE after -> unpaid ->
+    # the thieved (integrity-0) home decays to a ruin on the next tick (no repair complication).
+    owner = beings[0]
+    owner.current_materials = HOME_BUILD_MATERIALS_COST + 200.0
+    world = WorldState([region], beings, rng=make_rng(SEED), clock=fake_clock)
+    bus = EventBus(world)
+    for b in beings:
+        bus.subscribe(b.id)
+
+    def total_materials(w: WorldState) -> float:
+        homes = 0.0
+        for h in w.get_all_homes():
+            if h.status is HomeStatus.STANDING:
+                homes += HOME_BUILD_MATERIALS_COST + h.vault_materials
+            else:
+                homes += h.remnant_materials
+        return (
+            sum(a.current_materials for a in w.get_all_agents())
+            + sum(r.current_materials for r in w.get_all_regions())
+            + homes
+        )
+
+    def total_energy(w: WorldState) -> float:
+        return sum(a.current_energy for a in w.get_all_agents()) + sum(
+            r.current_energy for r in w.get_all_regions()
+        )
+
+    m, e = total_materials(world), total_energy(world)
+
+    def step(label: str) -> None:
+        nonlocal m, e
+        m1, e1 = total_materials(world), total_energy(world)
+        assert m1 <= m + 1e-9, f"{label}: materials ROSE {m} -> {m1}"
+        assert e1 <= e + 1e-9, f"{label}: energy MINTED {e} -> {e1}"
+        m, e = m1, e1
+
+    await build_home(world, bus, "owner_1")
+    step("build")  # agent -80 ; structure +80 => net 0
+    home = world.home_of("owner_1")
+    assert home is not None
+    hid = home.home_id
+
+    await deposit_to_home(world, bus, "owner_1", 200.0)  # a hoard-tier vault worth raiding
+    step("deposit")  # agent -200 ; vault +200 => net 0
+    assert owner.current_materials == 0.0  # broke -> the wreck will not be repaired
+
+    # Coordinated break_in: cycle three raiders (no tick between -> owner broke, no repair)
+    # until the blow breaches (M(1)=100 -> four 25-blows). The 4th thieves + splits the vault.
+    for i, rid in enumerate(("raider_1", "raider_2", "raider_3", "raider_1")):
+        result = await break_in(world, bus, rid, hid, "thieve")
+        step(f"break_in-{i}")  # each: agent -15 energy / -10 materials PURE SINK
+        if "strip" in result.lower():
+            break
+    assert home.status is HomeStatus.STANDING  # thieved: standing at 0, never a ruin
+    assert home.vault_materials == 0.0
+    step("thieve")  # vault -200 ; breachers +200 => net 0
+
+    # The unpaid, integrity-0 home collapses to a RUIN on the next tick.
+    fake_clock.advance(5.0)
+    await tick(world, bus)
+    # Re-fetch: mypy narrows `home.status` to Literal[STANDING] from the assert above and
+    # (being unable to see that `tick` mutates the same object) would flag the RUIN check
+    # below as a non-overlapping identity comparison against a stale narrowed type.
+    home = world.get_home(hid)
+    assert home is not None
+    assert home.status is HomeStatus.RUIN
+    step("collapse-to-ruin")  # structure 80 -> remnant 0.5*(80+0)=40 => -40 SINK
+
+    await scavenge_ruins(world, bus, "raider_1", hid, home.remnant_materials)  # take it all
+    step("scavenge")  # remnant -y ; agent +y => net 0
+    assert home.remnant_materials == 0.0
+
+    fake_clock.advance(RUINS_PERSIST_SECONDS + 1.0)
+    await tick(world, bus)
+    assert world.get_home(hid) is None  # ruin swept
+    step("ruin-sweep")  # remnant already 0 -> no change
