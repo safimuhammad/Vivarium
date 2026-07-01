@@ -425,8 +425,10 @@ class Agent:
         A being may resolve a breath by simply speaking its mind -- free text with no
         tool call -- rather than acting. That utterance is perceivable (recorded by the
         log sink, shown in the feed) but routed to **no** other being: it is not
-        communication and costs nothing. Nothing is emitted when the breath took an
-        action (``decision.tool_calls`` non-empty) or was a silent rest (blank text).
+        communication, and emitting this event itself spends no energy -- though the
+        idle breath it rides on still ages the being (:data:`~core.constants.IDLE_AGING_ENERGY_COST`
+        in :meth:`breathe`). Nothing is emitted when the breath took an action
+        (``decision.tool_calls`` non-empty) or was a silent rest (blank text).
 
         Args:
             decision: The just-made decision for this breath.

@@ -13,6 +13,7 @@ from bus.events import ScopeType
 from core.constants import (
     HEARTH_ENERGY_PER_MATERIAL,
     HEARTH_MATERIALS_PER_USE,
+    HOARDING_ENERGY_THRESHOLD,
     HOARDING_MATERIALS_THRESHOLD,
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
@@ -119,12 +120,47 @@ async def test_use_hearth_converts_materials_to_energy_at_own_home(
     burned = HEARTH_MATERIALS_PER_USE  # 50 > 20 -> burns the per-use cap
     assert ada.current_materials == 50.0 - burned
     assert ada.current_energy == 40.0 + burned * HEARTH_ENERGY_PER_MATERIAL
-    used = [e for e in event_bus.get_events("wanderer_001") if e.type == "hearth_used"]
+    events = event_bus.get_events("wanderer_001")
+    used = [e for e in events if e.type == "hearth_used"]
     assert len(used) == 1
     assert used[0].scope is ScopeType.LOCAL
     assert used[0].region == "alpha"
     assert used[0].timestamp == world.now()
+    # Neither threshold reached (energy 60 < 500, materials 30 < 300): no announce.
+    assert [e for e in events if e.type == "agent_started_hoarding"] == []
     assert result.startswith("You rest at your hearth")
+
+
+async def test_use_hearth_crossing_energy_threshold_announces_hoarding(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A hearth-use whose energy credit crosses the hoarding threshold announces it.
+
+    Mirrors the ``harvest_resources``/``transfer_resource`` crossing announce: a being
+    that starts NON-hoarding (below both thresholds) and burns materials that push its
+    energy at/over :data:`~core.constants.HOARDING_ENERGY_THRESHOLD` emits exactly one
+    ``agent_started_hoarding``.
+    """
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    ada.current_energy = HOARDING_ENERGY_THRESHOLD - 10.0  # 490: below, pre-credit
+    ada.current_materials = 25.0  # < HOARDING_MATERIALS_THRESHOLD; enough to burn the full cap
+    assert is_hoarding(ada) is False
+
+    await use_hearth(world, event_bus, "wanderer_001")
+
+    assert ada.current_energy == HOARDING_ENERGY_THRESHOLD + 10.0  # 490 + 20 burned = 510
+    assert is_hoarding(ada) is True  # the hearth's energy credit crossed the threshold
+    started = [
+        e for e in event_bus.get_events("wanderer_001") if e.type == "agent_started_hoarding"
+    ]
+    assert len(started) == 1
+    assert started[0].scope is ScopeType.LOCAL
+    assert started[0].region == "alpha"
+    assert started[0].timestamp == world.now()
 
 
 async def test_use_hearth_partial_burn_conserves_exactly(

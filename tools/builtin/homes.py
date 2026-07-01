@@ -20,7 +20,8 @@ from core.constants import (
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
 )
-from world.agents import AgentStatus
+from tools.builtin.resources import _announce_if_started_hoarding
+from world.agents import AgentStatus, is_hoarding
 from world.world import WorldState
 
 
@@ -100,6 +101,11 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
     Emits events:
         * One ``"hearth_used"`` event (:attr:`~bus.events.ScopeType.LOCAL`, source =
           the being, region = its current position, stamped ``world.now()``).
+        * One ``"agent_started_hoarding"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, stamped with the region and
+          ``world.now()``) **only** when this hearth use lifts the being over a
+          hoarding threshold (see :func:`~world.agents.is_hoarding`), so co-located
+          beings perceive the new hoarder. Only the crossing is announced.
 
     Args:
         world: The live world state.
@@ -128,6 +134,14 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
     if agent.current_materials <= 0.0:
         return "Invalid: You have no materials to burn at the hearth."
 
+    # Snapshot hoarding state before ANY mutation below (burn or credit) so we can
+    # detect a *crossing* into hoarding, mirroring harvest_resources/transfer_resource.
+    # Snapshotting later (e.g. after the burn) would false-positive: an agent already
+    # hoarding on materials (>= threshold) whose burn drops materials back under the
+    # threshold while the energy credit crosses 500 never actually stopped hoarding,
+    # so it must not be re-announced as "started".
+    was_hoarding = is_hoarding(agent)
+
     burned = min(agent.current_materials, HEARTH_MATERIALS_PER_USE)
     world.modify_agent_materials(agent_id, -burned)  # destroy the fuel FIRST (conservation)
     gained = burned * HEARTH_ENERGY_PER_MATERIAL
@@ -142,6 +156,17 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
             region=region,
             timestamp=world.now(),
         )
+    )
+
+    # If burning materials for energy just lifted the being over a hoarding
+    # threshold, announce it LOCALLY so co-located beings perceive the new hoarder
+    # (mirrors harvest_resources/transfer_resource). Only the crossing is announced.
+    await _announce_if_started_hoarding(
+        event_bus,
+        agent,
+        was_hoarding=was_hoarding,
+        region=region,
+        timestamp=world.now(),
     )
     return (
         f"You rest at your hearth, burning {burned} materials for {gained} energy. "

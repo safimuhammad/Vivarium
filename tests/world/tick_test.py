@@ -352,6 +352,34 @@ async def test_tick_unpaid_upkeep_decays_integrity(
     assert boris.current_materials == 0.0  # nothing drawn from a broke owner
 
 
+async def test_tick_partial_materials_upkeep_is_all_or_nothing(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """Holding SOME but not enough materials still cannot pay: no partial draw.
+
+    Upkeep is all-or-nothing -- an owner with ``0 < materials < owed`` is treated the
+    same as a broke owner (nothing is drawn, ``last_upkeep_at`` does not advance, and
+    the home decays one step), never a partial payment.
+    """
+    built_at = world.now()
+    world.build_home(
+        "home_boris", "wanderer_002", "alpha", built_at=built_at, integrity=HOME_MAX_INTEGRITY
+    )
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    world.modify_agent_materials("wanderer_002", -(boris.current_materials - 0.5))  # -> 0.5
+    assert boris.current_materials == 0.5
+    fake_clock.advance(10.0)  # owed = HOME_UPKEEP_MATERIALS_PER_SECOND * 10.0 == 1.0 > 0.5 held
+
+    await tick(world, event_bus)
+
+    home = world.home_of("wanderer_002")
+    assert home is not None
+    assert boris.current_materials == 0.5  # unchanged: no partial draw
+    assert home.last_upkeep_at == built_at  # NOT advanced
+    assert home.integrity == HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK
+
+
 async def test_tick_dead_owner_cannot_pay_decays_and_collapses(
     world: WorldState, event_bus: EventBus, fake_clock: FakeClock
 ) -> None:
