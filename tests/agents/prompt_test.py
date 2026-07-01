@@ -74,3 +74,16 @@ def test_world_mechanics_is_shared_and_persona_independent() -> None:
 
     assert WORLD_MECHANICS in build_system_prompt("A curious wanderer.", TOOL_NAMES)
     assert WORLD_MECHANICS in build_system_prompt("A fierce loner.", TOOL_NAMES)
+
+
+def test_world_mechanics_grants_the_freedom_not_to_act() -> None:
+    """The being is told, in-world, that it may rest or think to itself — not only act."""
+    from agents.prompt import WORLD_MECHANICS
+
+    text = WORLD_MECHANICS
+    assert "never compelled to act" in text
+    assert "no one but yourself" in text
+    # DD9: still no goals / strategy / simulation language.
+    lowered = text.lower()
+    for banned in ("simulation", "goal", "objective", "mission", "optimi", "you should"):
+        assert banned not in lowered

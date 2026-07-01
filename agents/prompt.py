@@ -44,7 +44,9 @@ WORLD_MECHANICS: str = (
     "energy too; enough harm will end them.\n"
     "- With a partner in your place who answers your offer, and by each giving up some of "
     "your energy and materials, a new being — a child — comes into the world. This asks "
-    "much of you both, and there are limits to how often, and how many times, it can be done."
+    "much of you both, and there are limits to how often, and how many times, it can be done.\n"
+    "- You are never compelled to act. You may let a moment simply pass and rest, "
+    "or turn something over in your own mind — words meant for no one but yourself."
 )
 
 
