@@ -12,6 +12,7 @@ Routing (see :class:`~bus.events.ScopeType`):
   is ``None``, the source agent's current region).
 * ``GLOBAL`` -- to every subscribed agent.
 * ``TARGETED`` -- to the single subscribed agent named by the event's ``target``.
+* ``PRIVATE`` -- to no inbox; recorded by the log sink only (self-talk).
 
 Error model (see ``CLAUDE.md`` Section 4): ordinary "delivered to nobody"
 situations are *not* errors -- an empty region, or a target/everyone that simply
@@ -156,6 +157,8 @@ class EventBus:
                         event.type,
                         target,
                     )
+            case ScopeType.PRIVATE:
+                pass  # interiority: no inbox delivery; the capture point below still logs it
             case _:
                 message = f"Cannot route event {event.type!r}: unknown scope {event.scope!r}."
                 logger.error(message)

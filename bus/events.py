@@ -11,6 +11,7 @@ Routing contract (interpreted by :class:`~bus.event_bus.EventBus`):
 * :attr:`ScopeType.GLOBAL` -- heard by every subscribed agent.
 * :attr:`ScopeType.TARGETED` -- delivered to the single agent named by
   :attr:`Event.target`.
+* :attr:`ScopeType.PRIVATE` -- to no inbox; recorded by the log sink only (self-talk).
 
 Public API note: the field order (``type``, ``source``, ``payload``, ``scope``,
 then optional ``region``/``target``/``timestamp``) is depended on by the tool
@@ -34,11 +35,15 @@ class ScopeType(Enum):
             set, otherwise the source agent's current region).
         GLOBAL: Delivered to every subscribed agent.
         TARGETED: Delivered to the single agent named by the event's ``target``.
+        PRIVATE: Delivered to no agent inbox at all. Still recorded by the event
+            log sink (so it replays and shows in the feed) — a being's self-talk,
+            perceivable by the watchers but heard by no other being.
     """
 
     LOCAL = "local"
     GLOBAL = "global"
     TARGETED = "targeted"
+    PRIVATE = "private"
 
 
 @dataclass(slots=True)
