@@ -1186,3 +1186,69 @@ async def test_break_in_thieve_excludes_departed_or_dead_breachers(
     # Only wanderer_002 is co-located+alive -> it takes the whole 100 (remainder-to-final-striker).
     assert boris.current_materials == pytest.approx(100.0)  # 0 after paying the fee, +100 loot
     assert "strip" in result.lower()
+
+
+@pytest.mark.parametrize("n_alive", [3, 4, 5, 6, 7, 8])
+async def test_break_in_thieve_conserves_vault_within_tolerance_for_three_or_more_recipients(
+    world: WorldState, event_bus: EventBus, n_alive: int
+) -> None:
+    """For N>=3 co-located ALIVE recipients the equal per-capita float split cannot sum back to
+    the pre-theft vault bit-exactly (see the ``break_in`` docstring: at most ~N*ULP of float
+    noise), so conservation is asserted within a tolerance here, unlike the N in {1, 2} tests
+    above which are exact. A DEAD breacher and a departed (different-region) breacher are also
+    seeded among the breachers and must receive nothing."""
+
+    def _materials(w: WorldState, agent_id: str) -> float:
+        peer = w.get_agent(agent_id)
+        assert peer is not None
+        return peer.current_materials
+
+    vault_amount = 137.0
+    # Built one blow from breach: only the final striker (below) lands a real break_in() call.
+    # Every other breacher is seeded straight into `breachers` (see below) because sequentially
+    # landing N+2 real blows (one per breacher, plus the final one) would need more integrity
+    # headroom than a home's stakeholder-scaled cap ever provides (max_integrity() < 200).
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=BREAKIN_INTEGRITY_DAMAGE
+    )
+    world.deposit_to_home_vault("h1", vault_amount)
+
+    # N co-located, ALIVE recipients: (n_alive - 1) pre-recorded primers + 1 final striker.
+    alive_ids = [f"alive_{i}" for i in range(n_alive)]
+    _add_raiders(world, event_bus, *alive_ids)
+    final_striker, primers = alive_ids[-1], alive_ids[:-1]
+    for primer_id in primers:
+        world.record_breacher("h1", primer_id)
+
+    # A breacher who died before the breach, and one who wandered off before it -- both must be
+    # excluded from the split entirely (recorded while ALIVE and co-located, same as a real raid).
+    _add_raiders(world, event_bus, "dead_raider", "departed_raider")
+    world.record_breacher("h1", "dead_raider")
+    world.record_breacher("h1", "departed_raider")
+    world.update_agent_status("dead_raider", AgentStatus.DEAD)
+    assert world.move_agent("departed_raider", "beta") is True
+    dead_materials_before = _materials(world, "dead_raider")
+    departed_materials_before = _materials(world, "departed_raider")
+
+    materials_before = {aid: _materials(world, aid) for aid in alive_ids}
+
+    result = await break_in(world, event_bus, final_striker, "h1", "thieve")
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.status is HomeStatus.STANDING  # never ruined here (MANDATORY #2)
+    assert home.vault_materials == 0.0  # the debit itself is exact; only the credits can drift
+
+    # Sum of credited loot across the alive recipients: snapshot each one's materials before and
+    # after, sum the deltas, then add BREAKIN_MATERIALS_COST back exactly once. The final striker
+    # alone pays that fee *inside* this same call (before its remainder credit), so its raw delta
+    # is (remainder_credit - fee); every other recipient's delta is already pure share-credit.
+    # Adding the fee back once therefore isolates the total credited loot for the whole group.
+    total_gain = sum(_materials(world, aid) - materials_before[aid] for aid in alive_ids)
+    total_loot_credited = total_gain + BREAKIN_MATERIALS_COST
+    assert total_loot_credited == pytest.approx(vault_amount, abs=1e-9)
+
+    # The DEAD and departed breachers were never touched.
+    assert _materials(world, "dead_raider") == dead_materials_before
+    assert _materials(world, "departed_raider") == departed_materials_before
+    assert "strip" in result.lower()

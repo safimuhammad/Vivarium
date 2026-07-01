@@ -518,10 +518,12 @@ async def break_in(
     :data:`~core.constants.BREAKIN_INTEGRITY_DAMAGE` integrity. The home is **breached** when the
     blow drives integrity ``<= 0``; the breaching blow executes ``intent`` atomically. For
     ``intent == "thieve"`` (Task 4a) the vault is split equally among every co-located, ALIVE
-    breacher (the final striker is always included, even if the cost just paralysed it), the
-    remainder going to the final striker so the split sums exactly to the pre-theft vault; the
-    vault is then zeroed and the home is left **STANDING at ~0** (never ``make_ruin`` here — that
-    would double-count the looted vault into a ruin remnant; the tick makes the ruin later).
+    breacher (the final striker is always included, even if the cost just paralysed it). The
+    split conserves the vault exactly for up to 2 recipients; for 3+ recipients the equal
+    per-capita float division leaves at most ~N·ULP (≈1e-14, the float noise floor) of drift,
+    minimized by giving the remainder to the final striker. The vault is then zeroed exactly and
+    the home is left **STANDING at ~0** (never ``make_ruin`` here — that would double-count the
+    looted vault into a ruin remnant; the tick makes the ruin later).
     ``intent == "colonize"`` still falls through to the plain breach sentence until Task 4b. A lone
     raider is out-healed by the home's repair between breaths and self-limits by the resource burn;
     a coordinated group stacking damage inside one repair window makes net progress.
@@ -534,11 +536,12 @@ async def break_in(
         * On a ``"thieve"`` breach: empties ``home.vault_materials`` to 0 via
           :meth:`~world.world.WorldState.withdraw_from_home_vault`, then credits each recipient's
           share via :meth:`~world.world.WorldState.modify_agent_materials` (conserved — the vault
-          is debited for the WHOLE balance before any recipient is credited, and the shares plus
-          the final striker's remainder sum to exactly that balance). Deliberately does NOT call
-          ``make_ruin`` — ``home.status`` is never touched here, so it stays whatever it already
-          was (``STANDING``); ruining is the world-tick's job (Task 5), and doing it here would
-          double-count the just-emptied vault into a ruin remnant.
+          is debited for the WHOLE balance before any recipient is credited; the shares plus
+          the final striker's remainder sum back to that balance exactly for <=2 recipients,
+          and within the float noise floor for 3+ (see the split note above). Deliberately
+          does NOT call ``make_ruin`` — ``home.status`` is never touched here, so it stays
+          whatever it already was (``STANDING``); ruining is the world-tick's job (Task 5),
+          and doing it here would double-count the just-emptied vault into a ruin remnant.
 
     Emits events:
         * On a breach (integrity ``<= 0``): one ``"home_breached"`` event
@@ -632,7 +635,8 @@ async def break_in(
                 if recipient == agent_id:
                     continue
                 world.modify_agent_materials(recipient, share)
-            # Remainder to the final striker so Σ splits == loot EXACTLY (no float drift).
+            # Remainder to the final striker: Σ splits == loot exactly for <=2 recipients;
+            # for 3+, float per-capita division leaves at most ~N*ULP of drift (see docstring).
             world.modify_agent_materials(agent_id, loot - share * (len(recipients) - 1))
             await event_bus.publish(
                 Event(
