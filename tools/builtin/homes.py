@@ -48,14 +48,15 @@ async def build_home(world: WorldState, event_bus: EventBus, agent_id: str) -> s
 
     Returns:
         A success sentence with the materials left; an ``"Error: "`` string if the
-        being is unknown; an ``"Invalid: "`` string if it already owns a home or
-        lacks the materials (rejected calls mutate nothing).
+        being is unknown; an ``"Invalid: "`` string if it already has a stake in a
+        home (owned or pledged) or lacks the materials (rejected calls mutate
+        nothing).
     """
     agent = world.get_agent(agent_id)
     if agent is None:
         return f"Error: Cannot find Agent {agent_id} in the world."
-    if world.home_of(agent_id) is not None:
-        return "Invalid: You already have a home; you may hold only one."
+    if world.stakeholder_home_of(agent_id) is not None:
+        return "Invalid: You already have or share a home; you may hold only one."
     if agent.current_materials < HOME_BUILD_MATERIALS_COST:
         return (
             f"Invalid: You lack the materials to build a home "
@@ -204,7 +205,9 @@ async def pledge_home(world: WorldState, event_bus: EventBus, agent_id: str, hom
     Returns:
         A success sentence; an ``"Error: "`` string if the being or the home is unknown;
         an ``"Invalid: "`` string if the being is fallen, not where the home stands, or
-        already belongs to a home (rejected calls mutate nothing).
+        already belongs to a DIFFERENT home (rejected calls mutate nothing); a benign,
+        idempotent no-op sentence if the being already holds a stake in THIS SAME home
+        (no duplicate stakeholder, no event).
     """
     agent = world.get_agent(agent_id)
     if agent is None:
@@ -221,7 +224,10 @@ async def pledge_home(world: WorldState, event_bus: EventBus, agent_id: str, hom
         return (
             "Invalid: You are not where that home stands; you can only join a home in your place."
         )
-    if world.stakeholder_home_of(agent_id) is not None:
+    existing_home = world.stakeholder_home_of(agent_id)
+    if existing_home is not None:
+        if existing_home.home_id == home_id:
+            return "You already tend this home."
         return "Invalid: You already belong to a home; you may share only one."
 
     world.add_stakeholder(home_id, agent_id)

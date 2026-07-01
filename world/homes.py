@@ -58,19 +58,25 @@ def max_integrity(stakeholder_count: int) -> float:
     Pure (no side effects). A communal home is sounder than a lone shelter, but with
     diminishing returns and a hard ceiling (spec §12, fork 2): a home with more beings
     tending it is harder to wear down, yet no size makes it an unraidable blob. The
-    formula asymptotes toward — but never reaches — :data:`~core.constants.HOME_HEALTH_CEIL`::
+    formula asymptotically approaches :data:`~core.constants.HOME_HEALTH_CEIL` from
+    below, in the mathematical limit as ``s`` grows without bound::
 
         max_integrity(s) = BASE + (CEIL - BASE) * (1 - DIMINISH ** (s - 1))   for s >= 1
 
-    A count ``<= 1`` (a lone home, or the degenerate/empty case after the last stakeholder
-    departs) returns :data:`~core.constants.HOME_HEALTH_BASE`, so the ceiling is never a
-    0-cap and a solo home is exactly the L1 home.
+    In exact real arithmetic no finite ``s`` reaches the ceiling, but in float64 the
+    ``DIMINISH ** (s - 1)`` term underflows below representable precision once
+    ``s >= 54`` (with the current constants), so ``max_integrity`` returns exactly
+    :data:`~core.constants.HOME_HEALTH_CEIL` from that point on — the practical ceiling
+    is reached, even though the underlying curve never truly does. A count ``<= 1`` (a
+    lone home, or the degenerate/empty case after the last stakeholder departs) returns
+    :data:`~core.constants.HOME_HEALTH_BASE`, so the ceiling is never a 0-cap and a solo
+    home is exactly the L1 home.
 
     Args:
         stakeholder_count: The home's number of stakeholders (``len(home.stakeholders)``).
 
     Returns:
-        The integrity ceiling (a float in ``[HOME_HEALTH_BASE, HOME_HEALTH_CEIL)``).
+        The integrity ceiling (a float in ``[HOME_HEALTH_BASE, HOME_HEALTH_CEIL]``).
     """
     if stakeholder_count <= 1:
         return HOME_HEALTH_BASE

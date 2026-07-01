@@ -93,6 +93,33 @@ async def test_build_home_when_already_owning_one_is_invalid(
     assert event_bus.get_events("wanderer_001") == []
 
 
+async def test_build_home_when_already_pledged_elsewhere_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A being pledged (stakeholder, not owner) to another's home cannot also build one.
+
+    Regression: ``build_home`` used to check only ``home_of`` (ownership), so a mere
+    stakeholder could build a SECOND home and end up staking two -- after which
+    ``stakeholder_home_of`` returns the first-inserted home and the being could never
+    use the hearth of the home it just built (wrong region). The precondition now
+    checks ``stakeholder_home_of``, symmetric with ``pledge_home``.
+    """
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.add_stakeholder("h1", "wanderer_002")  # Boris pledges: stakeholder, not owner
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    boris.current_materials = HOME_BUILD_MATERIALS_COST * 3  # plenty to build
+
+    result = await build_home(world, event_bus, "wanderer_002")
+
+    assert result.startswith("Invalid:")
+    assert len(world.get_all_homes()) == 1  # no second home created
+    assert boris.current_materials == HOME_BUILD_MATERIALS_COST * 3  # nothing spent
+    assert event_bus.get_events("wanderer_002") == []  # no event
+
+
 async def test_build_home_recomputes_is_hoarding(world: WorldState, event_bus: EventBus) -> None:
     """Sinking materials into a home can drop a being out of hoarding (is_hoarding recomputed)."""
     ada = world.get_agent("wanderer_001")
@@ -358,10 +385,15 @@ async def test_pledge_home_when_already_a_stakeholder_elsewhere_is_invalid(
     assert event_bus.get_events("wanderer_002") == []  # no event from the rejected second pledge
 
 
-async def test_pledge_home_already_a_stakeholder_of_this_home_is_invalid_no_duplicate(
+async def test_pledge_home_already_a_stakeholder_of_this_home_is_a_benign_noop(
     world: WorldState, event_bus: EventBus
 ) -> None:
-    """Re-pledging to the same home is rejected, not double-counted (idempotent no-op)."""
+    """Re-pledging to the SAME home is a benign no-op, not the generic multi-home rejection.
+
+    Distinct from :func:`test_pledge_home_when_already_in_a_home_is_invalid` (a DIFFERENT
+    home, genuinely rejected): re-pledging to the home you already tend is idempotent and
+    harmless, so it gets its own message rather than the "you may share only one" rejection.
+    """
     world.build_home(
         "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
     )
@@ -371,7 +403,7 @@ async def test_pledge_home_already_a_stakeholder_of_this_home_is_invalid_no_dupl
 
     result = await pledge_home(world, event_bus, "wanderer_002", "h1")  # pledge again, same home
 
-    assert result.startswith("Invalid:")
+    assert result == "You already tend this home."
     home = world.get_home("h1")
     assert home is not None
     assert home.stakeholders.count("wanderer_002") == 1  # no duplicate entry

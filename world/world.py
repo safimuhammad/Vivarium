@@ -760,10 +760,11 @@ class WorldState:
     def stakeholder_home_of(self, agent_id: str) -> Home | None:
         """Return the home ``agent_id`` holds a stake in (owner or pledged), or ``None``.
 
-        The stakeholder-aware counterpart to the owner-only :meth:`home_of` (which stays
-        owner-only for the ``build_home`` "already own one" check). Used by ``use_hearth``
-        (rest at the home you share) and ``leave_home`` (the home you can leave). A being
-        belongs to at most one home in practice; the first match is returned.
+        The stakeholder-aware counterpart to the owner-only :meth:`home_of`. Used by
+        ``build_home`` and ``pledge_home`` (the shared at-most-one-home precondition),
+        ``use_hearth`` (rest at the home you share), and ``leave_home`` (the home you can
+        leave). A being belongs to at most one home in practice; the first match is
+        returned.
 
         Args:
             agent_id: Id of the being to look up.

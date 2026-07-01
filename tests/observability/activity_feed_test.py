@@ -96,14 +96,27 @@ def test_render_world_table_shows_homes(world: WorldState) -> None:
 
 
 def test_render_event_shared_home_events_are_human_readable() -> None:
-    """Message-less shared-home events fall back to a distinct verb per type."""
-    for etype, needle in (("home_joined", "joined"), ("home_left", "left")):
+    """Message-less shared-home events fall back to a distinct verb per type.
+
+    Asserts the FULL mapped phrase, not just a bare word: the raw type strings
+    ``home_joined``/``home_left`` themselves already contain "joined"/"left", so a
+    needle of just that word would pass even if the ``_EVENT_VERBS`` entry were
+    missing and ``render_event`` fell back to the raw type. The full phrase only
+    appears via the verb dict.
+    """
+    for etype, needle in (("home_joined", "joined a home"), ("home_left", "left a home")):
         event = Event(etype, "wanderer_002", {}, scope=ScopeType.LOCAL)  # no message -> verb
         assert needle in render_event(event).lower()
 
 
 def test_render_world_table_shows_stakeholders_and_scaled_health(world: WorldState) -> None:
-    """The homes section surfaces stakeholder count + integrity/max (observer-facing)."""
+    """The homes section surfaces stakeholder count + integrity/max (observer-facing).
+
+    The stakeholder-count assertion is anchored to the home's own row: fixture agent
+    ``wanderer_002`` contains the digit "2", so a bare ``"2" in text`` would pass
+    vacuously regardless of the Stakeholders column. Splitting into lines and
+    checking the home's row specifically closes that gap.
+    """
     from rich.console import Console
 
     world.build_home(
@@ -116,7 +129,9 @@ def test_render_world_table_shows_stakeholders_and_scaled_health(world: WorldSta
 
     assert "Stakeholders" in text  # the new column
     assert "Health" in text  # integrity/max column header
-    assert "2" in text  # stakeholder count
+    home_rows = [line for line in text.splitlines() if "home_ada" in line]
+    assert len(home_rows) == 1
+    assert "2" in home_rows[0]  # stakeholder count appears IN the home's row
     assert "150.0" in text  # the stakeholder-scaled ceiling M(2)
 
 

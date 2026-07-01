@@ -32,6 +32,7 @@ from core.rng import make_rng
 from tests.conftest import SEED, FakeClock
 from tools.builtin.mating import initiate_mating, reject_mating
 from world.agents import AgentState, AgentStatus
+from world.homes import max_integrity
 from world.regions import Region, ResourceTypes
 from world.tick import _tick_once_resilient, tick
 from world.world import WorldState
@@ -591,3 +592,42 @@ async def test_tick_ownerless_home_with_no_living_payers_decays_to_collapse() ->
     collapsed = [e for e in bus.get_events("owner_1") if e.type == "home_collapsed"]
     assert len(collapsed) == 1
     assert collapsed[0].scope is ScopeType.LOCAL and collapsed[0].region == "alpha"
+
+
+async def test_tick_promoted_costakeholder_pays_upkeep_after_owner_death() -> None:
+    """``kill_agent`` prunes+promotes; the promoted survivor alone then covers upkeep.
+
+    Conservation-critical permutation: a home has two stakeholders -- an owner about to
+    die and a solvent co-stakeholder. ``kill_agent`` prunes the dead owner from
+    ``stakeholders`` and promotes the co-stakeholder to owner (:meth:`WorldState.
+    remove_stakeholder`) BEFORE the next tick runs. The tick must then draw upkeep from
+    the promoted survivor alone (the dead owner is filtered out as non-living), heal the
+    home to the NEW one-stakeholder ceiling (:func:`~world.homes.max_integrity`, not the
+    stale two-stakeholder one), advance ``last_upkeep_at``, and leave the dead agent's
+    own balance untouched (``kill_agent`` never mutates materials; the tick's payer loop
+    skips ``DEAD`` agents).
+    """
+    world, bus, clock = _home_world(("owner_1", 100.0), ("wanderer_9", 50.0))
+    world.add_stakeholder("h1", "wanderer_9")  # [owner_1, wanderer_9] -> M(2)=150
+    world.modify_home_integrity("h1", -50.0)  # wear it down: 100 -> 50 (below both ceilings)
+
+    world.kill_agent("owner_1")  # prunes owner_1, promotes wanderer_9 to owner
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.owner_id == "wanderer_9"  # promoted (sole survivor)
+    assert home.stakeholders == ["wanderer_9"]
+    assert home.integrity == 50.0  # re-clamp to M(1)=100 is a no-op here (50 < 100)
+    clock.advance(10.0)  # owed = HOME_UPKEEP_MATERIALS_PER_SECOND * 10 = 1.0
+
+    await tick(world, bus)
+
+    survivor = world.get_agent("wanderer_9")
+    dead_owner = world.get_agent("owner_1")
+    home_after = world.get_home("h1")
+    assert survivor is not None and dead_owner is not None and home_after is not None
+    assert survivor.current_materials == pytest.approx(49.0)  # paid the full 1.0 owed, alone
+    assert home_after.integrity == max_integrity(1)  # healed to the NEW one-stakeholder ceiling
+    assert home_after.last_upkeep_at == world.now()  # advanced: a covered tick
+    assert dead_owner.current_materials == pytest.approx(100.0)  # untouched by death or upkeep
+    assert [e for e in bus.get_events("wanderer_9") if e.type == "home_collapsed"] == []
