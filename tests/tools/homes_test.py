@@ -1117,6 +1117,47 @@ async def test_break_in_guards(world: WorldState, event_bus: EventBus) -> None:
     assert world.homes["h1"].breachers == set()
 
 
+async def test_break_in_unknown_raider_is_an_error(world: WorldState, event_bus: EventBus) -> None:
+    """An unknown raider id is rejected with Error: and never touches the target home."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+
+    result = await break_in(world, event_bus, "ghost_999", "h1", "thieve")
+
+    assert result.startswith("Error:")
+    assert world.homes["h1"].integrity == 100.0
+    assert world.homes["h1"].breachers == set()
+    for kind in ("home_breached", "home_thieved", "home_colonized"):
+        assert not [e for e in event_bus.get_events("wanderer_001") if e.type == kind]
+
+
+async def test_break_in_paralyzed_raider_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    """A PARALYZED raider cannot force a home; the guard rejects before any mutation."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    world.update_agent_status("wanderer_002", AgentStatus.PARALYZED)
+
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    assert result.startswith("Invalid:")
+    assert world.homes["h1"].integrity == 100.0
+    assert world.homes["h1"].breachers == set()
+    for kind in ("home_breached", "home_thieved", "home_colonized"):
+        assert not [e for e in event_bus.get_events("wanderer_001") if e.type == kind]
+
+
+async def test_break_in_ruin_target_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    """A target already reduced to a ruin cannot be broken into; nothing is mutated."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["h1"].status = HomeStatus.RUIN
+
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    assert result.startswith("Invalid:")
+    assert world.homes["h1"].integrity == 40.0
+    assert world.homes["h1"].breachers == set()
+    for kind in ("home_breached", "home_thieved", "home_colonized"):
+        assert not [e for e in event_bus.get_events("wanderer_001") if e.type == kind]
+
+
 # ---- break_in thieve outcome (L2c Task 4a) ---------------------------------
 
 
@@ -1287,6 +1328,10 @@ async def test_break_in_colonize_seizes_owner_and_homeless_breachers(
     }  # both homeless + co-located + alive
     assert "wanderer_001" not in home.stakeholders  # prior owner evicted
     assert home.vault_materials == 30.0  # retained
+    # A seized home starts with a clean slate: the new owners were just recorded as breachers
+    # mid-breach, and left uncleared they'd still count as raiders of their OWN new home (so a
+    # later thieve, before the next full repair, would wrongly cut them in on their own vault).
+    assert home.breachers == set()
     colonized = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_colonized"]
     assert len(colonized) == 1
     assert "seiz" in result.lower() or "take it" in result.lower()

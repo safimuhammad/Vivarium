@@ -762,12 +762,16 @@ class WorldState:
         The breach-outcome primitive (Layer 2c colonize). Overwrites
         :attr:`~world.homes.Home.owner_id` and :attr:`~world.homes.Home.stakeholders` (the
         prior owner + stakeholders are simply replaced — evicted), then re-clamps integrity to
-        the new stakeholder-scaled ceiling. The vault and structure are untouched (no resource
-        move -> trivially conserved); integrity stays wherever the breach left it (~0), so the
-        new owners must shore it up before it collapses. The caller (the ``break_in`` tool)
-        pre-filters ``new_stakeholders`` to currently-homeless co-located living breachers and
-        guarantees the at-most-one-home invariant (auto-detaching a homed final striker first).
-        Sync, event-free.
+        the new stakeholder-scaled ceiling. Also clears :attr:`~world.homes.Home.breachers`
+        (mirrors :meth:`make_ruin`): the new owners were just recorded there mid-breach, and left
+        uncleared they would still read as breachers of their OWN new home, so a later raider's
+        thieve — before the seized home ever repairs to full — would wrongly cut the sitting
+        owner in on a split of its own stolen vault. The vault and structure are untouched (no
+        resource move -> trivially conserved); integrity stays wherever the breach left it (~0),
+        so the new owners must shore it up before it collapses. The caller (the ``break_in``
+        tool) pre-filters ``new_stakeholders`` to currently-homeless co-located living breachers
+        and guarantees the at-most-one-home invariant (auto-detaching a homed final striker
+        first). Sync, event-free.
 
         Args:
             home_id: Id of the home to seize.
@@ -783,6 +787,7 @@ class WorldState:
             return False
         home.owner_id = new_owner
         home.stakeholders = list(new_stakeholders)
+        home.breachers.clear()  # a seized home starts clean -- new owners aren't raiders of it
         self.modify_home_integrity(
             home_id, 0.0
         )  # re-clamp to the new ceiling (a ~0 integrity is unchanged)

@@ -355,9 +355,9 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "Force your way into a home in your place that is not your own. Each attempt "
                 f"wears at its soundness and costs you {BREAKIN_ENERGY_COST:.0f} energy and "
                 f"{BREAKIN_MATERIALS_COST:.0f} materials, spent whether or not it gives way. "
-                "A home tended by many mends faster than one being can break it, so it takes "
-                "several breaking in together to bring one down. When it gives way you take "
-                "its store (thieve) or seize it for your own (colonize), as you intend."
+                "A home tended by many mends faster than one being can break it, so it seldom "
+                "falls to one alone. When it gives way you take its store (thieve) or seize it "
+                "for your own (colonize), as you intend."
             ),
             "parameters": {
                 "type": "object",
@@ -384,7 +384,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "scavenge_ruins",
             "description": (
                 "Pick over the ruins of a fallen home in your place for what materials still lie "
-                "in it, drawing some into your own holding. You cannot take more than the ruins "
+                "in it, and draw some into your own holding. You cannot take more than the ruins "
                 "hold."
             ),
             "parameters": {

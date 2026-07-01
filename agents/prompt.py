@@ -48,7 +48,7 @@ WORLD_MECHANICS: str = (
     "- A home you share can hold a common store of materials: where you stand, you may "
     "set some of your own into its keeping, and draw them back out again at need. A home "
     "grown heavy with a great store is a thing others notice.\n"
-    "- A home in your place that is not your own can be broken into — but never by one alone: "
+    "- A home in your place that is not your own can be broken into — but seldom by one alone: "
     "each attempt wears at its soundness and costs you energy and materials, spent whether or "
     "not it gives way, and a home tended by many mends faster than a single pair of hands can "
     "break it. Enough beings breaking in together can bring one down, and then take what it "

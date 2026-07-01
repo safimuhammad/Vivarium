@@ -235,8 +235,10 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
     # home EVERY tick (both branches), which is the fix for the decay-acceleration bug: deriving
     # elapsed from the arrears clock would grow unboundedly across consecutive missed ticks
     # (last_upkeep_at stays frozen), making decay accelerate. A departed/ghost owner (owner_id
-    # not in stakeholders) never pays. Collapse (<= 0) still just removes the home (ruins are a
-    # later 2c task). Same snapshot-then-mutate discipline: mutate synchronously, defer publish.
+    # not in stakeholders) never pays. Collapse (<= 0) hands the home to make_ruin (Task 5),
+    # which converts it in place into a scavengeable ruin (remnant materials, cleared
+    # breachers/stakeholders, status -> RUIN) rather than removing it outright. Same
+    # snapshot-then-mutate discipline: mutate synchronously, defer publish.
     collapse_events: list[Event] = []
     for home in list(world.get_all_homes()):
         if home.status is not HomeStatus.STANDING:

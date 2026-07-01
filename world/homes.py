@@ -74,13 +74,13 @@ class Home:
         status: Lifecycle state (Layer 2c). Defaults ``STANDING``; every existing home
             operation (``modify_home_integrity``, the tick upkeep sweep, ``pledge_home``,
             ``use_hearth``, ``deposit_to_home``, ``withdraw_from_home``, ``leave_home``)
-            refuses to act once this is ``RUIN``. Nothing sets ``RUIN`` yet — that arrives
-            with ``make_ruin`` (Task 5).
+            refuses to act once this is ``RUIN``, which the world-tick collapse path sets via
+            ``make_ruin`` (Task 5) once integrity falls to ``<= 0``.
         ruined_at: World-clock time (seconds) the home fell to ``RUIN``, or ``None`` while
             ``STANDING``. Set once, by ``make_ruin`` (Task 5).
-        remnant_materials: Materials a ruin holds for scavenging (Task 5's ``thieve``);
-            meaningless while ``STANDING`` and defaults ``0.0``.
-        breachers: Ids of beings that have broken into this home (Task 5's ``break_in``).
+        remnant_materials: Materials a ruin holds for scavenging, set by ``make_ruin`` (Task 5)
+            on collapse; meaningless while ``STANDING`` and defaults ``0.0``.
+        breachers: Ids of beings that have broken into this home (``break_in``, Task 3/4).
             Accumulates on each break-in and clears on a full repair back to STANDING;
             defaults to an empty, per-instance set (``field(default_factory=set)`` — never
             a shared mutable default).
