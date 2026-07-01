@@ -116,7 +116,9 @@ async def look_around(world: WorldState, event_bus: EventBus, agent_id: str) -> 
     Returns:
         A multi-line dashboard of the agent's resources and the region's state
         (pools, connections, other agents present), or an ``"Error: "`` string if
-        the agent or its region cannot be found.
+        the agent or its region cannot be found. When the agent holds a stake in a
+        home standing in its current region, an extra line reports that home's
+        vault balance (L2b) -- a co-located being's own store, only.
     """
     agent_state = world.get_agent(agent_id)
     if agent_state is None:
@@ -133,6 +135,13 @@ async def look_around(world: WorldState, event_bus: EventBus, agent_id: str) -> 
     others = "; ".join(
         describe_agent_brief(agent) for agent in agents_nearby if agent.id != agent_id
     )
+    # Show the being its OWN home's vault when it stands where that home stands (L2b): the
+    # depositor perceives its store here; others perceive a heavy vault via the world-table
+    # and the home_started_hoarding announcement.
+    home = world.stakeholder_home_of(agent_id)
+    home_line = ""
+    if home is not None and home.region == agent_state.current_position:
+        home_line = f"Your home here| its store holds {home.vault_materials} materials\n"
     return (
         f"YOUR CURRENT STATUS\n"
         f"Energy| {agent_state.current_energy}\n"
@@ -143,4 +152,5 @@ async def look_around(world: WorldState, event_bus: EventBus, agent_id: str) -> 
         f"Materials pool| {region_state.current_materials}\n"
         f"Connections| {','.join(region_state.connections)}\n"
         f"Agents present| {others}\n"
+        f"{home_line}"
     )

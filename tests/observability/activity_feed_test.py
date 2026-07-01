@@ -148,3 +148,27 @@ def test_render_world_table_homes_section_renders_cleanly_with_zero_homes(
     assert "Homes" in text  # section title still present
     assert "Stakeholders" in text  # new column header still present
     assert "Health" in text  # new column header still present
+    assert "Vault" in text  # new column header still present with zero homes
+
+
+def test_render_event_home_started_hoarding_is_human_readable() -> None:
+    """A message-less home_started_hoarding falls back to a distinct verb (not the raw type)."""
+    event = Event("home_started_hoarding", "home_ada", {}, scope=ScopeType.LOCAL)
+    assert "great store" in render_event(event).lower()
+
+
+def test_render_world_table_shows_vault_column(world: WorldState) -> None:
+    """The homes section surfaces each home's vault balance (observer-facing)."""
+    from rich.console import Console
+
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.deposit_to_home_vault("home_ada", 120.0)
+    table = render_world_table(world)
+    text = "".join(seg.text for seg in Console(width=200).render(table))
+
+    assert "Vault" in text  # the new column header
+    home_rows = [line for line in text.splitlines() if "home_ada" in line]
+    assert len(home_rows) == 1
+    assert "120.0" in home_rows[0]  # the vault balance appears IN the home's row

@@ -744,6 +744,51 @@ class WorldState:
         self.modify_home_integrity(home_id, 0.0)  # re-clamp DOWN to the new, smaller ceiling
         return True
 
+    def deposit_to_home_vault(self, home_id: str, amount: float) -> bool:
+        """Add ``amount`` to a home's vault, flooring at 0.0. Sync and event-free.
+
+        The vault is the home's shared, materials-only store (Layer 2b). This is a pure
+        credit: the caller (the ``deposit_to_home`` tool) is responsible for deducting the
+        matching materials from the depositor FIRST (conservation — nothing is minted). The
+        world holds no bus (DD4), so no event is emitted here. Mutates the home's
+        :attr:`~world.homes.Home.vault_materials`.
+
+        Args:
+            home_id: Id of the home whose vault to credit.
+            amount: Materials to add (floored at 0.0 defensively).
+
+        Returns:
+            ``True`` if the home exists and was credited; ``False`` if the home is unknown.
+        """
+        home = self.homes.get(home_id)
+        if home is None:
+            return False
+        home.vault_materials = max(home.vault_materials + amount, 0.0)
+        return True
+
+    def withdraw_from_home_vault(self, home_id: str, amount: float) -> bool:
+        """Subtract ``amount`` from a home's vault, capped at the balance (floored at 0.0).
+
+        Sync and event-free (DD4). A debit larger than the current balance empties the vault
+        to exactly ``0.0`` rather than going negative, so the method is safe standalone; the
+        caller (the ``withdraw_from_home`` tool) additionally rejects an over-request before
+        crediting the withdrawer, so the amount debited here always equals the amount credited
+        to personal stock (conservation — nothing is minted). Mutates the home's
+        :attr:`~world.homes.Home.vault_materials`.
+
+        Args:
+            home_id: Id of the home whose vault to debit.
+            amount: Materials to remove (capped at the balance; result floored at 0.0).
+
+        Returns:
+            ``True`` if the home exists and was debited; ``False`` if the home is unknown.
+        """
+        home = self.homes.get(home_id)
+        if home is None:
+            return False
+        home.vault_materials = max(home.vault_materials - amount, 0.0)
+        return True
+
     def is_stakeholder(self, home_id: str, agent_id: str) -> bool:
         """Return whether ``agent_id`` is a stakeholder of a home (pure read).
 

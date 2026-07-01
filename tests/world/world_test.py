@@ -982,3 +982,38 @@ def test_kill_agent_with_no_home_stake_is_a_safe_noop_for_homes(world: WorldStat
     assert home.stakeholders == ["wanderer_001"]  # untouched
     assert home.owner_id == "wanderer_001"  # untouched
     assert home.integrity == before  # untouched
+
+
+def test_build_home_starts_with_empty_vault(world: WorldState) -> None:
+    """A freshly built home has an empty (0.0) vault — the field default flows through."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert world.homes["h1"].vault_materials == 0.0
+
+
+def test_deposit_to_home_vault_credits_balance(world: WorldState) -> None:
+    """Depositing raises the vault; an unknown home is a no-op False."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=50.0)
+    assert world.deposit_to_home_vault("h1", 40.0) is True
+    assert world.homes["h1"].vault_materials == 40.0
+    assert world.deposit_to_home_vault("h1", 10.0) is True  # accumulates
+    assert world.homes["h1"].vault_materials == 50.0
+    assert world.deposit_to_home_vault("missing", 5.0) is False  # unknown home
+
+
+def test_withdraw_from_home_vault_debits_balance(world: WorldState) -> None:
+    """Withdrawing lowers the vault; an unknown home is a no-op False."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=50.0)
+    world.deposit_to_home_vault("h1", 40.0)
+    assert world.withdraw_from_home_vault("h1", 15.0) is True
+    assert world.homes["h1"].vault_materials == 25.0
+    assert world.withdraw_from_home_vault("missing", 5.0) is False  # unknown home
+
+
+def test_withdraw_from_home_vault_caps_at_balance_and_floors_at_zero(world: WorldState) -> None:
+    """A debit larger than the balance empties the vault to exactly 0.0 (never negative)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=50.0)
+    world.deposit_to_home_vault("h1", 30.0)
+    assert world.withdraw_from_home_vault("h1", 1000.0) is True
+    assert world.homes["h1"].vault_materials == 0.0

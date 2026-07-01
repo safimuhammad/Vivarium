@@ -1,6 +1,8 @@
 """Home tools: ``build_home`` (raise a private home), ``use_hearth`` (burn
 materials for energy at a home you share), ``pledge_home`` (join another's home as a
-stakeholder), and ``leave_home`` (give up a stake, voluntarily).
+stakeholder), ``leave_home`` (give up a stake, voluntarily), ``deposit_to_home``
+(bank personal materials into the home's shared vault), and ``withdraw_from_home``
+(draw materials back out of the vault into personal stock).
 
 Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
@@ -21,9 +23,57 @@ from core.constants import (
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
 )
-from tools.builtin.resources import _announce_if_started_hoarding
+from tools.builtin.resources import _announce_if_started_hoarding, _coerce_positive_amount
 from world.agents import AgentStatus, is_hoarding
+from world.homes import Home, home_is_hoarding
 from world.world import WorldState
+
+
+async def _announce_if_home_started_hoarding(
+    event_bus: EventBus,
+    home: Home,
+    *,
+    was_hoarding: bool,
+    source: str,
+    region: str,
+    timestamp: float,
+) -> None:
+    """Publish a LOCAL ``home_started_hoarding`` event iff this deposit crossed the threshold.
+
+    The home-level mirror of :func:`~tools.builtin.resources._announce_if_started_hoarding`:
+    a vault that becomes a hoard by a deposit is announced once, the moment it crosses, so
+    co-located beings perceive the new raid target (spec §12, fork 3 — the hoard-signal moves
+    agent -> home, no laundering). Does nothing if the home was already hoarding or is still
+    below the threshold. Only the crossing is announced (there is no "stopped hoarding" event).
+
+    Args:
+        event_bus: The bus the event is published to.
+        home: The credited home (its ``vault_materials`` already reflects the deposit).
+        was_hoarding: Whether the home was hoarding *before* the deposit.
+        source: Id of the being that made the deposit (the event's source).
+        region: Region to scope the LOCAL announcement to.
+        timestamp: World-clock stamp for the event.
+
+    Returns:
+        None.
+    """
+    if was_hoarding or not home_is_hoarding(home):
+        return
+    await event_bus.publish(
+        Event(
+            "home_started_hoarding",
+            source,
+            {
+                "message": (
+                    f"The home {home.home_id} in {region} is now sitting on a great store "
+                    f"of materials (vault {home.vault_materials})."
+                )
+            },
+            scope=ScopeType.LOCAL,
+            region=region,
+            timestamp=timestamp,
+        )
+    )
 
 
 async def build_home(world: WorldState, event_bus: EventBus, agent_id: str) -> str:
@@ -296,3 +346,145 @@ async def leave_home(world: WorldState, event_bus: EventBus, agent_id: str) -> s
         )
     )
     return "You give up your place in this home; its keep and hearth are no longer yours."
+
+
+async def deposit_to_home(
+    world: WorldState, event_bus: EventBus, agent_id: str, amount: float
+) -> str:
+    """Bank materials from the being's personal stock into its home's shared vault.
+
+    A stakeholder standing where its home stands moves ``amount`` materials from its own
+    holding into the home's vault. Conserved (spec §12): the materials are deducted from the
+    being FIRST, then credited to the vault — the same amount moved, nothing minted. The vault
+    is materials-only; energy is untouched.
+
+    Mutates world state:
+        * Deducts ``amount`` from the being's materials
+          (:meth:`~world.world.WorldState.modify_agent_materials`), then adds it to the home's
+          vault (:meth:`~world.world.WorldState.deposit_to_home_vault`).
+
+    Emits events:
+        * One ``"home_started_hoarding"`` event (:attr:`~bus.events.ScopeType.LOCAL`, source =
+          the depositor, region = the home's region, stamped ``world.now()``) **only** when this
+          deposit lifts the vault from below to at/above
+          :data:`~core.constants.HOARDING_MATERIALS_THRESHOLD` (see
+          :func:`~world.homes.home_is_hoarding`). Per-deposit operations are otherwise silent —
+          the balance is surfaced via the vault column and ``look_around``.
+
+    Args:
+        world: The live world state.
+        event_bus: The bus the resulting event is published to.
+        agent_id: Id of the depositing being.
+        amount: Materials to move from personal stock into the vault.
+
+    Returns:
+        A success sentence with the new balances; an ``"Error: "`` string if the being is
+        unknown or belongs to no home; an ``"Invalid: "`` string if the amount is not a
+        positive number, the being is fallen, it is not where its home stands, or it lacks
+        that many materials (rejected calls mutate nothing).
+    """
+    quantity = _coerce_positive_amount(amount)
+    if isinstance(quantity, str):
+        return quantity
+    agent = world.get_agent(agent_id)
+    if agent is None:
+        return f"Error: Cannot find Agent {agent_id} in the world."
+    if agent.status is not AgentStatus.ALIVE:
+        return (
+            "Invalid: You are fallen and cannot tend a home's store; "
+            "only another being can restore you."
+        )
+    home = world.stakeholder_home_of(agent_id)
+    if home is None:
+        return "Error: You have no home here to store materials in."
+    if home.region != agent.current_position:
+        return "Invalid: You are not where your home stands; you can add to its store only there."
+    if agent.current_materials < quantity:
+        return (
+            f"Invalid: You do not have {quantity} materials to store "
+            f"(you hold {agent.current_materials})."
+        )
+
+    # Snapshot the home's hoard state BEFORE any mutation so we announce only the crossing
+    # (mirrors harvest_resources/use_hearth). A deposit only raises the vault, so the vault
+    # can only cross UP into hoarding.
+    was_hoarding = home_is_hoarding(home)
+
+    world.modify_agent_materials(agent_id, -quantity)  # deduct the source FIRST (conservation)
+    world.deposit_to_home_vault(home.home_id, quantity)  # THEN credit the vault
+    await _announce_if_home_started_hoarding(
+        event_bus,
+        home,
+        was_hoarding=was_hoarding,
+        source=agent_id,
+        region=home.region,
+        timestamp=world.now(),
+    )
+    return (
+        f"You set {quantity} materials into your home's store. It now holds "
+        f"{home.vault_materials} materials; you hold {agent.current_materials}."
+    )
+
+
+async def withdraw_from_home(
+    world: WorldState, event_bus: EventBus, agent_id: str, amount: float
+) -> str:
+    """Draw materials from the being's home vault back into its personal stock.
+
+    A stakeholder standing where its home stands moves ``amount`` materials from the home's
+    vault into its own holding. Conserved (spec §12): the materials are deducted from the vault
+    FIRST, then credited to the being — the same amount moved, nothing minted. You cannot draw
+    out more than the vault holds. The vault is materials-only; energy is untouched.
+
+    Mutates world state:
+        * Deducts ``amount`` from the home's vault
+          (:meth:`~world.world.WorldState.withdraw_from_home_vault`), then adds it to the being's
+          materials (:meth:`~world.world.WorldState.modify_agent_materials`).
+
+    Emits events:
+        * None. A withdrawal only lowers the vault, so it can never cross into a hoard; per-op
+          withdrawals are silent (the balance is surfaced via the vault column and
+          ``look_around``).
+
+    Args:
+        world: The live world state.
+        event_bus: Unused; present for the uniform tool signature.
+        agent_id: Id of the withdrawing being.
+        amount: Materials to move from the vault into personal stock.
+
+    Returns:
+        A success sentence with the new balances; an ``"Error: "`` string if the being is
+        unknown or belongs to no home; an ``"Invalid: "`` string if the amount is not a
+        positive number, the being is fallen, it is not where its home stands, or the vault
+        holds fewer than that many materials (rejected calls mutate nothing).
+    """
+    quantity = _coerce_positive_amount(amount)
+    if isinstance(quantity, str):
+        return quantity
+    agent = world.get_agent(agent_id)
+    if agent is None:
+        return f"Error: Cannot find Agent {agent_id} in the world."
+    if agent.status is not AgentStatus.ALIVE:
+        return (
+            "Invalid: You are fallen and cannot tend a home's store; "
+            "only another being can restore you."
+        )
+    home = world.stakeholder_home_of(agent_id)
+    if home is None:
+        return "Error: You have no home here to draw materials from."
+    if home.region != agent.current_position:
+        return (
+            "Invalid: You are not where your home stands; you can draw from its store only there."
+        )
+    if quantity > home.vault_materials:
+        return (
+            f"Invalid: Your home's store holds only {home.vault_materials} materials; "
+            f"you cannot draw {quantity}."
+        )
+
+    world.withdraw_from_home_vault(home.home_id, quantity)  # deduct the source FIRST (conservation)
+    world.modify_agent_materials(agent_id, quantity)  # THEN credit personal stock
+    return (
+        f"You draw {quantity} materials from your home's store. It now holds "
+        f"{home.vault_materials} materials; you hold {agent.current_materials}."
+    )
