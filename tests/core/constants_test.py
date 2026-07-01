@@ -182,3 +182,11 @@ def test_home_build_cost_competes_with_mating() -> None:
     """Build cost is biased high and competes with mating for the same scarce materials."""
     assert isinstance(constants.HOME_BUILD_MATERIALS_COST, float)
     assert constants.HOME_BUILD_MATERIALS_COST >= constants.MATING_MIN_MATERIALS_CONTRIBUTION
+
+
+def test_hearth_dials_present_and_convert_without_minting() -> None:
+    """Hearth dials exist; a finite per-material rate converts a real stock, never mints."""
+    assert isinstance(constants.HEARTH_MATERIALS_PER_USE, float)
+    assert constants.HEARTH_MATERIALS_PER_USE > 0.0
+    assert isinstance(constants.HEARTH_ENERGY_PER_MATERIAL, float)
+    assert constants.HEARTH_ENERGY_PER_MATERIAL > 0.0

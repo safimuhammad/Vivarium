@@ -11,12 +11,14 @@ from __future__ import annotations
 from bus.event_bus import EventBus
 from bus.events import ScopeType
 from core.constants import (
+    HEARTH_ENERGY_PER_MATERIAL,
+    HEARTH_MATERIALS_PER_USE,
     HOARDING_MATERIALS_THRESHOLD,
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
 )
-from tools.builtin.homes import build_home
-from world.agents import is_hoarding
+from tools.builtin.homes import build_home, use_hearth
+from world.agents import AgentStatus, is_hoarding
 from world.world import WorldState
 
 # ---- build_home -----------------------------------------------------------
@@ -96,3 +98,121 @@ async def test_build_home_recomputes_is_hoarding(world: WorldState, event_bus: E
 
     assert ada.current_materials == HOARDING_MATERIALS_THRESHOLD - HOME_BUILD_MATERIALS_COST
     assert is_hoarding(ada) is False  # the build sank enough materials to end the hoard
+
+
+# ---- use_hearth -----------------------------------------------------------
+
+
+async def test_use_hearth_converts_materials_to_energy_at_own_home(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    ada.current_materials = 50.0
+    ada.current_energy = 40.0
+
+    result = await use_hearth(world, event_bus, "wanderer_001")
+
+    burned = HEARTH_MATERIALS_PER_USE  # 50 > 20 -> burns the per-use cap
+    assert ada.current_materials == 50.0 - burned
+    assert ada.current_energy == 40.0 + burned * HEARTH_ENERGY_PER_MATERIAL
+    used = [e for e in event_bus.get_events("wanderer_001") if e.type == "hearth_used"]
+    assert len(used) == 1
+    assert used[0].scope is ScopeType.LOCAL
+    assert used[0].region == "alpha"
+    assert used[0].timestamp == world.now()
+    assert result.startswith("You rest at your hearth")
+
+
+async def test_use_hearth_partial_burn_conserves_exactly(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Fewer materials than the cap burns exactly what's held; energy gained == burned * rate."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    ada.current_materials = 12.0  # < HEARTH_MATERIALS_PER_USE
+    ada.current_energy = 40.0
+
+    await use_hearth(world, event_bus, "wanderer_001")
+
+    burned = 12.0
+    assert ada.current_materials == 0.0  # all fuel consumed
+    assert ada.current_energy == 40.0 + burned * HEARTH_ENERGY_PER_MATERIAL
+    # Conservation: the energy gained is exactly the materials destroyed * rate — no mint.
+    assert (ada.current_energy - 40.0) == burned * HEARTH_ENERGY_PER_MATERIAL
+
+
+async def test_use_hearth_not_at_home_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert world.move_agent("wanderer_001", "beta") is True  # walk away from the home
+    ada.current_materials = 50.0
+    ada.current_energy = 40.0
+
+    result = await use_hearth(world, event_bus, "wanderer_001")
+
+    assert result.startswith("Invalid:")
+    assert ada.current_materials == 50.0 and ada.current_energy == 40.0  # nothing converted
+
+
+async def test_use_hearth_without_a_home_is_error(world: WorldState, event_bus: EventBus) -> None:
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    ada.current_materials = 50.0
+
+    result = await use_hearth(world, event_bus, "wanderer_001")
+
+    assert result.startswith("Error:")
+    assert ada.current_materials == 50.0
+
+
+async def test_use_hearth_unknown_agent_is_error(world: WorldState, event_bus: EventBus) -> None:
+    """A missing being cannot use a hearth (defensive: the registry also guards this)."""
+    result = await use_hearth(world, event_bus, "ghost")
+    assert result.startswith("Error:")
+
+
+async def test_use_hearth_while_paralyzed_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Paralysis stays social: a fallen being cannot self-revive at its own hearth."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    ada.current_materials = 50.0
+    world.modify_agent_energy("wanderer_001", -(ada.current_energy - 1.0))  # -> PARALYZED
+    assert ada.status is AgentStatus.PARALYZED
+
+    result = await use_hearth(world, event_bus, "wanderer_001")
+
+    assert result.startswith("Invalid:")
+    assert ada.current_materials == 50.0  # no conversion
+    assert ada.status is AgentStatus.PARALYZED  # still fallen; only a friend can revive
+
+
+async def test_use_hearth_with_no_materials_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home(
+        "home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    ada.current_materials = 0.0
+    ada.current_energy = 40.0
+
+    result = await use_hearth(world, event_bus, "wanderer_001")
+
+    assert result.startswith("Invalid:")
+    assert ada.current_energy == 40.0  # no energy minted from nothing

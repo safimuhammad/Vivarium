@@ -166,6 +166,18 @@ HOME_BUILD_MATERIALS_COST: Final[float] = 80.0
 Biased HIGH so homes are rare and precious, and it competes with mating (min 30
 materials) for the same scarce stock — a nest-vs-child tension. A world-rule dial."""
 
+HEARTH_MATERIALS_PER_USE: Final[float] = 20.0
+"""Maximum materials a single ``use_hearth`` burns. [design — 2026-07-01, Layer 1]."""
+
+HEARTH_ENERGY_PER_MATERIAL: Final[float] = 1.0
+"""Energy produced per material burned at a hearth (the conversion rate). [design —
+2026-07-01, Layer 1].
+
+The hearth CONVERTS a real, harvested/upkept stock (materials) into energy — it never
+mints energy from nothing: ``energy_gained = burned * this`` and the materials are
+destroyed first. Keep it <= a sustainable rate; lower it below 1.0 to burn some fuel as
+heat (mirroring how mating burns some of the committed resources). A world-rule dial."""
+
 # ---------------------------------------------------------------------------
 # Mating
 # ---------------------------------------------------------------------------

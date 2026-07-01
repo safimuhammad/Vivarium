@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from tools.builtin.combat import attack
 from tools.builtin.communication import speak
-from tools.builtin.homes import build_home
+from tools.builtin.homes import build_home, use_hearth
 from tools.builtin.mating import accept_mating, initiate_mating, reject_mating
 from tools.builtin.movement import look_around, move
 from tools.builtin.resources import harvest_resources, transfer_resource
@@ -29,6 +29,7 @@ __all__ = [
     "reject_mating",
     "speak",
     "transfer_resource",
+    "use_hearth",
 ]
 
 #: Canonical tool name -> implementation; the single source for the builtin set.
@@ -43,6 +44,7 @@ BUILTIN_TOOLS: dict[str, ToolFn] = {
     "reject_mating": reject_mating,
     "accept_mating": accept_mating,
     "build_home": build_home,
+    "use_hearth": use_hearth,
 }
 
 

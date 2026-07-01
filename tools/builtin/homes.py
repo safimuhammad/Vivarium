@@ -14,7 +14,13 @@ from __future__ import annotations
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
-from core.constants import HOME_BUILD_MATERIALS_COST, HOME_MAX_INTEGRITY
+from core.constants import (
+    HEARTH_ENERGY_PER_MATERIAL,
+    HEARTH_MATERIALS_PER_USE,
+    HOME_BUILD_MATERIALS_COST,
+    HOME_MAX_INTEGRITY,
+)
+from world.agents import AgentStatus
 from world.world import WorldState
 
 
@@ -71,4 +77,73 @@ async def build_home(world: WorldState, event_bus: EventBus, agent_id: str) -> s
     return (
         f"You raise a home here. It cost you {HOME_BUILD_MATERIALS_COST:.0f} materials; "
         f"you have {agent.current_materials} left."
+    )
+
+
+async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> str:
+    """Rest at the being's own hearth, burning materials to recover energy.
+
+    An active, elected act (a tool) — NOT passive rest — so it does not age the breath
+    and only an ALIVE being can choose it (paralysis stays social: a fallen being still
+    needs a friend's ``transfer_resource``, never a self-revive at the hearth).
+
+    Recipe (conservation): ``burned = min(materials, HEARTH_MATERIALS_PER_USE)``; the
+    materials are DESTROYED first, then the energy they convert to is credited
+    (``burned * HEARTH_ENERGY_PER_MATERIAL``), so energy is only ever minted from fuel
+    actually consumed.
+
+    Mutates world state:
+        * Deducts ``burned`` from the being's materials, then adds
+          ``burned * HEARTH_ENERGY_PER_MATERIAL`` to its energy (both via the world's
+          flooring methods).
+
+    Emits events:
+        * One ``"hearth_used"`` event (:attr:`~bus.events.ScopeType.LOCAL`, source =
+          the being, region = its current position, stamped ``world.now()``).
+
+    Args:
+        world: The live world state.
+        event_bus: The bus the resulting event is published to.
+        agent_id: Id of the being resting at its hearth.
+
+    Returns:
+        A success sentence with the new balances; an ``"Error: "`` string if the being
+        is unknown or owns no home; an ``"Invalid: "`` string if it is fallen, not
+        where its home stands, or holds no materials to burn (rejected calls mutate
+        nothing).
+    """
+    agent = world.get_agent(agent_id)
+    if agent is None:
+        return f"Error: Cannot find Agent {agent_id} in the world."
+    if agent.status is not AgentStatus.ALIVE:
+        return (
+            "Invalid: You are fallen and cannot rest at a hearth; "
+            "only another being can restore you."
+        )
+    home = world.home_of(agent_id)
+    if home is None:
+        return "Error: You have no home here to rest in."
+    if home.region != agent.current_position:
+        return "Invalid: You are not where your home stands; you can rest at its hearth only there."
+    if agent.current_materials <= 0.0:
+        return "Invalid: You have no materials to burn at the hearth."
+
+    burned = min(agent.current_materials, HEARTH_MATERIALS_PER_USE)
+    world.modify_agent_materials(agent_id, -burned)  # destroy the fuel FIRST (conservation)
+    gained = burned * HEARTH_ENERGY_PER_MATERIAL
+    world.modify_agent_energy(agent_id, gained)  # THEN credit the energy it converts to
+    region = agent.current_position
+    await event_bus.publish(
+        Event(
+            "hearth_used",
+            agent_id,
+            {"message": f"{agent.name} rests at the hearth, kindling materials into warmth."},
+            scope=ScopeType.LOCAL,
+            region=region,
+            timestamp=world.now(),
+        )
+    )
+    return (
+        f"You rest at your hearth, burning {burned} materials for {gained} energy. "
+        f"Energy: {agent.current_energy}, Materials: {agent.current_materials}."
     )
