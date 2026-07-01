@@ -33,7 +33,7 @@ from core.rng import make_rng
 from tests.conftest import SEED, FakeClock
 from tools.builtin.mating import initiate_mating, reject_mating
 from world.agents import AgentState, AgentStatus
-from world.homes import max_integrity
+from world.homes import HomeStatus, max_integrity
 from world.regions import Region, ResourceTypes
 from world.tick import _tick_once_resilient, tick
 from world.world import WorldState
@@ -690,3 +690,23 @@ async def test_tick_funded_home_stays_at_ceiling_across_many_ticks() -> None:
         await tick(world, bus)
     # == M(1) == 100, rate-independent.
     assert home.integrity == max_integrity(len(home.stakeholders))
+
+
+# ---- RUIN status guard (L2c Task 2) ---------------------------------------
+
+
+async def test_tick_upkeep_skips_a_ruin(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """The upkeep sweep leaves a RUIN untouched — no decay, no draw, no collapse (MANDATORY #4)."""
+    world.build_home("home_ruin", "wanderer_002", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["home_ruin"].status = HomeStatus.RUIN  # manual (make_ruin is Task 5)
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    boris.current_materials = 0.0  # broke: a STANDING home here would decay
+    fake_clock.advance(10.0)
+
+    await tick(world, event_bus)
+
+    home = world.get_home("home_ruin")
+    assert home is not None and home.integrity == 40.0  # frozen, not decayed

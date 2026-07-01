@@ -16,6 +16,7 @@ field, so an L2 colonize is a single field write rather than a painful re-key.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 
 from core.constants import (
     HOARDING_MATERIALS_THRESHOLD,
@@ -23,6 +24,20 @@ from core.constants import (
     HOME_HEALTH_CEIL,
     HOME_HEALTH_DIMINISH,
 )
+
+
+class HomeStatus(Enum):
+    """Lifecycle state of a home (Layer 2c).
+
+    Attributes:
+        STANDING: A live home — buildable, tendable, hearth-able, and breach-able.
+        RUIN: A collapsed home — no upkeep/hearth/pledge; only scavengeable for its
+            ``remnant_materials`` until the world-tick sweeps it after
+            :data:`~core.constants.RUINS_PERSIST_SECONDS`.
+    """
+
+    STANDING = "standing"
+    RUIN = "ruin"
 
 
 @dataclass(slots=True)
@@ -56,6 +71,19 @@ class Home:
             (``-HOME_DECAY_PER_SECOND*elapsed``) from ``elapsed = now - last_integrity_at`` — kept
             distinct from ``last_upkeep_at`` (which freezes on a miss for arrears) so decay cannot
             accelerate. Seeded ``= built_at`` in :meth:`~world.world.WorldState.build_home`.
+        status: Lifecycle state (Layer 2c). Defaults ``STANDING``; every existing home
+            operation (``modify_home_integrity``, the tick upkeep sweep, ``pledge_home``,
+            ``use_hearth``, ``deposit_to_home``, ``withdraw_from_home``, ``leave_home``)
+            refuses to act once this is ``RUIN``. Nothing sets ``RUIN`` yet — that arrives
+            with ``make_ruin`` (Task 5).
+        ruined_at: World-clock time (seconds) the home fell to ``RUIN``, or ``None`` while
+            ``STANDING``. Set once, by ``make_ruin`` (Task 5).
+        remnant_materials: Materials a ruin holds for scavenging (Task 5's ``thieve``);
+            meaningless while ``STANDING`` and defaults ``0.0``.
+        breachers: Ids of beings that have broken into this home (Task 5's ``break_in``).
+            Accumulates on each break-in and clears on a full repair back to STANDING;
+            defaults to an empty, per-instance set (``field(default_factory=set)`` — never
+            a shared mutable default).
     """
 
     home_id: str
@@ -67,6 +95,10 @@ class Home:
     stakeholders: list[str] = field(default_factory=list)
     vault_materials: float = 0.0
     last_integrity_at: float = 0.0
+    status: HomeStatus = HomeStatus.STANDING
+    ruined_at: float | None = None
+    remnant_materials: float = 0.0
+    breachers: set[str] = field(default_factory=set)
 
 
 def max_integrity(stakeholder_count: int) -> float:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.constants import HOARDING_MATERIALS_THRESHOLD, HOME_HEALTH_BASE, HOME_HEALTH_CEIL
-from world.homes import Home, home_is_hoarding, max_integrity
+from world.homes import Home, HomeStatus, home_is_hoarding, max_integrity
 
 
 def test_home_is_constructible_and_mutable() -> None:
@@ -109,4 +109,26 @@ def test_home_has_last_integrity_at_defaulting_zero() -> None:
 
 def test_home_still_uses_slots_with_last_integrity_at() -> None:
     """slots=True holds after adding last_integrity_at (no per-instance __dict__)."""
+    assert not hasattr(Home("h", "o", "r", 1.0, 2.0, 3.0), "__dict__")
+
+
+def test_home_status_defaults_standing_and_ruin_fields_default() -> None:
+    """A fresh Home is STANDING with no ruin/breach state (all four fields defaulted)."""
+    home = Home("h", "o", "r", 1.0, 2.0, 3.0)
+    assert home.status is HomeStatus.STANDING
+    assert home.ruined_at is None
+    assert home.remnant_materials == 0.0
+    assert home.breachers == set()
+    home.breachers.add("wanderer_002")
+    assert home.breachers == {"wanderer_002"}
+
+
+def test_home_status_enum_values() -> None:
+    """HomeStatus is a string enum with the two contest-layer states."""
+    assert HomeStatus.STANDING.value == "standing"
+    assert HomeStatus.RUIN.value == "ruin"
+
+
+def test_home_still_uses_slots_with_ruin_fields() -> None:
+    """slots=True holds after the ruin/breach fields (no per-instance __dict__)."""
     assert not hasattr(Home("h", "o", "r", 1.0, 2.0, 3.0), "__dict__")

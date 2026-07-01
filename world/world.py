@@ -30,7 +30,7 @@ from core.logging import get_logger
 from core.rng import Clock, SimContext, default_clock, make_rng
 
 from .agents import AgentState, AgentStatus
-from .homes import Home, max_integrity
+from .homes import Home, HomeStatus, max_integrity
 from .regions import Region, ResourceTypes
 
 logger = get_logger(__name__)
@@ -654,11 +654,15 @@ class WorldState:
             amount: Signed delta to apply.
 
         Returns:
-            ``True`` if the home exists and was modified; ``False`` otherwise.
+            ``True`` if the home exists AND is STANDING and was modified; ``False``
+            otherwise (unknown home, or a home fallen to :attr:`~world.homes.HomeStatus.RUIN` —
+            a ruin's integrity is frozen, MANDATORY #4).
         """
         home = self.homes.get(home_id)
         if home is None:
             return False
+        if home.status is not HomeStatus.STANDING:
+            return False  # a ruin's integrity is frozen (MANDATORY #4)
         cap = max_integrity(len(home.stakeholders))
         home.integrity = min(max(home.integrity + amount, 0.0), cap)
         return True

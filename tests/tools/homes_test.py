@@ -40,7 +40,7 @@ from tools.builtin.homes import (
     withdraw_from_home,
 )
 from world.agents import AgentStatus, is_hoarding
-from world.homes import home_is_hoarding
+from world.homes import HomeStatus, home_is_hoarding
 from world.world import WorldState
 
 # ---- build_home -----------------------------------------------------------
@@ -891,3 +891,57 @@ async def test_deposit_then_withdraw_conserves_total_materials_and_energy(
 
     assert total_materials(world) == pytest.approx(materials_before)  # nothing minted/lost
     assert total_energy(world) == pytest.approx(energy_before)  # vault is materials-only
+
+
+# ---- RUIN status guards (L2c Task 2) --------------------------------------
+
+
+async def test_pledge_home_to_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    """A being cannot pledge to a ruin (get_home returns it, so this guard is real)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["h1"].status = HomeStatus.RUIN
+    result = await pledge_home(world, event_bus, "wanderer_002", "h1")
+    assert result.startswith("Invalid:")
+    assert world.is_stakeholder("h1", "wanderer_002") is False
+
+
+async def test_use_hearth_in_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    """A stakeholder cannot hearth in a ruin (defence-in-depth: kept as a stakeholder here)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["home_ada"].status = HomeStatus.RUIN  # keep stakeholders (do NOT use make_ruin)
+    ada.current_materials = 50.0
+    result = await use_hearth(world, event_bus, "wanderer_001")
+    assert result.startswith("Invalid:")
+    assert ada.current_materials == 50.0  # nothing burned
+
+
+async def test_deposit_to_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["home_ada"].status = HomeStatus.RUIN
+    ada.current_materials = 100.0
+    result = await deposit_to_home(world, event_bus, "wanderer_001", 20.0)
+    assert result.startswith("Invalid:")
+    assert ada.current_materials == 100.0 and world.homes["home_ada"].vault_materials == 0.0
+
+
+async def test_withdraw_from_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.deposit_to_home_vault("home_ada", 40.0)
+    world.homes["home_ada"].status = HomeStatus.RUIN
+    result = await withdraw_from_home(world, event_bus, "wanderer_001", 10.0)
+    assert result.startswith("Invalid:")
+    assert world.homes["home_ada"].vault_materials == 40.0
+
+
+async def test_leave_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["h1"].status = HomeStatus.RUIN  # keep the owner as a stakeholder
+    result = await leave_home(world, event_bus, "wanderer_001")
+    assert result.startswith("Invalid:")
+    assert world.is_stakeholder("h1", "wanderer_001") is True  # still bound

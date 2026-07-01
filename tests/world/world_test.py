@@ -23,6 +23,7 @@ from core.constants import HOME_MAX_INTEGRITY
 from core.rng import make_rng
 from tests.conftest import FakeClock
 from world.agents import AgentState, AgentStatus
+from world.homes import HomeStatus
 from world.regions import Region, ResourceTypes
 from world.world import WorldState
 
@@ -1024,3 +1025,11 @@ def test_build_home_seeds_last_integrity_at_to_built_at(world: WorldState) -> No
     build time."""
     world.build_home("h1", "wanderer_001", "alpha", built_at=1234.0, integrity=HOME_MAX_INTEGRITY)
     assert world.homes["h1"].last_integrity_at == 1234.0
+
+
+def test_modify_home_integrity_refuses_a_ruin(world: WorldState) -> None:
+    """A RUIN's integrity is frozen: modify_home_integrity is a no-op False (MANDATORY #4)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["h1"].status = HomeStatus.RUIN  # manual (make_ruin arrives in Task 5)
+    assert world.modify_home_integrity("h1", 25.0) is False
+    assert world.homes["h1"].integrity == 40.0  # unchanged

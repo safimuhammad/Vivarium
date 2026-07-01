@@ -25,7 +25,7 @@ from core.constants import (
 )
 from tools.builtin.resources import _announce_if_started_hoarding, _coerce_positive_amount
 from world.agents import AgentStatus, is_hoarding
-from world.homes import Home, home_is_hoarding
+from world.homes import Home, HomeStatus, home_is_hoarding
 from world.world import WorldState
 
 
@@ -185,6 +185,8 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
     home = world.stakeholder_home_of(agent_id)
     if home is None:
         return "Error: You have no home here to rest in."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: Your home has fallen to ruin; its hearth is cold."
     if home.region != agent.current_position:
         return "Invalid: You are not where your home stands; you can rest at its hearth only there."
     if agent.current_materials <= 0.0:
@@ -270,6 +272,8 @@ async def pledge_home(world: WorldState, event_bus: EventBus, agent_id: str, hom
     home = world.get_home(home_id)
     if home is None:
         return "Error: There is no such home here to pledge to."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: That home is a ruin; there is nothing left to pledge to."
     if home.region != agent.current_position:
         return (
             "Invalid: You are not where that home stands; you can only join a home in your place."
@@ -332,6 +336,8 @@ async def leave_home(world: WorldState, event_bus: EventBus, agent_id: str) -> s
     home = world.stakeholder_home_of(agent_id)
     if home is None:
         return "Error: You do not belong to any home to leave."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: Your home has fallen to ruin; there is no place left to give up."
 
     region = home.region
     world.remove_stakeholder(home.home_id, agent_id)  # prune + promote owner + clamp integrity
@@ -397,6 +403,8 @@ async def deposit_to_home(
     home = world.stakeholder_home_of(agent_id)
     if home is None:
         return "Error: You have no home here to store materials in."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: Your home has fallen to ruin; it can hold no store."
     if home.region != agent.current_position:
         return "Invalid: You are not where your home stands; you can add to its store only there."
     if agent.current_materials < quantity:
@@ -472,6 +480,8 @@ async def withdraw_from_home(
     home = world.stakeholder_home_of(agent_id)
     if home is None:
         return "Error: You have no home here to draw materials from."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: Your home has fallen to ruin; there is no store to draw from."
     if home.region != agent.current_position:
         return (
             "Invalid: You are not where your home stands; you can draw from its store only there."

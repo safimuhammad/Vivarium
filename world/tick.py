@@ -14,9 +14,12 @@ breathing loops. Each step does four jobs:
    passing announced with a LOCAL ``agent_decayed`` event in its region. A body
    lingers (locally perceivable) so an away being can return and find it, then
    returns to the earth as a heard beat -- and corpses never pile up (run-forever).
-#. **Sweep home upkeep/decay** -- each home draws time-based upkeep from the
+#. **Sweep home upkeep/decay** -- each STANDING home draws time-based upkeep from the
    COLLECTIVE pool of its living stakeholders (owner first when still a
-   stakeholder, then the rest by id), all-or-nothing. A covered home is repaired
+   stakeholder, then the rest by id), all-or-nothing. A home whose
+   :attr:`~world.homes.Home.status` is :attr:`~world.homes.HomeStatus.RUIN` is skipped
+   entirely -- it neither pays upkeep nor decays as a home; a ruin is instead handled by
+   its own sweep (Task 5). A covered home is repaired
    incrementally (:data:`~core.constants.HOME_REPAIR_PER_SECOND` times elapsed,
    clamped to its stakeholder-scaled ceiling via :func:`~world.homes.max_integrity`)
    and its ``last_upkeep_at`` advances; a home the pool cannot cover instead decays
@@ -59,6 +62,7 @@ from core.constants import (
 )
 from core.logging import get_logger
 from world.agents import AgentState, AgentStatus
+from world.homes import HomeStatus
 from world.regions import ResourceTypes
 from world.world import WorldState
 
@@ -78,7 +82,10 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
         * For each DEAD agent whose ``died_at`` is older than
           :data:`~core.constants.CORPSE_DECAY_SECONDS`, removes the body via
           :meth:`~world.world.WorldState.remove_agent`.
-        * For each home, computes time-based upkeep owed
+        * For each home whose :attr:`~world.homes.Home.status` is
+          :attr:`~world.homes.HomeStatus.STANDING` (a :attr:`~world.homes.HomeStatus.RUIN`
+          is skipped outright -- no draw, repair, decay, or collapse), computes
+          time-based upkeep owed
           (:data:`~core.constants.HOME_UPKEEP_MATERIALS_PER_SECOND` times elapsed
           time since :attr:`~world.homes.Home.last_upkeep_at`) and draws it from
           the COLLECTIVE pool of the home's living stakeholders, in a
@@ -190,7 +197,9 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
         )
 
     # Sweep home upkeep/decay (COLLECTIVE pool, L2a; incremental time-based repair/decay, L2c).
-    # owed = rate * elapsed(last_upkeep_at) is drawn from the home's living stakeholders in a
+    # A RUIN is skipped outright below (MANDATORY #4): it neither pays upkeep nor decays as a
+    # home -- a ruin gets its own sweep (Task 5). For a STANDING home, owed = rate *
+    # elapsed(last_upkeep_at) is drawn from the home's living stakeholders in a
     # deterministic order (the owner first when it is still a stakeholder, then the rest by id)
     # — ALL-OR-NOTHING: if the pooled materials cannot cover owed, nothing is drawn. A covered
     # home is repaired INCREMENTALLY (+HOME_REPAIR_PER_SECOND * elapsed, auto-clamped to
@@ -205,6 +214,8 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
     # later 2c task). Same snapshot-then-mutate discipline: mutate synchronously, defer publish.
     collapse_events: list[Event] = []
     for home in list(world.get_all_homes()):
+        if home.status is not HomeStatus.STANDING:
+            continue  # ruins are handled by the ruin-sweep (Task 5), never upkeep/decay
         elapsed = now - home.last_integrity_at
         owed = HOME_UPKEEP_MATERIALS_PER_SECOND * (now - home.last_upkeep_at)
         others = sorted(s for s in home.stakeholders if s != home.owner_id)
