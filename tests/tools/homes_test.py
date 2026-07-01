@@ -1252,3 +1252,129 @@ async def test_break_in_thieve_conserves_vault_within_tolerance_for_three_or_mor
     assert _materials(world, "dead_raider") == dead_materials_before
     assert _materials(world, "departed_raider") == departed_materials_before
     assert "strip" in result.lower()
+
+
+# ---- break_in colonize outcome (L2c Task 4b) -------------------------------
+
+
+async def test_break_in_colonize_seizes_owner_and_homeless_breachers(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """intent=colonize: final striker -> owner; only homeless co-located living breachers ->
+    stakeholders; priors evicted; vault+structure retained; integrity ~0; home_colonized fires."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=2 * BREAKIN_INTEGRITY_DAMAGE
+    )
+    world.deposit_to_home_vault("h1", 30.0)  # retained through colonize
+    _add_raiders(world, event_bus, "raider_a")  # homeless raider
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    await break_in(world, event_bus, "raider_a", "h1", "colonize")  # pre-breach, records raider_a
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "colonize")  # breach + colonize
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.status is HomeStatus.STANDING
+    assert home.owner_id == "wanderer_002"  # final striker
+    assert set(home.stakeholders) == {
+        "wanderer_002",
+        "raider_a",
+    }  # both homeless + co-located + alive
+    assert "wanderer_001" not in home.stakeholders  # prior owner evicted
+    assert home.vault_materials == 30.0  # retained
+    colonized = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_colonized"]
+    assert len(colonized) == 1
+    assert "seiz" in result.lower() or "take it" in result.lower()
+
+
+async def test_break_in_colonize_enrolls_only_homeless_breachers(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A breacher that already stakes another home merely participates — it is not enrolled
+    (MANDATORY #3)."""
+    world.build_home(
+        "target",
+        "wanderer_001",
+        "alpha",
+        built_at=world.now(),
+        integrity=2 * BREAKIN_INTEGRITY_DAMAGE,
+    )
+    world.build_home("raider_a_home", "raider_a", "alpha", built_at=world.now(), integrity=100.0)
+    _add_raiders(world, event_bus)  # raider_a already added by build; ensure subscribed
+    event_bus.subscribe("raider_a")
+    raider_a = world.get_agent("raider_a")
+    if raider_a is None:
+        world.add_agent(
+            AgentState(
+                id="raider_a",
+                name="Raider_A",
+                persona="p",
+                current_position="alpha",
+                current_energy=100.0,
+                current_materials=100.0,
+                status=AgentStatus.ALIVE,
+            )
+        )
+    world.add_stakeholder("raider_a_home", "raider_a")  # raider_a is homed
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    await break_in(world, event_bus, "raider_a", "target", "colonize")  # records raider_a (homed)
+    await break_in(world, event_bus, "wanderer_002", "target", "colonize")  # breach + colonize
+
+    home = world.get_home("target")
+    assert home is not None
+    assert home.owner_id == "wanderer_002"
+    assert home.stakeholders == ["wanderer_002"]  # raider_a NOT enrolled (already homed)
+    assert world.stakeholder_home_of("raider_a") is not None  # keeps its own home
+
+
+async def test_break_in_colonize_auto_detaches_a_homed_final_striker(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A final striker that already holds a home is auto-detached from it before taking the new
+    one, preserving at-most-one-home (MANDATORY #3)."""
+    world.build_home(
+        "target", "wanderer_001", "alpha", built_at=world.now(), integrity=BREAKIN_INTEGRITY_DAMAGE
+    )  # one blow from breach
+    world.build_home("boris_home", "wanderer_002", "alpha", built_at=world.now(), integrity=100.0)
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    result = await break_in(
+        world, event_bus, "wanderer_002", "target", "colonize"
+    )  # breach + colonize
+
+    target = world.get_home("target")
+    assert target is not None and target.owner_id == "wanderer_002"
+    # At-most-one-home: wanderer_002's ONLY home is now the colonized target.
+    home_now = world.stakeholder_home_of("wanderer_002")
+    assert home_now is not None and home_now.home_id == "target"
+    assert world.is_stakeholder("boris_home", "wanderer_002") is False  # detached from the old home
+    assert "seiz" in result.lower() or "take it" in result.lower()
+
+
+async def test_break_in_colonize_non_breaching_is_a_pure_battering_no_seizure(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A colonize-intent break_in that does NOT breach only batters the home: ownership and
+    stakeholders are untouched and no home_colonized fires (the intent only ever executes on
+    the breaching blow, same guard as thieve)."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=3 * BREAKIN_INTEGRITY_DAMAGE
+    )  # two blows from breach
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "colonize")
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.integrity == 2 * BREAKIN_INTEGRITY_DAMAGE  # damaged, not breached
+    assert home.status is HomeStatus.STANDING
+    assert home.owner_id == "wanderer_001"  # unchanged
+    assert home.stakeholders == ["wanderer_001"]  # unchanged -- no seizure
+    colonized = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_colonized"]
+    assert colonized == []  # the intent never fires on a non-breaching blow
+    assert "batter" in result.lower()

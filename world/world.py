@@ -752,6 +752,38 @@ class WorldState:
         self.modify_home_integrity(home_id, 0.0)  # re-clamp DOWN to the new, smaller ceiling
         return True
 
+    def colonize_home(self, home_id: str, new_owner: str, new_stakeholders: list[str]) -> bool:
+        """Seize a home: reassign owner+stakeholders, evict priors, retain vault/structure.
+
+        The breach-outcome primitive (Layer 2c colonize). Overwrites
+        :attr:`~world.homes.Home.owner_id` and :attr:`~world.homes.Home.stakeholders` (the
+        prior owner + stakeholders are simply replaced — evicted), then re-clamps integrity to
+        the new stakeholder-scaled ceiling. The vault and structure are untouched (no resource
+        move -> trivially conserved); integrity stays wherever the breach left it (~0), so the
+        new owners must shore it up before it collapses. The caller (the ``break_in`` tool)
+        pre-filters ``new_stakeholders`` to currently-homeless co-located living breachers and
+        guarantees the at-most-one-home invariant (auto-detaching a homed final striker first).
+        Sync, event-free.
+
+        Args:
+            home_id: Id of the home to seize.
+            new_owner: Id of the new owner (the final striker; also first in
+                ``new_stakeholders``).
+            new_stakeholders: The new stakeholder list (owner first), pre-filtered by the caller.
+
+        Returns:
+            ``True`` if the home exists and was reassigned; ``False`` if the home is unknown.
+        """
+        home = self.homes.get(home_id)
+        if home is None:
+            return False
+        home.owner_id = new_owner
+        home.stakeholders = list(new_stakeholders)
+        self.modify_home_integrity(
+            home_id, 0.0
+        )  # re-clamp to the new ceiling (a ~0 integrity is unchanged)
+        return True
+
     def deposit_to_home_vault(self, home_id: str, amount: float) -> bool:
         """Add ``amount`` to a home's vault, flooring at 0.0. Sync and event-free.
 

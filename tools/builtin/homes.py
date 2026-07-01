@@ -6,7 +6,8 @@ stakeholder), ``leave_home`` (give up a stake, voluntarily), ``deposit_to_home``
 co-located non-stakeholder pays a pure-sink cost to wear at a STANDING home's
 integrity, breaching it at ``<= 0``; a ``"thieve"`` breach splits the vault among
 co-located living breachers and leaves the home STANDING at ~0 (Task 4a), while a
-``"colonize"`` breach still falls through to the plain breach sentence until Task 4b).
+``"colonize"`` breach seizes the home for the final striker and every currently-homeless
+co-located living breacher, evicting the prior owner + stakeholders (Task 4b)).
 
 Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
@@ -524,7 +525,15 @@ async def break_in(
     minimized by giving the remainder to the final striker. The vault is then zeroed exactly and
     the home is left **STANDING at ~0** (never ``make_ruin`` here — that would double-count the
     looted vault into a ruin remnant; the tick makes the ruin later).
-    ``intent == "colonize"`` still falls through to the plain breach sentence until Task 4b. A lone
+    For ``intent == "colonize"`` (Task 4b) the final striker becomes ``owner_id``; the new
+    ``stakeholders`` are the striker plus every OTHER co-located, ALIVE breacher that is
+    **currently homeless** (``world.stakeholder_home_of`` is ``None`` — a breacher who already
+    stakes a home elsewhere merely participated and is not enrolled, preserving at-most-one-home,
+    MANDATORY #3). If the final striker itself already holds a home, it is auto-detached from it
+    FIRST via :meth:`~world.world.WorldState.remove_stakeholder` (which prunes it, promotes a
+    survivor, and clamps that home's integrity) so it never ends up staking two homes at once. The
+    prior owner and stakeholders are evicted; the vault and structure are retained untouched (no
+    resource move); integrity stays at ~0 for the new owners to shore up. A lone
     raider is out-healed by the home's repair between breaths and self-limits by the resource burn;
     a coordinated group stacking damage inside one repair window makes net progress.
 
@@ -542,12 +551,19 @@ async def break_in(
           does NOT call ``make_ruin`` — ``home.status`` is never touched here, so it stays
           whatever it already was (``STANDING``); ruining is the world-tick's job (Task 5),
           and doing it here would double-count the just-emptied vault into a ruin remnant.
+        * On a ``"colonize"`` breach: possibly detaches the final striker from a home it already
+          held via :meth:`~world.world.WorldState.remove_stakeholder`, then reassigns the target
+          home's owner + stakeholders via :meth:`~world.world.WorldState.colonize_home` (evicting
+          the prior roster; vault and structure untouched — no resource move).
 
     Emits events:
         * On a breach (integrity ``<= 0``): one ``"home_breached"`` event
           (:attr:`~bus.events.ScopeType.LOCAL`, source = the raider, region = the home's region,
           stamped ``world.now()``).
         * On a ``"thieve"`` breach: one further ``"home_thieved"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, source = the raider, region = the home's region,
+          stamped ``world.now()``).
+        * On a ``"colonize"`` breach: one further ``"home_colonized"`` event
           (:attr:`~bus.events.ScopeType.LOCAL`, source = the raider, region = the home's region,
           stamped ``world.now()``).
 
@@ -657,7 +673,42 @@ async def break_in(
                 f"You break the home {home.home_id} open and strip its store — {loot} materials, "
                 f"split among {len(recipients)}. The emptied wreck still stands, for now."
             )
-        return f"You break the home {home.home_id} open — it can no longer keep anyone out."
+        # intent == "colonize"
+        old = world.stakeholder_home_of(agent_id)
+        if old is not None:
+            world.remove_stakeholder(
+                old.home_id, agent_id
+            )  # at-most-one-home: abandon the old home first
+        new_stakeholders = [agent_id] + [
+            b
+            for b in sorted(home.breachers)
+            if b != agent_id
+            and (peer := world.get_agent(b)) is not None
+            and peer.status is AgentStatus.ALIVE
+            and peer.current_position == region
+            and world.stakeholder_home_of(b)
+            is None  # only currently-homeless breachers (MANDATORY #3)
+        ]
+        world.colonize_home(target_home, agent_id, new_stakeholders)
+        await event_bus.publish(
+            Event(
+                "home_colonized",
+                agent_id,
+                {
+                    "message": (
+                        f"{agent.name} and {len(new_stakeholders) - 1} other(s) seized the home "
+                        f"{home.home_id} in {region}."
+                    )
+                },
+                scope=ScopeType.LOCAL,
+                region=region,
+                timestamp=world.now(),
+            )
+        )
+        return (
+            f"You break the home {home.home_id} open and take it for your own. "
+            f"{len(new_stakeholders)} of you hold it now; shore it up before it falls."
+        )
     return (
         f"You batter the home {home.home_id}; its soundness drops to {home.integrity:.1f} but it "
         f"still stands. You spent {BREAKIN_ENERGY_COST:.0f} energy and "

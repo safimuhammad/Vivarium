@@ -1045,3 +1045,25 @@ def test_record_and_clear_breachers(world: WorldState) -> None:
     assert world.clear_breachers("h1") is True
     assert world.homes["h1"].breachers == set()
     assert world.clear_breachers("missing") is False
+
+
+# ---------------------------------------------------------------------------
+# colonize_home (L2c Task 4b)
+# ---------------------------------------------------------------------------
+
+
+def test_colonize_home_reassigns_evicts_and_retains_vault(world: WorldState) -> None:
+    """colonize_home overwrites owner+stakeholders (evicting priors), retains vault, re-clamps
+    integrity."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.add_stakeholder("h1", "wanderer_002")  # prior owner+stakeholder set: {001, 002}
+    world.deposit_to_home_vault("h1", 55.0)
+
+    assert world.colonize_home("h1", "raider_a", ["raider_a", "raider_b"]) is True
+
+    home = world.homes["h1"]
+    assert home.owner_id == "raider_a"
+    assert home.stakeholders == ["raider_a", "raider_b"]  # priors evicted
+    assert home.vault_materials == 55.0  # retained (no resource move)
+    assert home.integrity == 0.0  # re-clamp does not raise a ~0 integrity
+    assert world.colonize_home("missing", "x", ["x"]) is False
