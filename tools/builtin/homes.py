@@ -1,5 +1,6 @@
-"""Home tools: ``build_home`` (raise a private home) and ``use_hearth`` (burn
-materials for energy at your home).
+"""Home tools: ``build_home`` (raise a private home), ``use_hearth`` (burn
+materials for energy at your home), and ``pledge_home`` (join another's home as a
+stakeholder).
 
 Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
@@ -171,4 +172,67 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
     return (
         f"You rest at your hearth, burning {burned} materials for {gained} energy. "
         f"Energy: {agent.current_energy}, Materials: {agent.current_materials}."
+    )
+
+
+async def pledge_home(world: WorldState, event_bus: EventBus, agent_id: str, home_id: str) -> str:
+    """Pledge the being to a home where it stands, joining it as a stakeholder.
+
+    A shared home is tended by many: a pledged being shares the home's upkeep (the tick
+    draws upkeep across all stakeholders) and gains hearth access (``use_hearth``). Joining
+    also raises the home's integrity ceiling (:func:`~world.homes.max_integrity`), so a
+    well-peopled home is harder to wear down.
+
+    Mutates world state:
+        * Adds the being to the home's :attr:`~world.homes.Home.stakeholders` via
+          :meth:`~world.world.WorldState.add_stakeholder`.
+
+    Emits events:
+        * One ``"home_joined"`` event (:attr:`~bus.events.ScopeType.LOCAL`, source = the
+          pledger, region = the home's region, stamped ``world.now()``).
+
+    Args:
+        world: The live world state.
+        event_bus: The bus the resulting event is published to.
+        agent_id: Id of the pledging being.
+        home_id: Id of the home (in the being's place) to join.
+
+    Returns:
+        A success sentence; an ``"Error: "`` string if the being or the home is unknown;
+        an ``"Invalid: "`` string if the being is fallen, not where the home stands, or
+        already belongs to a home (rejected calls mutate nothing).
+    """
+    agent = world.get_agent(agent_id)
+    if agent is None:
+        return f"Error: Cannot find Agent {agent_id} in the world."
+    if agent.status is not AgentStatus.ALIVE:
+        return (
+            "Invalid: You are fallen and cannot pledge to a home; "
+            "only another being can restore you."
+        )
+    home = world.get_home(home_id)
+    if home is None:
+        return "Error: There is no such home here to pledge to."
+    if home.region != agent.current_position:
+        return (
+            "Invalid: You are not where that home stands; you can only join a home in your place."
+        )
+    if world.stakeholder_home_of(agent_id) is not None:
+        return "Invalid: You already belong to a home; you may share only one."
+
+    world.add_stakeholder(home_id, agent_id)
+    region = agent.current_position
+    await event_bus.publish(
+        Event(
+            "home_joined",
+            agent_id,
+            {"message": f"{agent.name} has pledged to a home in {region}."},
+            scope=ScopeType.LOCAL,
+            region=region,
+            timestamp=world.now(),
+        )
+    )
+    return (
+        "You pledge yourself to this home; you now share its keep and may rest at its hearth. "
+        f"{len(home.stakeholders)} beings tend it now."
     )

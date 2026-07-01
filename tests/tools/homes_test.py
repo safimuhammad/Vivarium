@@ -1,9 +1,11 @@
-"""Tests for :mod:`tools.builtin.homes` — ``build_home`` and ``use_hearth``.
+"""Tests for :mod:`tools.builtin.homes` — ``build_home``, ``use_hearth``, ``pledge_home``.
 
 ``build_home`` sinks materials to raise a private home in the being's region and
 emits ``home_built``. ``use_hearth`` burns materials at the being's own home for
-energy (a conversion, never a mint) and emits ``hearth_used``. Both report
-lookup/precondition failures with ``Error:`` and rule violations with ``Invalid:``.
+energy (a conversion, never a mint) and emits ``hearth_used``. ``pledge_home`` joins
+a co-located being into a home's stakeholders (sharing its upkeep and hearth) and
+emits ``home_joined``. All three report lookup/precondition failures with ``Error:``
+and rule violations with ``Invalid:``.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from core.constants import (
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
 )
-from tools.builtin.homes import build_home, use_hearth
+from tools.builtin.homes import build_home, pledge_home, use_hearth
 from world.agents import AgentStatus, is_hoarding
 from world.world import WorldState
 
@@ -252,3 +254,139 @@ async def test_use_hearth_with_no_materials_is_invalid(
 
     assert result.startswith("Invalid:")
     assert ada.current_energy == 40.0  # no energy minted from nothing
+
+
+# ---- pledge_home ------------------------------------------------------------
+
+
+async def test_pledge_home_joins_as_stakeholder_and_emits_event(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+
+    result = await pledge_home(world, event_bus, "wanderer_002", "h1")
+
+    assert world.is_stakeholder("h1", "wanderer_002") is True
+    joined = [e for e in event_bus.get_events("wanderer_002") if e.type == "home_joined"]
+    assert len(joined) == 1
+    assert joined[0].scope is ScopeType.LOCAL
+    assert joined[0].region == "alpha"
+    assert joined[0].source == "wanderer_002"
+    assert joined[0].timestamp == world.now()
+    assert result.startswith("You pledge yourself to this home")
+
+
+async def test_pledge_home_unknown_home_is_error(world: WorldState, event_bus: EventBus) -> None:
+    result = await pledge_home(world, event_bus, "wanderer_002", "nope")
+    assert result.startswith("Error:")
+
+
+async def test_pledge_home_unknown_agent_is_error(world: WorldState, event_bus: EventBus) -> None:
+    """A missing being cannot pledge (defensive: the registry also guards this)."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+
+    result = await pledge_home(world, event_bus, "ghost", "h1")
+
+    assert result.startswith("Error:")
+    assert world.is_stakeholder("h1", "ghost") is False
+
+
+async def test_pledge_home_not_co_located_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert world.move_agent("wanderer_002", "beta") is True  # walk away
+
+    result = await pledge_home(world, event_bus, "wanderer_002", "h1")
+
+    assert result.startswith("Invalid:")
+    assert world.is_stakeholder("h1", "wanderer_002") is False
+
+
+async def test_pledge_home_when_already_in_a_home_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.build_home(
+        "h2", "wanderer_002", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+
+    result = await pledge_home(world, event_bus, "wanderer_002", "h1")  # already owns h2
+
+    assert result.startswith("Invalid:")
+    assert world.is_stakeholder("h1", "wanderer_002") is False
+
+
+async def test_pledge_home_when_already_a_stakeholder_elsewhere_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """The at-most-one-home invariant blocks a plain (non-owner) stakeholder too.
+
+    ``wanderer_002`` never owns anything here — it pledges into ``h1`` (owned by
+    ``wanderer_001``), then tries to also pledge into ``h2`` (owned by a third,
+    unregistered id — ``WorldState.build_home`` does not require the owner to be a
+    live agent). The second pledge must be rejected even though ``wanderer_002``
+    holds no ownership anywhere, proving the guard checks stakeholder-anywhere, not
+    just ``home_of``.
+    """
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    world.build_home(
+        "h2", "wanderer_003", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    first = await pledge_home(world, event_bus, "wanderer_002", "h1")
+    assert first.startswith("You pledge yourself to this home")
+    event_bus.get_events("wanderer_002")  # drain
+
+    result = await pledge_home(world, event_bus, "wanderer_002", "h2")
+
+    assert result.startswith("Invalid:")
+    assert world.is_stakeholder("h2", "wanderer_002") is False
+    assert world.is_stakeholder("h1", "wanderer_002") is True  # unchanged: still only in h1
+    assert event_bus.get_events("wanderer_002") == []  # no event from the rejected second pledge
+
+
+async def test_pledge_home_already_a_stakeholder_of_this_home_is_invalid_no_duplicate(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Re-pledging to the same home is rejected, not double-counted (idempotent no-op)."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    first = await pledge_home(world, event_bus, "wanderer_002", "h1")
+    assert first.startswith("You pledge yourself to this home")
+    event_bus.get_events("wanderer_002")  # drain
+
+    result = await pledge_home(world, event_bus, "wanderer_002", "h1")  # pledge again, same home
+
+    assert result.startswith("Invalid:")
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.stakeholders.count("wanderer_002") == 1  # no duplicate entry
+    assert event_bus.get_events("wanderer_002") == []  # no second event
+
+
+async def test_pledge_home_while_paralyzed_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    world.modify_agent_energy("wanderer_002", -(boris.current_energy - 1.0))  # -> PARALYZED
+    assert boris.status is AgentStatus.PARALYZED
+
+    result = await pledge_home(world, event_bus, "wanderer_002", "h1")
+
+    assert result.startswith("Invalid:")
+    assert world.is_stakeholder("h1", "wanderer_002") is False
