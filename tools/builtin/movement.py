@@ -17,6 +17,7 @@ from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import MOVE_ENERGY_COST
 from world.agents import describe_agent_brief
+from world.homes import HomeStatus, home_is_hoarding, max_integrity
 from world.world import WorldState
 
 
@@ -118,7 +119,11 @@ async def look_around(world: WorldState, event_bus: EventBus, agent_id: str) -> 
         (pools, connections, other agents present), or an ``"Error: "`` string if
         the agent or its region cannot be found. When the agent holds a stake in a
         home standing in its current region, an extra line reports that home's
-        vault balance (L2b) -- a co-located being's own store, only.
+        vault balance (L2b) -- a co-located being's own store, only. Additionally
+        reports every OTHER co-located home the agent does NOT stake -- a STANDING
+        one's id/owner/soundness plus a hoard FLAG (never the exact vault, which
+        stays own-home-only), and a co-located RUIN's scavengeable remnant (L2c) --
+        so a being can choose a raid or scavenge target.
     """
     agent_state = world.get_agent(agent_id)
     if agent_state is None:
@@ -142,6 +147,27 @@ async def look_around(world: WorldState, event_bus: EventBus, agent_id: str) -> 
     home_line = ""
     if home is not None and home.region == agent_state.current_position:
         home_line = f"Your home here| its store holds {home.vault_materials} materials\n"
+
+    # Raider/scavenger perception (Fork F): co-located homes the being does NOT stake show
+    # soundness + a hoard FLAG (never the exact vault -- that stays own-home-only, 2b); ruins show
+    # their remnant so a passer-by can choose to pick them over.
+    other_home_lines: list[str] = []
+    for other in world.homes_in_region(agent_state.current_position):
+        if world.is_stakeholder(other.home_id, agent_id):
+            continue  # the being's own home is already shown above, with its exact vault
+        if other.status is HomeStatus.STANDING:
+            cap = max_integrity(len(other.stakeholders))
+            flag = " — it holds a great store" if home_is_hoarding(other) else ""
+            other_home_lines.append(
+                f"A home here you do not tend| {other.home_id}, kept by {other.owner_id}, "
+                f"soundness {other.integrity:.1f}/{cap:.1f}{flag}"
+            )
+        else:  # RUIN
+            other_home_lines.append(
+                f"Ruins here| {other.home_id}, {other.remnant_materials:.1f} materials left to "
+                f"pick over"
+            )
+    other_homes = "".join(f"{line}\n" for line in other_home_lines)
     return (
         f"YOUR CURRENT STATUS\n"
         f"Energy| {agent_state.current_energy}\n"
@@ -153,4 +179,5 @@ async def look_around(world: WorldState, event_bus: EventBus, agent_id: str) -> 
         f"Connections| {','.join(region_state.connections)}\n"
         f"Agents present| {others}\n"
         f"{home_line}"
+        f"{other_homes}"
     )

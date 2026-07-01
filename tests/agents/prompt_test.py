@@ -139,3 +139,19 @@ def test_world_mechanics_describes_the_home_vault() -> None:
     # DD9 still holds: no goals / strategy / simulation language slipped in.
     for banned in FORBIDDEN_TERMS:
         assert banned not in lowered
+
+
+def test_world_mechanics_describes_break_in_and_ruins() -> None:
+    """L2c physics (DD9): enough beings together can break into another's home to take or seize it;
+    a home worn to nothing becomes ruins any passer-by may pick over. No goals/strategy/sim
+    language."""
+    from agents.prompt import WORLD_MECHANICS
+
+    lowered = WORLD_MECHANICS.lower()
+    assert "broken into" in lowered  # a home not yours can be broken into
+    assert "seize" in lowered  # ... to take its store or seize it
+    assert "ruin" in lowered  # a fallen home leaves ruins
+    assert "pick over" in lowered  # ... any passer-by may pick over
+    # The DD9 forbidden-words guard MUST stay green.
+    for banned in FORBIDDEN_TERMS:
+        assert banned not in lowered
