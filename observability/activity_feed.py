@@ -48,6 +48,7 @@ MAX_FEED_LINES: int = 200
 
 _EVENT_VERBS: dict[str, str] = {
     "speak": "spoke",
+    "self_talk": "murmured a private thought",
     "attack": "attacked someone",
     "agent_died": "died",
     "agent_decayed": "returned to the earth",
@@ -82,6 +83,9 @@ def render_event(event: Event) -> str:
         A single-line string suitable for the scrolling activity panel.
     """
     message = event.payload.get("message")
+    if event.type == "self_talk":
+        body = f"💭 {message}" if message else _EVENT_VERBS["self_talk"]
+        return f"[{event.source}] {body}"
     body = str(message) if message else _EVENT_VERBS.get(event.type, event.type)
     return f"[{event.source}] {body}"
 
