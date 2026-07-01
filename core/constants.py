@@ -151,14 +151,28 @@ INDEPENDENT — the same wall-time draws the same materials whether the tick run
 1s or every 5s (generalizes the mating 60s->600s lesson). Drawn from stockpile so an
 absent/slow owner still pays — no death-spiral (upkeep is materials, never energy)."""
 
-HOME_DECAY_PER_MISSED_TICK: Final[float] = 10.0
-"""Integrity a home loses on a world-tick its owner cannot pay upkeep (broke, dead, or
-swept). [design — 2026-07-01, Layer 1].
+HOME_REPAIR_PER_SECOND: Final[float] = 10.0
+"""Integrity a covered home heals per second on the world-tick (incremental repair).
+[design — 2026-07-01, Layer 2c].
 
-With :data:`HOME_MAX_INTEGRITY` = 100, a home weathers ~10 unpaid ticks before it
-collapses — deliberately far longer than an owner's breath gap so it never crumbles
-between breaths through no fault of its own. Retune upward if a slow sequential (Ollama)
-regime is revived, exactly like ``MATING_PROPOSAL_TIMEOUT_SECONDS``."""
+TIME-based: a covered tick adds ``HOME_REPAIR_PER_SECOND * (now - last_integrity_at)``
+(clamped to the stakeholder-scaled ceiling), so repair is tick-frequency-INDEPENDENT and
+a funded home stays at its ceiling regardless of cadence. Replaces L1's heal-to-full so
+break-in can accumulate (a breach no longer heals away before the next attempt). At +50
+per 5s tick a worn home recovers in a couple of covered ticks. A world-rule dial; the
+single most break-in-sensitive value — tune in the LIVE run."""
+
+HOME_DECAY_PER_SECOND: Final[float] = 2.0
+"""Integrity an unpaid home loses per second on the world-tick (time-based decay).
+[design — 2026-07-01, Layer 2c].
+
+TIME-based: a missed tick subtracts ``HOME_DECAY_PER_SECOND * (now - last_integrity_at)``.
+Set to reproduce the retired ``HOME_DECAY_PER_MISSED_TICK`` (10.0) at the default 5s tick
+(10/5 = 2.0/s), so a broke ``M(1)=100`` home still collapses in ~50s. Measuring from
+``last_integrity_at`` (advanced EVERY tick) — NOT from the arrears clock ``last_upkeep_at``
+(frozen on a miss) — is what keeps decay from accelerating into a death-spiral. A
+world-rule dial; retune upward for a slow sequential (Ollama) regime, like
+``MATING_PROPOSAL_TIMEOUT_SECONDS``."""
 
 HOME_BUILD_MATERIALS_COST: Final[float] = 80.0
 """Materials to raise a home. [design — 2026-07-01, Layer 1].
@@ -200,6 +214,45 @@ HOME_HEALTH_DIMINISH: Final[float] = 0.5
 
 ``max_integrity(s) = BASE + (CEIL-BASE) * (1 - DIMINISH ** (s-1))`` → M(1)=100, M(2)=150,
 M(3)=175, M(4)=187.5. Smaller = faster diminishing returns; kept ``<= 0.5``. A world-rule dial."""
+
+# ---------------------------------------------------------------------------
+# Homes (Layer 2c) — break-in / ruins
+# [design: docs/superpowers/specs/2026-07-01-materials-home-layer2c-design.md]
+# Game-of-Life dials: first-guess values, tuned by observation. Stability: coordination
+# must emerge discretely (a lone raider self-limits; a coordinated group makes net
+# progress against the now-incremental repair) and the raid cost must be a pure sink.
+# ---------------------------------------------------------------------------
+
+BREAKIN_INTEGRITY_DAMAGE: Final[float] = 25.0
+"""Integrity a single ``break_in`` removes from a home. [design — 2026-07-01, Layer 2c].
+
+Cumulative against the now-incremental repair: coordination emerges discretely — net progress
+needs ``Σ(break_ins in one ~5s window) * this > HOME_REPAIR_PER_SECOND * 5`` (> 2/window). A LIVE
+dial; fall back toward 15 if solo-cracking a lone M(1)=100 home dominates."""
+
+BREAKIN_ENERGY_COST: Final[float] = 15.0
+"""Energy a ``break_in`` drains from the raider — a PURE SINK (destroyed, credited to no one).
+[design — 2026-07-01, Layer 2c]. Mirrors ``ATTACK_ENERGY_COST`` so lone aggression self-limits."""
+
+BREAKIN_MATERIALS_COST: Final[float] = 10.0
+"""Materials a ``break_in`` drains from the raider — a PURE SINK (destroyed). [design — 2026-07-01,
+Layer 2c]. Per-attempt cost (25 mat-equiv with energy) keeps typical vaults net-negative to raid;
+only a hoard-tier (~300) vault repays a coordinated breach after the split + repair leakage."""
+
+RUINS_SCAVENGE_FRACTION: Final[float] = 0.5
+"""Fraction of a collapsed home's ``HOME_BUILD_MATERIALS_COST + vault`` that survives as a
+scavengeable remnant. [design — 2026-07-01, Layer 2c].
+
+MUST be ``< 1`` (a hard conservation floor, asserted): a build->collapse->scavenge loop must be a
+NET LOSS (build 80 -> recover 40), never a materials farm. The non-recovered fraction is the sink.
+Also converts 2b's untraceable collapse-destroys-the-vault loss into a partial, perceivable,
+scavengeable remnant. A world-rule dial."""
+
+RUINS_PERSIST_SECONDS: Final[float] = 120.0
+"""How long a ruin lingers (scavengeable) before the world-tick sweeps it. [design — 2026-07-01,
+Layer 2c]. Mirrors :data:`CORPSE_DECAY_SECONDS`: long enough for a passer-by to find and pick it
+over, short enough that ruins never clutter the world without bound (run-forever). A world-rule
+dial."""
 
 # ---------------------------------------------------------------------------
 # Mating

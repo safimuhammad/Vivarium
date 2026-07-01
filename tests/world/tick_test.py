@@ -23,16 +23,18 @@ from bus.event_bus import EventBus
 from bus.events import ScopeType
 from core.constants import (
     CORPSE_DECAY_SECONDS,
-    HOME_DECAY_PER_MISSED_TICK,
+    HOME_DECAY_PER_SECOND,
     HOME_MAX_INTEGRITY,
+    HOME_REPAIR_PER_SECOND,
     HOME_UPKEEP_MATERIALS_PER_SECOND,
     MATING_PROPOSAL_TIMEOUT_SECONDS,
+    RUINS_PERSIST_SECONDS,
 )
 from core.rng import make_rng
 from tests.conftest import SEED, FakeClock
 from tools.builtin.mating import initiate_mating, reject_mating
 from world.agents import AgentState, AgentStatus
-from world.homes import max_integrity
+from world.homes import HomeStatus, max_integrity
 from world.regions import Region, ResourceTypes
 from world.tick import _tick_once_resilient, tick
 from world.world import WorldState
@@ -349,7 +351,7 @@ async def test_tick_unpaid_upkeep_decays_integrity(
 
     home = world.home_of("wanderer_002")
     assert home is not None
-    assert home.integrity == HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK
+    assert home.integrity == HOME_MAX_INTEGRITY - HOME_DECAY_PER_SECOND * 10.0
     assert boris.current_materials == 0.0  # nothing drawn from a broke owner
 
 
@@ -378,7 +380,7 @@ async def test_tick_partial_materials_upkeep_is_all_or_nothing(
     assert home is not None
     assert boris.current_materials == 0.5  # unchanged: no partial draw
     assert home.last_upkeep_at == built_at  # NOT advanced
-    assert home.integrity == HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK
+    assert home.integrity == HOME_MAX_INTEGRITY - HOME_DECAY_PER_SECOND * 10.0
 
 
 async def test_tick_dead_owner_cannot_pay_decays_and_collapses(
@@ -389,14 +391,15 @@ async def test_tick_dead_owner_cannot_pay_decays_and_collapses(
         "home_boris", "wanderer_002", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
     )
     # Wear it to exactly one missed-tick from collapse.
-    world.modify_home_integrity("home_boris", -(HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK))
+    world.modify_home_integrity("home_boris", -(HOME_MAX_INTEGRITY - HOME_DECAY_PER_SECOND))
     world.kill_agent("wanderer_002")  # owner DEAD -> cannot pay
     event_bus.get_events("wanderer_001")  # drain the co-located witness's inbox
     fake_clock.advance(1.0)
 
     await tick(world, event_bus)
 
-    assert world.home_of("wanderer_002") is None  # collapsed and removed
+    ruin = world.get_home("home_boris")
+    assert ruin is not None and ruin.status is HomeStatus.RUIN  # collapse now leaves a ruin
     collapsed = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
     assert len(collapsed) == 1
     assert collapsed[0].scope is ScopeType.LOCAL
@@ -414,7 +417,7 @@ async def test_tick_swept_owner_missing_decays_and_collapses(
         "wanderer_002",
         "alpha",
         built_at=world.now(),
-        integrity=HOME_DECAY_PER_MISSED_TICK,  # one missed tick from ruin
+        integrity=HOME_DECAY_PER_SECOND,  # one missed tick from ruin
     )
     boris = world.get_agent("wanderer_002")
     assert boris is not None
@@ -425,7 +428,8 @@ async def test_tick_swept_owner_missing_decays_and_collapses(
 
     await tick(world, event_bus)
 
-    assert world.home_of("wanderer_002") is None
+    ruin = world.get_home("home_boris")
+    assert ruin is not None and ruin.status is HomeStatus.RUIN  # collapse now leaves a ruin
     collapsed = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
     assert len(collapsed) == 1
 
@@ -439,7 +443,7 @@ async def test_tick_home_collapse_fires_once(
         "wanderer_002",
         "alpha",
         built_at=world.now(),
-        integrity=HOME_DECAY_PER_MISSED_TICK,
+        integrity=HOME_DECAY_PER_SECOND,
     )
     world.kill_agent("wanderer_002")
 
@@ -447,12 +451,19 @@ async def test_tick_home_collapse_fires_once(
     await tick(world, event_bus)
     first = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
     assert len(first) == 1
+    ruin = world.get_home("home_boris")
+    assert ruin is not None and ruin.status is HomeStatus.RUIN  # collapse leaves a ruin, not None
 
-    fake_clock.advance(1.0)
+    fake_clock.advance(1.0)  # still well within the persist window
     await tick(world, event_bus)
     second = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_collapsed"]
     assert second == []
-    assert world.home_of("wanderer_002") is None
+    ruin_again = world.get_home("home_boris")
+    assert ruin_again is not None and ruin_again.status is HomeStatus.RUIN  # still lingering
+
+    fake_clock.advance(RUINS_PERSIST_SECONDS + 1.0)  # now past the persist window
+    await tick(world, event_bus)
+    assert world.get_home("home_boris") is None  # ruin swept after the persist window
 
 
 async def test_tick_home_upkeep_is_frequency_independent() -> None:
@@ -574,21 +585,22 @@ async def test_tick_collective_upkeep_none_decays_and_freezes() -> None:
     assert owner is not None and friend is not None and home is not None
     assert owner.current_materials == pytest.approx(0.2)  # untouched (all-or-nothing)
     assert friend.current_materials == pytest.approx(0.1)  # untouched
-    assert home.integrity == HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK  # decayed one step
+    assert home.integrity == HOME_MAX_INTEGRITY - HOME_DECAY_PER_SECOND * 10.0  # decayed one step
     assert home.last_upkeep_at == frozen_at  # frozen: arrears accrue (back-rent)
 
 
 async def test_tick_ownerless_home_with_no_living_payers_decays_to_collapse() -> None:
     """A home whose only stakeholder left (ghost owner) has no payer, so it decays and collapses."""
     world, bus, clock = _home_world(("owner_1", 100.0))
-    world.modify_home_integrity("h1", -(HOME_MAX_INTEGRITY - HOME_DECAY_PER_MISSED_TICK))  # -> 10
+    world.modify_home_integrity("h1", -(HOME_MAX_INTEGRITY - HOME_DECAY_PER_SECOND))  # -> 2
     world.remove_stakeholder("h1", "owner_1")  # last stakeholder gone; owner stays ghost
     bus.get_events("owner_1")  # drain
     clock.advance(1.0)
 
     await tick(world, bus)
 
-    assert world.get_home("h1") is None  # collapsed and removed
+    ruin = world.get_home("h1")
+    assert ruin is not None and ruin.status is HomeStatus.RUIN  # collapse now leaves a ruin
     collapsed = [e for e in bus.get_events("owner_1") if e.type == "home_collapsed"]
     assert len(collapsed) == 1
     assert collapsed[0].scope is ScopeType.LOCAL and collapsed[0].region == "alpha"
@@ -631,3 +643,132 @@ async def test_tick_promoted_costakeholder_pays_upkeep_after_owner_death() -> No
     assert home_after.last_upkeep_at == world.now()  # advanced: a covered tick
     assert dead_owner.current_materials == pytest.approx(100.0)  # untouched by death or upkeep
     assert [e for e in bus.get_events("wanderer_9") if e.type == "home_collapsed"] == []
+
+
+# ---- Incremental time-based repair/decay (L2c Task 1) ---------------------
+
+
+async def test_tick_repair_is_incremental_not_heal_to_full() -> None:
+    """A covered tick repairs +HOME_REPAIR_PER_SECOND*elapsed, NOT instantly to full.
+
+    This is what makes break-in cumulative: a breach out-paces incremental repair, not a
+    heal-to-full that would erase every mid-window blow.
+    """
+    world, bus, clock = _home_world(("owner_1", 100.0))  # solvent -> covered branch
+    world.modify_home_integrity("h1", -50.0)  # wear it to 50
+    home = world.get_home("h1")
+    assert home is not None
+    clock.advance(2.0)  # elapsed 2s -> +HOME_REPAIR_PER_SECOND*2 == +20
+
+    await tick(world, bus)
+
+    assert home.integrity == pytest.approx(50.0 + HOME_REPAIR_PER_SECOND * 2.0)  # NOT healed to 100
+    assert home.last_integrity_at == world.now()  # advanced on the covered tick
+
+
+async def test_tick_decay_is_time_based_and_does_not_accelerate() -> None:
+    """Two consecutive unpaid ticks each decay by rate*gap — decay never accelerates (MANDATORY #1).
+
+    The pre-fix bug measured decay from last_upkeep_at, which FREEZES on a missed tick, so each
+    successive missed tick saw a larger elapsed and decayed faster (a death-spiral ~2.5x too
+    fast). Driving decay from last_integrity_at (advanced every tick) makes each 5s unpaid tick
+    cost exactly HOME_DECAY_PER_SECOND*5 — twice in a row, not 10 then 30.
+    """
+    world, bus, clock = _home_world(("owner_1", 0.0))  # broke: never pays -> missed branch
+    home = world.get_home("h1")
+    assert home is not None
+    start = home.integrity  # 100
+
+    clock.advance(5.0)
+    await tick(world, bus)
+    after_one = home.integrity
+    assert after_one == pytest.approx(start - HOME_DECAY_PER_SECOND * 5.0)  # -10 -> 90
+    assert home.last_integrity_at == world.now()  # advanced on the missed tick
+
+    clock.advance(5.0)
+    await tick(world, bus)
+    # -10 AGAIN -> 80 (not -30): decay did not accelerate on the second consecutive missed tick.
+    assert home.integrity == pytest.approx(after_one - HOME_DECAY_PER_SECOND * 5.0)
+
+
+async def test_tick_funded_home_stays_at_ceiling_across_many_ticks() -> None:
+    """A funded home stays clamped at M(s) forever, never decaying (L1/2a non-regression)."""
+    world, bus, clock = _home_world(("owner_1", 1000.0))
+    home = world.get_home("h1")
+    assert home is not None
+    for _ in range(20):
+        clock.advance(3.0)
+        await tick(world, bus)
+    # == M(1) == 100, rate-independent.
+    assert home.integrity == max_integrity(len(home.stakeholders))
+
+
+# ---- RUIN status guard (L2c Task 2) ---------------------------------------
+
+
+async def test_tick_upkeep_skips_a_ruin(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """The upkeep sweep leaves a RUIN untouched — no decay, no draw, no collapse (MANDATORY #4)."""
+    world.build_home("home_ruin", "wanderer_002", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["home_ruin"].status = HomeStatus.RUIN  # manual (make_ruin is Task 5)
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    boris.current_materials = 0.0  # broke: a STANDING home here would decay
+    fake_clock.advance(10.0)
+
+    await tick(world, event_bus)
+
+    home = world.get_home("home_ruin")
+    assert home is not None and home.integrity == 40.0  # frozen, not decayed
+
+
+# ---- Breacher-clear on full repair (L2c Task 3, Fork D) --------------------
+
+
+async def test_tick_clears_breachers_when_fully_repaired() -> None:
+    """A repelled raid resets: breachers clear once a covered tick heals back to M(s) (Fork D)."""
+    world, bus, clock = _home_world(("owner_1", 100.0))
+    world.record_breacher("h1", "wanderer_9")  # a raider who gave up
+    world.modify_home_integrity("h1", -5.0)  # 100 -> 95 (one covered tick repairs it back)
+    clock.advance(5.0)  # +HOME_REPAIR_PER_SECOND*5 == +50 -> clamped to M(1)=100
+
+    await tick(world, bus)
+
+    home = world.get_home("h1")
+    assert home is not None and home.integrity == 100.0
+    assert home.breachers == set()  # cleared on full repair
+
+
+async def test_tick_keeps_breachers_while_not_fully_repaired() -> None:
+    """Breachers persist across a partial repair (the raid is not yet repelled)."""
+    world, bus, clock = _home_world(("owner_1", 100.0))
+    world.record_breacher("h1", "wanderer_9")
+    world.modify_home_integrity("h1", -80.0)  # 100 -> 20
+    clock.advance(2.0)  # +20 -> 40, still below the ceiling
+
+    await tick(world, bus)
+
+    home = world.get_home("h1")
+    assert home is not None and home.integrity == 40.0
+    assert home.breachers == {"wanderer_9"}  # not cleared
+
+
+# ---- Ruin sweep (L2c Task 5) -----------------------------------------------
+
+
+async def test_tick_sweeps_a_ruin_after_the_persist_window(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """A ruin lingers (scavengeable) until older than RUINS_PERSIST_SECONDS, then the tick
+    removes it."""
+    world.build_home("home_boris", "wanderer_002", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("home_boris")
+
+    fake_clock.advance(RUINS_PERSIST_SECONDS - 1.0)
+    await tick(world, event_bus)
+    assert world.get_home("home_boris") is not None  # still lingering
+
+    fake_clock.advance(2.0)  # now past the window
+    await tick(world, event_bus)
+    assert world.get_home("home_boris") is None  # swept

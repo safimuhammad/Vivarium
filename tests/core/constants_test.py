@@ -167,15 +167,19 @@ def test_home_integrity_dial_present() -> None:
     assert constants.HOME_MAX_INTEGRITY > 0.0
 
 
-def test_home_upkeep_and_decay_dials_present_and_sane() -> None:
-    """Upkeep/decay dials exist; a home weathers many missed ticks before it collapses."""
+def test_home_upkeep_repair_and_decay_dials_present_and_sane() -> None:
+    """Upkeep + incremental repair/decay dials exist; repair out-paces decay; collapse is slow."""
     assert isinstance(constants.HOME_UPKEEP_MATERIALS_PER_SECOND, float)
     assert constants.HOME_UPKEEP_MATERIALS_PER_SECOND > 0.0
-    assert isinstance(constants.HOME_DECAY_PER_MISSED_TICK, float)
-    assert 0.0 < constants.HOME_DECAY_PER_MISSED_TICK <= constants.HOME_MAX_INTEGRITY
-    # Collapse-when-broke must be far slower than the owner's breath gap (the mating
-    # 60s->600s lesson): a home must not crumble between an owner's breaths.
-    assert constants.HOME_MAX_INTEGRITY / constants.HOME_DECAY_PER_MISSED_TICK >= 5.0
+    assert isinstance(constants.HOME_REPAIR_PER_SECOND, float)
+    assert isinstance(constants.HOME_DECAY_PER_SECOND, float)
+    # A funded home must out-heal its wear, or a covered tick could still net-lose integrity.
+    assert constants.HOME_REPAIR_PER_SECOND > constants.HOME_DECAY_PER_SECOND > 0.0
+    # Collapse-when-broke must be far slower than a breath gap (the mating 60s->600s lesson):
+    # M(1)=100 at 2.0/s decays over 50s, many breaths.
+    assert constants.HOME_MAX_INTEGRITY / constants.HOME_DECAY_PER_SECOND >= 5.0
+    # The flat per-missed-tick dial is retired in favour of the per-second dial.
+    assert not hasattr(constants, "HOME_DECAY_PER_MISSED_TICK")
 
 
 def test_home_build_cost_competes_with_mating() -> None:
@@ -215,3 +219,21 @@ def test_home_health_constants_present_and_honor_anti_blob() -> None:
     # finite stakeholders (1 excluded), and the curve must not be so shallow that a
     # second stakeholder alone nearly reaches the cap (<= 0.5, per Task 2's formula).
     assert 0.0 < constants.HOME_HEALTH_DIMINISH <= 0.5
+
+
+def test_breakin_dials_present_and_positive() -> None:
+    """The break-in cost/damage dials exist and are positive floats (pure sinks)."""
+    assert isinstance(constants.BREAKIN_INTEGRITY_DAMAGE, float)
+    assert constants.BREAKIN_INTEGRITY_DAMAGE > 0.0
+    assert isinstance(constants.BREAKIN_ENERGY_COST, float) and constants.BREAKIN_ENERGY_COST > 0.0
+    assert isinstance(constants.BREAKIN_MATERIALS_COST, float)
+    assert constants.BREAKIN_MATERIALS_COST > 0.0
+
+
+def test_ruins_dials_present_and_conserving() -> None:
+    """The ruins dials exist; the scavenge fraction is strictly < 1 (a build->ruin farm is a net
+    loss)."""
+    assert isinstance(constants.RUINS_SCAVENGE_FRACTION, float)
+    assert 0.0 < constants.RUINS_SCAVENGE_FRACTION < 1.0  # < 1 is the hard conservation floor
+    assert isinstance(constants.RUINS_PERSIST_SECONDS, float)
+    assert constants.RUINS_PERSIST_SECONDS > 0.0

@@ -24,23 +24,33 @@ import pytest
 from bus.event_bus import EventBus
 from bus.events import ScopeType
 from core.constants import (
+    BREAKIN_ENERGY_COST,
+    BREAKIN_INTEGRITY_DAMAGE,
+    BREAKIN_MATERIALS_COST,
     HEARTH_ENERGY_PER_MATERIAL,
     HEARTH_MATERIALS_PER_USE,
     HOARDING_ENERGY_THRESHOLD,
     HOARDING_MATERIALS_THRESHOLD,
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
+    RUINS_PERSIST_SECONDS,
 )
+from core.rng import make_rng
+from tests.conftest import SEED, FakeClock
 from tools.builtin.homes import (
+    break_in,
     build_home,
     deposit_to_home,
     leave_home,
     pledge_home,
+    scavenge_ruins,
     use_hearth,
     withdraw_from_home,
 )
-from world.agents import AgentStatus, is_hoarding
-from world.homes import home_is_hoarding
+from world.agents import AgentState, AgentStatus, is_hoarding
+from world.homes import HomeStatus, home_is_hoarding
+from world.regions import Region
+from world.tick import tick
 from world.world import WorldState
 
 # ---- build_home -----------------------------------------------------------
@@ -891,3 +901,756 @@ async def test_deposit_then_withdraw_conserves_total_materials_and_energy(
 
     assert total_materials(world) == pytest.approx(materials_before)  # nothing minted/lost
     assert total_energy(world) == pytest.approx(energy_before)  # vault is materials-only
+
+
+# ---- RUIN status guards (L2c Task 2) --------------------------------------
+
+
+async def test_pledge_home_to_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    """A being cannot pledge to a ruin (get_home returns it, so this guard is real)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["h1"].status = HomeStatus.RUIN
+    result = await pledge_home(world, event_bus, "wanderer_002", "h1")
+    assert result.startswith("Invalid:")
+    assert world.is_stakeholder("h1", "wanderer_002") is False
+
+
+async def test_use_hearth_in_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    """A stakeholder cannot hearth in a ruin (defence-in-depth: kept as a stakeholder here)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["home_ada"].status = HomeStatus.RUIN  # keep stakeholders (do NOT use make_ruin)
+    ada.current_materials = 50.0
+    result = await use_hearth(world, event_bus, "wanderer_001")
+    assert result.startswith("Invalid:")
+    assert ada.current_materials == 50.0  # nothing burned
+
+
+async def test_deposit_to_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["home_ada"].status = HomeStatus.RUIN
+    ada.current_materials = 100.0
+    result = await deposit_to_home(world, event_bus, "wanderer_001", 20.0)
+    assert result.startswith("Invalid:")
+    assert ada.current_materials == 100.0 and world.homes["home_ada"].vault_materials == 0.0
+
+
+async def test_withdraw_from_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.deposit_to_home_vault("home_ada", 40.0)
+    world.homes["home_ada"].status = HomeStatus.RUIN
+    result = await withdraw_from_home(world, event_bus, "wanderer_001", 10.0)
+    assert result.startswith("Invalid:")
+    assert world.homes["home_ada"].vault_materials == 40.0
+
+
+async def test_leave_a_ruin_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["h1"].status = HomeStatus.RUIN  # keep the owner as a stakeholder
+    result = await leave_home(world, event_bus, "wanderer_001")
+    assert result.startswith("Invalid:")
+    assert world.is_stakeholder("h1", "wanderer_001") is True  # still bound
+
+
+# ---- break_in (L2c Task 3) -------------------------------------------------
+
+
+def _add_raiders(world: WorldState, event_bus: EventBus, *ids: str) -> None:
+    """Add ALIVE, well-supplied raiders co-located in ``alpha`` (subscribed to the bus)."""
+    for rid in ids:
+        world.add_agent(
+            AgentState(
+                id=rid,
+                name=rid.title(),
+                persona="p",
+                current_position="alpha",
+                current_energy=100.0,
+                current_materials=100.0,
+                status=AgentStatus.ALIVE,
+            )
+        )
+        event_bus.subscribe(rid)
+
+
+async def test_break_in_damages_integrity_and_records_the_breacher(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A valid break_in wears the home by BREAKIN_INTEGRITY_DAMAGE and records the raider."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    boris = world.get_agent("wanderer_002")  # co-located, NOT a stakeholder of h1
+    assert boris is not None
+
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.integrity == 100.0 - BREAKIN_INTEGRITY_DAMAGE  # 75
+    assert home.breachers == {"wanderer_002"}
+    assert home.status is HomeStatus.STANDING
+    assert result.startswith("You batter")
+
+
+async def test_break_in_cost_is_a_pure_sink(world: WorldState, event_bus: EventBus) -> None:
+    """The energy+materials cost is destroyed — credited to NO agent/region/vault
+    (conservation)."""
+
+    def total_energy(w: WorldState) -> float:
+        return sum(a.current_energy for a in w.get_all_agents()) + sum(
+            r.current_energy for r in w.get_all_regions()
+        )
+
+    def total_materials(w: WorldState) -> float:
+        return (
+            sum(a.current_materials for a in w.get_all_agents())
+            + sum(r.current_materials for r in w.get_all_regions())
+            + sum(h.vault_materials for h in w.get_all_homes())
+        )
+
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    boris.current_materials = 100.0  # round starting balance (fixture default is 50.0)
+    e0, m0 = total_energy(world), total_materials(world)
+
+    await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    assert boris.current_energy == 100.0 - BREAKIN_ENERGY_COST
+    assert boris.current_materials == 100.0 - BREAKIN_MATERIALS_COST
+    assert total_energy(world) == pytest.approx(e0 - BREAKIN_ENERGY_COST)  # gone, not moved
+    assert total_materials(world) == pytest.approx(m0 - BREAKIN_MATERIALS_COST)
+
+
+async def test_break_in_breaches_at_zero_and_announces(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A blow driving integrity <= 0 breaches: home_breached fires; home STANDING at 0
+    (outcome is Task 4)."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=BREAKIN_INTEGRITY_DAMAGE
+    )  # one blow from breach
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.integrity == 0.0
+    assert home.status is HomeStatus.STANDING  # Task 4 executes the intent; here it just breaches
+    breached = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_breached"]
+    assert len(breached) == 1
+    assert breached[0].scope is ScopeType.LOCAL and breached[0].region == "alpha"
+    assert "break" in result.lower()
+
+
+async def test_break_in_lone_raider_is_out_healed_across_a_window(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """A lone raider (1 blow/window) is out-healed by one covered repair tick and burns
+    resources."""
+    ada = world.get_agent("wanderer_001")
+    boris = world.get_agent("wanderer_002")
+    assert ada is not None and boris is not None
+    ada.current_materials = 1000.0  # owner solvent -> covered repair every tick
+    boris.current_materials = 100.0  # round starting balance (fixture default is 50.0)
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+
+    await break_in(world, event_bus, "wanderer_002", "h1", "thieve")  # -25 -> 75
+    fake_clock.advance(5.0)
+    await tick(world, event_bus)  # +HOME_REPAIR_PER_SECOND*5 == +50 -> clamped to 100
+
+    home = world.get_home("h1")
+    assert home is not None and home.integrity == 100.0  # out-healed, no progress
+    # But the raider still paid (self-limiting).
+    assert boris.current_energy == 100.0 - BREAKIN_ENERGY_COST
+    assert boris.current_materials == 100.0 - BREAKIN_MATERIALS_COST
+
+
+async def test_break_in_coordinated_group_out_damages_one_repair_window(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """Three raiders in one window out-damage a single repair tick (> 2/window -> net progress)."""
+    ada = world.get_agent("wanderer_001")
+    assert ada is not None
+    ada.current_materials = 1000.0
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    _add_raiders(world, event_bus, "raider_a", "raider_b")  # + wanderer_002 = three raiders
+
+    for rid in ("wanderer_002", "raider_a", "raider_b"):  # 3 * 25 == 75 in one window
+        await break_in(world, event_bus, rid, "h1", "thieve")
+    home = world.get_home("h1")
+    assert home is not None and home.integrity == 25.0  # 100 - 75
+
+    fake_clock.advance(5.0)
+    await tick(world, event_bus)  # covered repair +50 -> 75 (< 100: the group made net progress)
+    assert home.integrity == 75.0
+    # Accumulated (not fully repaired).
+    assert home.breachers == {"wanderer_002", "raider_a", "raider_b"}
+
+
+async def test_break_in_guards(world: WorldState, event_bus: EventBus) -> None:
+    """Every guard rejects with no mutation: bad intent, unknown home, own home, not
+    co-located, too poor."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    ada = world.get_agent("wanderer_001")
+    boris = world.get_agent("wanderer_002")
+    assert ada is not None and boris is not None
+
+    bad_intent = await break_in(world, event_bus, "wanderer_002", "h1", "wreck")
+    assert bad_intent.startswith("Invalid:")
+    no_home = await break_in(world, event_bus, "wanderer_002", "nope", "thieve")
+    assert no_home.startswith("Error:")
+    own_home = await break_in(world, event_bus, "wanderer_001", "h1", "thieve")
+    assert own_home.startswith("Invalid:")
+    assert world.move_agent("wanderer_002", "beta") is True
+    not_co_located = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+    assert not_co_located.startswith("Invalid:")
+    assert world.move_agent("wanderer_002", "alpha") is True
+    boris.current_materials = BREAKIN_MATERIALS_COST - 1.0  # too poor
+    assert (await break_in(world, event_bus, "wanderer_002", "h1", "thieve")).startswith("Invalid:")
+    assert world.homes["h1"].integrity == 100.0  # nothing above ever damaged the home
+    assert world.homes["h1"].breachers == set()
+
+
+async def test_break_in_unknown_raider_is_an_error(world: WorldState, event_bus: EventBus) -> None:
+    """An unknown raider id is rejected with Error: and never touches the target home."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+
+    result = await break_in(world, event_bus, "ghost_999", "h1", "thieve")
+
+    assert result.startswith("Error:")
+    assert world.homes["h1"].integrity == 100.0
+    assert world.homes["h1"].breachers == set()
+    for kind in ("home_breached", "home_thieved", "home_colonized"):
+        assert not [e for e in event_bus.get_events("wanderer_001") if e.type == kind]
+
+
+async def test_break_in_paralyzed_raider_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    """A PARALYZED raider cannot force a home; the guard rejects before any mutation."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    world.update_agent_status("wanderer_002", AgentStatus.PARALYZED)
+
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    assert result.startswith("Invalid:")
+    assert world.homes["h1"].integrity == 100.0
+    assert world.homes["h1"].breachers == set()
+    for kind in ("home_breached", "home_thieved", "home_colonized"):
+        assert not [e for e in event_bus.get_events("wanderer_001") if e.type == kind]
+
+
+async def test_break_in_ruin_target_is_invalid(world: WorldState, event_bus: EventBus) -> None:
+    """A target already reduced to a ruin cannot be broken into; nothing is mutated."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["h1"].status = HomeStatus.RUIN
+
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    assert result.startswith("Invalid:")
+    assert world.homes["h1"].integrity == 40.0
+    assert world.homes["h1"].breachers == set()
+    for kind in ("home_breached", "home_thieved", "home_colonized"):
+        assert not [e for e in event_bus.get_events("wanderer_001") if e.type == kind]
+
+
+# ---- break_in thieve outcome (L2c Task 4a) ---------------------------------
+
+
+async def test_break_in_thieve_splits_vault_conserved_and_leaves_standing_at_zero(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """The breaching blow with intent=thieve splits the vault among co-located living breachers,
+    zeros it, leaves the home STANDING at 0 (MANDATORY #2), and conserves the materials moved."""
+    world.build_home(
+        "h1",
+        "wanderer_001",
+        "alpha",
+        built_at=world.now(),
+        integrity=2 * BREAKIN_INTEGRITY_DAMAGE,
+    )  # two blows from breach
+    world.deposit_to_home_vault("h1", 90.0)
+    _add_raiders(world, event_bus, "raider_a")
+    boris = world.get_agent("wanderer_002")
+    raider_a = world.get_agent("raider_a")
+    assert boris is not None and raider_a is not None
+    boris.current_materials = 40.0
+    raider_a.current_materials = 40.0
+
+    # raider_a: -25 -> 25 (pre-breach, records raider_a).
+    await break_in(world, event_bus, "raider_a", "h1", "thieve")
+    # wanderer_002: -25 -> 0 -> breach + thieve.
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.status is HomeStatus.STANDING  # MANDATORY #2: standing at 0, NOT a ruin
+    assert home.integrity == 0.0
+    assert home.vault_materials == 0.0  # emptied
+    # 90 split two ways == 45 each (remainder to the final striker, wanderer_002).
+    assert boris.current_materials == pytest.approx(40.0 - BREAKIN_MATERIALS_COST + 45.0)
+    assert raider_a.current_materials == pytest.approx(40.0 - BREAKIN_MATERIALS_COST + 45.0)
+    thieved = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_thieved"]
+    assert len(thieved) == 1
+    assert thieved[0].scope is ScopeType.LOCAL and thieved[0].region == "alpha"
+    assert "strip" in result.lower()
+
+
+async def test_break_in_thieve_excludes_departed_or_dead_breachers(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A breacher who left the region (or died) is not a recipient; the whole vault still goes to
+    the remaining co-located living breachers (Σ == vault; remainder to the final striker)."""
+    world.build_home(
+        "h1",
+        "wanderer_001",
+        "alpha",
+        built_at=world.now(),
+        integrity=2 * BREAKIN_INTEGRITY_DAMAGE,
+    )
+    world.deposit_to_home_vault("h1", 100.0)
+    _add_raiders(world, event_bus, "raider_a")
+    boris = world.get_agent("wanderer_002")
+    raider_a = world.get_agent("raider_a")
+    assert boris is not None and raider_a is not None
+    boris.current_materials = 0.0
+
+    # Records raider_a, integrity -> 25.
+    await break_in(world, event_bus, "raider_a", "h1", "thieve")
+    assert world.move_agent("raider_a", "beta") is True  # raider_a wanders off before the breach
+    # wanderer_002 needs to afford the cost; give it materials for the break_in fee only.
+    boris.current_materials = BREAKIN_MATERIALS_COST
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")  # breach + thieve
+
+    home = world.get_home("h1")
+    assert home is not None and home.vault_materials == 0.0
+    # Only wanderer_002 is co-located+alive -> it takes the whole 100 (remainder-to-final-striker).
+    assert boris.current_materials == pytest.approx(100.0)  # 0 after paying the fee, +100 loot
+    assert "strip" in result.lower()
+
+
+@pytest.mark.parametrize("n_alive", [3, 4, 5, 6, 7, 8])
+async def test_break_in_thieve_conserves_vault_within_tolerance_for_three_or_more_recipients(
+    world: WorldState, event_bus: EventBus, n_alive: int
+) -> None:
+    """For N>=3 co-located ALIVE recipients the equal per-capita float split cannot sum back to
+    the pre-theft vault bit-exactly (see the ``break_in`` docstring: at most ~N*ULP of float
+    noise), so conservation is asserted within a tolerance here, unlike the N in {1, 2} tests
+    above which are exact. A DEAD breacher and a departed (different-region) breacher are also
+    seeded among the breachers and must receive nothing."""
+
+    def _materials(w: WorldState, agent_id: str) -> float:
+        peer = w.get_agent(agent_id)
+        assert peer is not None
+        return peer.current_materials
+
+    vault_amount = 137.0
+    # Built one blow from breach: only the final striker (below) lands a real break_in() call.
+    # Every other breacher is seeded straight into `breachers` (see below) because sequentially
+    # landing N+2 real blows (one per breacher, plus the final one) would need more integrity
+    # headroom than a home's stakeholder-scaled cap ever provides (max_integrity() < 200).
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=BREAKIN_INTEGRITY_DAMAGE
+    )
+    world.deposit_to_home_vault("h1", vault_amount)
+
+    # N co-located, ALIVE recipients: (n_alive - 1) pre-recorded primers + 1 final striker.
+    alive_ids = [f"alive_{i}" for i in range(n_alive)]
+    _add_raiders(world, event_bus, *alive_ids)
+    final_striker, primers = alive_ids[-1], alive_ids[:-1]
+    for primer_id in primers:
+        world.record_breacher("h1", primer_id)
+
+    # A breacher who died before the breach, and one who wandered off before it -- both must be
+    # excluded from the split entirely (recorded while ALIVE and co-located, same as a real raid).
+    _add_raiders(world, event_bus, "dead_raider", "departed_raider")
+    world.record_breacher("h1", "dead_raider")
+    world.record_breacher("h1", "departed_raider")
+    world.update_agent_status("dead_raider", AgentStatus.DEAD)
+    assert world.move_agent("departed_raider", "beta") is True
+    dead_materials_before = _materials(world, "dead_raider")
+    departed_materials_before = _materials(world, "departed_raider")
+
+    materials_before = {aid: _materials(world, aid) for aid in alive_ids}
+
+    result = await break_in(world, event_bus, final_striker, "h1", "thieve")
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.status is HomeStatus.STANDING  # never ruined here (MANDATORY #2)
+    assert home.vault_materials == 0.0  # the debit itself is exact; only the credits can drift
+
+    # Sum of credited loot across the alive recipients: snapshot each one's materials before and
+    # after, sum the deltas, then add BREAKIN_MATERIALS_COST back exactly once. The final striker
+    # alone pays that fee *inside* this same call (before its remainder credit), so its raw delta
+    # is (remainder_credit - fee); every other recipient's delta is already pure share-credit.
+    # Adding the fee back once therefore isolates the total credited loot for the whole group.
+    total_gain = sum(_materials(world, aid) - materials_before[aid] for aid in alive_ids)
+    total_loot_credited = total_gain + BREAKIN_MATERIALS_COST
+    assert total_loot_credited == pytest.approx(vault_amount, abs=1e-9)
+
+    # The DEAD and departed breachers were never touched.
+    assert _materials(world, "dead_raider") == dead_materials_before
+    assert _materials(world, "departed_raider") == departed_materials_before
+    assert "strip" in result.lower()
+
+
+# ---- break_in colonize outcome (L2c Task 4b) -------------------------------
+
+
+async def test_break_in_colonize_seizes_owner_and_homeless_breachers(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """intent=colonize: final striker -> owner; only homeless co-located living breachers ->
+    stakeholders; priors evicted; vault+structure retained; integrity ~0; home_colonized fires."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=2 * BREAKIN_INTEGRITY_DAMAGE
+    )
+    world.deposit_to_home_vault("h1", 30.0)  # retained through colonize
+    _add_raiders(world, event_bus, "raider_a")  # homeless raider
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    await break_in(world, event_bus, "raider_a", "h1", "colonize")  # pre-breach, records raider_a
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "colonize")  # breach + colonize
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.status is HomeStatus.STANDING
+    assert home.owner_id == "wanderer_002"  # final striker
+    assert set(home.stakeholders) == {
+        "wanderer_002",
+        "raider_a",
+    }  # both homeless + co-located + alive
+    assert "wanderer_001" not in home.stakeholders  # prior owner evicted
+    assert home.vault_materials == 30.0  # retained
+    # A seized home starts with a clean slate: the new owners were just recorded as breachers
+    # mid-breach, and left uncleared they'd still count as raiders of their OWN new home (so a
+    # later thieve, before the next full repair, would wrongly cut them in on their own vault).
+    assert home.breachers == set()
+    colonized = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_colonized"]
+    assert len(colonized) == 1
+    assert "seiz" in result.lower() or "take it" in result.lower()
+
+
+async def test_break_in_colonize_enrolls_only_homeless_breachers(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A breacher that already stakes another home merely participates — it is not enrolled
+    (MANDATORY #3)."""
+    world.build_home(
+        "target",
+        "wanderer_001",
+        "alpha",
+        built_at=world.now(),
+        integrity=2 * BREAKIN_INTEGRITY_DAMAGE,
+    )
+    world.build_home("raider_a_home", "raider_a", "alpha", built_at=world.now(), integrity=100.0)
+    _add_raiders(world, event_bus)  # raider_a already added by build; ensure subscribed
+    event_bus.subscribe("raider_a")
+    raider_a = world.get_agent("raider_a")
+    if raider_a is None:
+        world.add_agent(
+            AgentState(
+                id="raider_a",
+                name="Raider_A",
+                persona="p",
+                current_position="alpha",
+                current_energy=100.0,
+                current_materials=100.0,
+                status=AgentStatus.ALIVE,
+            )
+        )
+    world.add_stakeholder("raider_a_home", "raider_a")  # raider_a is homed
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    await break_in(world, event_bus, "raider_a", "target", "colonize")  # records raider_a (homed)
+    await break_in(world, event_bus, "wanderer_002", "target", "colonize")  # breach + colonize
+
+    home = world.get_home("target")
+    assert home is not None
+    assert home.owner_id == "wanderer_002"
+    assert home.stakeholders == ["wanderer_002"]  # raider_a NOT enrolled (already homed)
+    assert world.stakeholder_home_of("raider_a") is not None  # keeps its own home
+
+
+async def test_break_in_colonize_auto_detaches_a_homed_final_striker(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A final striker that already holds a home is auto-detached from it before taking the new
+    one, preserving at-most-one-home (MANDATORY #3)."""
+    world.build_home(
+        "target", "wanderer_001", "alpha", built_at=world.now(), integrity=BREAKIN_INTEGRITY_DAMAGE
+    )  # one blow from breach
+    world.build_home("boris_home", "wanderer_002", "alpha", built_at=world.now(), integrity=100.0)
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    result = await break_in(
+        world, event_bus, "wanderer_002", "target", "colonize"
+    )  # breach + colonize
+
+    target = world.get_home("target")
+    assert target is not None and target.owner_id == "wanderer_002"
+    # At-most-one-home: wanderer_002's ONLY home is now the colonized target.
+    home_now = world.stakeholder_home_of("wanderer_002")
+    assert home_now is not None and home_now.home_id == "target"
+    assert world.is_stakeholder("boris_home", "wanderer_002") is False  # detached from the old home
+    assert "seiz" in result.lower() or "take it" in result.lower()
+
+
+async def test_break_in_colonize_non_breaching_is_a_pure_battering_no_seizure(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A colonize-intent break_in that does NOT breach only batters the home: ownership and
+    stakeholders are untouched and no home_colonized fires (the intent only ever executes on
+    the breaching blow, same guard as thieve)."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=3 * BREAKIN_INTEGRITY_DAMAGE
+    )  # two blows from breach
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "colonize")
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.integrity == 2 * BREAKIN_INTEGRITY_DAMAGE  # damaged, not breached
+    assert home.status is HomeStatus.STANDING
+    assert home.owner_id == "wanderer_001"  # unchanged
+    assert home.stakeholders == ["wanderer_001"]  # unchanged -- no seizure
+    colonized = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_colonized"]
+    assert colonized == []  # the intent never fires on a non-breaching blow
+    assert "batter" in result.lower()
+
+
+# ---- scavenge_ruins (L2c Task 5) -------------------------------------------
+
+
+async def test_scavenge_ruins_moves_remnant_to_personal_conserving(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A co-located being draws remnant -> personal, exactly (remnant down == personal up);
+    ruins_scavenged fires."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("h1")
+    remnant = world.homes["h1"].remnant_materials
+    boris = world.get_agent("wanderer_002")  # co-located, anyone may scavenge
+    assert boris is not None
+    boris.current_materials = 0.0
+
+    result = await scavenge_ruins(world, event_bus, "wanderer_002", "h1", 15.0)
+
+    assert world.homes["h1"].remnant_materials == pytest.approx(remnant - 15.0)
+    assert boris.current_materials == pytest.approx(15.0)  # moved, not minted
+    scav = [e for e in event_bus.get_events("wanderer_002") if e.type == "ruins_scavenged"]
+    assert len(scav) == 1 and scav[0].scope is ScopeType.LOCAL and scav[0].region == "alpha"
+    assert result.startswith("You pick")
+
+
+async def test_scavenge_ruins_unknown_agent_is_error(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A missing being cannot scavenge (defensive: the registry also guards this)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("h1")
+    remnant_before = world.homes["h1"].remnant_materials
+
+    result = await scavenge_ruins(world, event_bus, "ghost", "h1", 5.0)
+
+    assert result.startswith("Error:")
+    assert world.homes["h1"].remnant_materials == remnant_before  # nothing taken
+
+
+async def test_scavenge_ruins_while_paralyzed_is_invalid(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A fallen being cannot pick over ruins (mirrors the other home tools' ALIVE guard)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("h1")
+    remnant_before = world.homes["h1"].remnant_materials
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    world.modify_agent_energy("wanderer_002", -(boris.current_energy - 1.0))  # -> PARALYZED
+    assert boris.status is AgentStatus.PARALYZED
+
+    result = await scavenge_ruins(world, event_bus, "wanderer_002", "h1", 5.0)
+
+    assert result.startswith("Invalid:")
+    assert world.homes["h1"].remnant_materials == remnant_before  # nothing taken
+
+
+async def test_scavenge_ruins_non_positive_amount_is_rejected(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A zero/negative amount is rejected before any mutation (shared amount coercion)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("h1")
+    remnant_before = world.homes["h1"].remnant_materials
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    materials_before = boris.current_materials
+
+    result = await scavenge_ruins(world, event_bus, "wanderer_002", "h1", -5.0)
+
+    assert result.startswith("Invalid:")
+    assert world.homes["h1"].remnant_materials == remnant_before  # nothing taken
+    assert boris.current_materials == materials_before  # nothing minted
+
+
+async def test_scavenge_ruins_guards(world: WorldState, event_bus: EventBus) -> None:
+    """Guards: unknown ruins (Error), a STANDING home (Invalid), not co-located (Invalid),
+    picked-clean (Invalid)."""
+    world.build_home("standing", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    world.build_home("ruin", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("ruin")
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+
+    no_ruin = await scavenge_ruins(world, event_bus, "wanderer_002", "nope", 5.0)
+    assert no_ruin.startswith("Error:")
+    still_standing = await scavenge_ruins(world, event_bus, "wanderer_002", "standing", 5.0)
+    assert still_standing.startswith("Invalid:")
+    assert world.move_agent("wanderer_002", "beta") is True
+    assert (await scavenge_ruins(world, event_bus, "wanderer_002", "ruin", 5.0)).startswith(
+        "Invalid:"
+    )  # not co-located
+    assert world.move_agent("wanderer_002", "alpha") is True
+    world.scavenge_ruin("ruin", world.homes["ruin"].remnant_materials)  # empty it
+    assert (await scavenge_ruins(world, event_bus, "wanderer_002", "ruin", 5.0)).startswith(
+        "Invalid:"
+    )  # picked clean
+
+
+async def test_scavenge_ruins_caps_at_remnant(world: WorldState, event_bus: EventBus) -> None:
+    """Over-asking takes only what remains (no mint)."""
+    world.build_home("ruin", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("ruin")
+    remnant = world.homes["ruin"].remnant_materials
+    boris = world.get_agent("wanderer_002")
+    assert boris is not None
+    boris.current_materials = 0.0
+    await scavenge_ruins(world, event_bus, "wanderer_002", "ruin", 10_000.0)
+    assert boris.current_materials == pytest.approx(remnant)  # only what remained
+    assert world.homes["ruin"].remnant_materials == 0.0
+
+
+# ---- full raid lifecycle conservation property test (L2c Task 7) ----------
+
+
+async def test_full_raid_lifecycle_conserves_materials_and_never_mints_energy(
+    fake_clock: FakeClock,
+) -> None:
+    """The whole contest layer conserves: build -> deposit -> coordinated break_in -> thieve ->
+    collapse-to-ruin -> scavenge -> sweep never RAISES total materials (only region regen would,
+    and it is zero here) and never mints energy.
+
+    Total materials counts each STANDING home's immobilised structure (HOME_BUILD_MATERIALS_COST) +
+    vault and each RUIN's remnant, so a build (agent -> structure) and a ruin (structure -> partial
+    remnant + sink) are a move-or-sink, never a mint. break_in cost + upkeep + the ruin fraction are
+    the only sinks; the total is asserted strictly non-increasing at every step.
+    """
+    region = Region(
+        name="alpha",
+        description="A field.",
+        connections=[],
+        energy_rate=0.0,
+        materials_rate=0.0,
+        current_energy=0.0,
+        current_materials=0.0,
+        max_energy=10_000.0,
+        max_materials=10_000.0,  # zero regen -> totals strictly non-increasing
+    )
+    beings = [
+        AgentState(
+            id=aid,
+            name=aid.title(),
+            persona="p",
+            current_position="alpha",
+            current_energy=500.0,
+            current_materials=300.0,
+            status=AgentStatus.ALIVE,
+        )
+        for aid in ("owner_1", "raider_1", "raider_2", "raider_3")
+    ]
+    # owner_1 has exactly enough to build + fill the vault, so it is BROKE after -> unpaid ->
+    # the thieved (integrity-0) home decays to a ruin on the next tick (no repair complication).
+    owner = beings[0]
+    owner.current_materials = HOME_BUILD_MATERIALS_COST + 200.0
+    world = WorldState([region], beings, rng=make_rng(SEED), clock=fake_clock)
+    bus = EventBus(world)
+    for b in beings:
+        bus.subscribe(b.id)
+
+    def total_materials(w: WorldState) -> float:
+        homes = 0.0
+        for h in w.get_all_homes():
+            if h.status is HomeStatus.STANDING:
+                homes += HOME_BUILD_MATERIALS_COST + h.vault_materials
+            else:
+                homes += h.remnant_materials
+        return (
+            sum(a.current_materials for a in w.get_all_agents())
+            + sum(r.current_materials for r in w.get_all_regions())
+            + homes
+        )
+
+    def total_energy(w: WorldState) -> float:
+        return sum(a.current_energy for a in w.get_all_agents()) + sum(
+            r.current_energy for r in w.get_all_regions()
+        )
+
+    m, e = total_materials(world), total_energy(world)
+
+    def step(label: str) -> None:
+        nonlocal m, e
+        m1, e1 = total_materials(world), total_energy(world)
+        assert m1 <= m + 1e-9, f"{label}: materials ROSE {m} -> {m1}"
+        assert e1 <= e + 1e-9, f"{label}: energy MINTED {e} -> {e1}"
+        m, e = m1, e1
+
+    await build_home(world, bus, "owner_1")
+    step("build")  # agent -80 ; structure +80 => net 0
+    home = world.home_of("owner_1")
+    assert home is not None
+    hid = home.home_id
+
+    await deposit_to_home(world, bus, "owner_1", 200.0)  # a hoard-tier vault worth raiding
+    step("deposit")  # agent -200 ; vault +200 => net 0
+    assert owner.current_materials == 0.0  # broke -> the wreck will not be repaired
+
+    # Coordinated break_in: cycle three raiders (no tick between -> owner broke, no repair)
+    # until the blow breaches (M(1)=100 -> four 25-blows). The 4th thieves + splits the vault.
+    for i, rid in enumerate(("raider_1", "raider_2", "raider_3", "raider_1")):
+        result = await break_in(world, bus, rid, hid, "thieve")
+        step(f"break_in-{i}")  # each: agent -15 energy / -10 materials PURE SINK
+        if "strip" in result.lower():
+            break
+    assert home.status is HomeStatus.STANDING  # thieved: standing at 0, never a ruin
+    assert home.vault_materials == 0.0
+    step("thieve")  # vault -200 ; breachers +200 => net 0
+
+    # The unpaid, integrity-0 home collapses to a RUIN on the next tick.
+    fake_clock.advance(5.0)
+    await tick(world, bus)
+    # Re-fetch: mypy narrows `home.status` to Literal[STANDING] from the assert above and
+    # (being unable to see that `tick` mutates the same object) would flag the RUIN check
+    # below as a non-overlapping identity comparison against a stale narrowed type.
+    home = world.get_home(hid)
+    assert home is not None
+    assert home.status is HomeStatus.RUIN
+    step("collapse-to-ruin")  # structure 80 -> remnant 0.5*(80+0)=40 => -40 SINK
+
+    await scavenge_ruins(world, bus, "raider_1", hid, home.remnant_materials)  # take it all
+    step("scavenge")  # remnant -y ; agent +y => net 0
+    assert home.remnant_materials == 0.0
+
+    fake_clock.advance(RUINS_PERSIST_SECONDS + 1.0)
+    await tick(world, bus)
+    assert world.get_home(hid) is None  # ruin swept
+    step("ruin-sweep")  # remnant already 0 -> no change

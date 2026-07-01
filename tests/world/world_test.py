@@ -19,10 +19,11 @@ import random
 
 import pytest
 
-from core.constants import HOME_MAX_INTEGRITY
+from core.constants import HOME_BUILD_MATERIALS_COST, HOME_MAX_INTEGRITY, RUINS_SCAVENGE_FRACTION
 from core.rng import make_rng
 from tests.conftest import FakeClock
 from world.agents import AgentState, AgentStatus
+from world.homes import HomeStatus
 from world.regions import Region, ResourceTypes
 from world.world import WorldState
 
@@ -1017,3 +1018,138 @@ def test_withdraw_from_home_vault_caps_at_balance_and_floors_at_zero(world: Worl
     world.deposit_to_home_vault("h1", 30.0)
     assert world.withdraw_from_home_vault("h1", 1000.0) is True
     assert world.homes["h1"].vault_materials == 0.0
+
+
+def test_build_home_seeds_last_integrity_at_to_built_at(world: WorldState) -> None:
+    """build_home seeds last_integrity_at = built_at so incremental repair/decay accrues from
+    build time."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=1234.0, integrity=HOME_MAX_INTEGRITY)
+    assert world.homes["h1"].last_integrity_at == 1234.0
+
+
+def test_modify_home_integrity_refuses_a_ruin(world: WorldState) -> None:
+    """A RUIN's integrity is frozen: modify_home_integrity is a no-op False (MANDATORY #4)."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=40.0)
+    world.homes["h1"].status = HomeStatus.RUIN  # manual (make_ruin arrives in Task 5)
+    assert world.modify_home_integrity("h1", 25.0) is False
+    assert world.homes["h1"].integrity == 40.0  # unchanged
+
+
+def test_record_and_clear_breachers(world: WorldState) -> None:
+    """record_breacher adds (idempotent); clear_breachers empties; unknown home is False."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    assert world.record_breacher("h1", "wanderer_002") is True
+    assert world.record_breacher("h1", "wanderer_002") is True  # idempotent
+    assert world.homes["h1"].breachers == {"wanderer_002"}
+    assert world.record_breacher("missing", "x") is False
+    assert world.clear_breachers("h1") is True
+    assert world.homes["h1"].breachers == set()
+    assert world.clear_breachers("missing") is False
+
+
+# ---------------------------------------------------------------------------
+# colonize_home (L2c Task 4b)
+# ---------------------------------------------------------------------------
+
+
+def test_colonize_home_reassigns_evicts_and_retains_vault(world: WorldState) -> None:
+    """colonize_home overwrites owner+stakeholders (evicting priors), retains vault, re-clamps
+    integrity."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.add_stakeholder("h1", "wanderer_002")  # prior owner+stakeholder set: {001, 002}
+    world.deposit_to_home_vault("h1", 55.0)
+
+    assert world.colonize_home("h1", "raider_a", ["raider_a", "raider_b"]) is True
+
+    home = world.homes["h1"]
+    assert home.owner_id == "raider_a"
+    assert home.stakeholders == ["raider_a", "raider_b"]  # priors evicted
+    assert home.vault_materials == 55.0  # retained (no resource move)
+    assert home.integrity == 0.0  # re-clamp does not raise a ~0 integrity
+    assert world.colonize_home("missing", "x", ["x"]) is False
+
+
+# ---------------------------------------------------------------------------
+# make_ruin / scavenge_ruin (L2c Task 5)
+# ---------------------------------------------------------------------------
+
+
+def test_make_ruin_computes_remnant_zeros_vault_and_clears(world: WorldState) -> None:
+    """make_ruin: remnant = FRACTION*(BUILD_COST + vault); vault zeroed; stakeholders + breachers
+    cleared."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.add_stakeholder("h1", "wanderer_002")
+    world.deposit_to_home_vault("h1", 40.0)
+    world.record_breacher("h1", "wanderer_002")
+
+    assert world.make_ruin("h1") is True
+
+    home = world.homes["h1"]
+    assert home.status is HomeStatus.RUIN
+    assert home.ruined_at == world.now()
+    assert home.remnant_materials == pytest.approx(
+        RUINS_SCAVENGE_FRACTION * (HOME_BUILD_MATERIALS_COST + 40.0)
+    )
+    assert home.vault_materials == 0.0  # consumed into the remnant (no double count)
+    assert home.stakeholders == []
+    assert home.breachers == set()
+    assert world.make_ruin("missing") is False
+
+
+def test_make_ruin_remnant_conserves_strictly_less_than_banked(world: WorldState) -> None:
+    """Conservation: the remnant is a STRICT fraction of BUILD_COST+vault -- never the whole.
+
+    ``RUINS_SCAVENGE_FRACTION < 1`` (locked by :func:`test_ruins_dials_present_and_conserving`
+    in ``tests/core/constants_test.py``) means the remnant is always LESS than what was banked;
+    the gap ``(1 - FRACTION) * banked`` is a deliberate, permanent sink. A build->ruin->scavenge
+    loop must be a net loss, never a materials farm.
+    """
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.deposit_to_home_vault("h1", 40.0)
+    banked = HOME_BUILD_MATERIALS_COST + 40.0
+
+    world.make_ruin("h1")
+
+    remnant = world.homes["h1"].remnant_materials
+    assert remnant < banked  # strictly less -- no mint, a real sink exists
+    assert remnant == pytest.approx(RUINS_SCAVENGE_FRACTION * banked)
+
+
+def test_scavenge_ruin_deducts_remnant_and_caps(world: WorldState) -> None:
+    """scavenge_ruin returns the actual taken (capped at remnant) and lowers the remnant;
+    unknown -> 0.0."""
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("h1")
+    r0 = world.homes["h1"].remnant_materials
+    assert world.scavenge_ruin("h1", 10.0) == pytest.approx(10.0)
+    assert world.homes["h1"].remnant_materials == pytest.approx(r0 - 10.0)
+    assert world.scavenge_ruin("h1", 10_000.0) == pytest.approx(r0 - 10.0)  # capped at what remains
+    assert world.homes["h1"].remnant_materials == 0.0
+    assert world.scavenge_ruin("missing", 5.0) == 0.0
+
+
+def test_kill_agent_of_a_cleared_ruin_stakeholder_is_a_safe_noop(world: WorldState) -> None:
+    """make_ruin clears stakeholders, so killing a FORMER stakeholder is a no-op on the ruin.
+
+    Before Task 5, ``kill_agent`` pruned a dying being from every home it staked via
+    ``remove_stakeholder`` (see ``test_kill_agent_prunes_stakeholder_from_every_home_it_holds``).
+    A ruin has already cleared its ``stakeholders`` (nothing left to tend it), so
+    ``is_stakeholder`` is False for everyone, post-ruin -- ``kill_agent``'s prune loop finds
+    nothing to remove here and the ruin is left completely untouched. This is what makes the
+    old thieve/kill ordering safe: a ruin is never double-pruned or corrupted by a stakeholder's
+    later death.
+    """
+    world.build_home("h1", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.add_stakeholder("h1", "wanderer_002")
+    world.make_ruin("h1")
+    remnant_before = world.homes["h1"].remnant_materials
+
+    assert world.kill_agent("wanderer_002") is True  # was a stakeholder pre-ruin; now cleared
+
+    ruin = world.homes["h1"]
+    assert ruin.status is HomeStatus.RUIN  # untouched
+    assert ruin.stakeholders == []  # still empty -- nothing to prune
+    assert ruin.breachers == set()  # untouched
+    assert ruin.remnant_materials == remnant_before  # untouched
+    victim = world.get_agent("wanderer_002")
+    assert victim is not None and victim.status is AgentStatus.DEAD  # the kill itself still worked

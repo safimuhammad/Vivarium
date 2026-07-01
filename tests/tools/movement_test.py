@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from bus.event_bus import EventBus
 from bus.events import ScopeType
-from core.constants import HOME_MAX_INTEGRITY, MOVE_ENERGY_COST
+from core.constants import HOARDING_MATERIALS_THRESHOLD, HOME_MAX_INTEGRITY, MOVE_ENERGY_COST
 from tools.builtin.movement import look_around, move
 from world.agents import AgentState, AgentStatus
 from world.regions import Region
@@ -191,3 +191,41 @@ async def test_look_around_with_home_staked_in_a_different_region_shows_no_vault
     result = await look_around(world, event_bus, "wanderer_002")  # wanderer_002 is in alpha
 
     assert "your home here" not in result.lower()
+
+
+async def test_look_around_shows_a_co_located_non_stake_home_without_exact_vault(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A raider perceives a co-located home it does not stake: id/owner/soundness + hoard flag,
+    NOT the vault."""
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=80.0)
+    world.deposit_to_home_vault("home_ada", HOARDING_MATERIALS_THRESHOLD + 5.0)  # a hoard
+
+    result = await look_around(world, event_bus, "wanderer_002")  # boris does not stake home_ada
+
+    assert "home_ada" in result  # the target is perceivable
+    assert "80.0" in result  # its soundness is shown
+    assert "great store" in result.lower()  # the hoard FLAG (not the number)
+    assert str(HOARDING_MATERIALS_THRESHOLD + 5.0) not in result  # exact vault is NOT leaked
+
+
+async def test_look_around_shows_co_located_ruins(world: WorldState, event_bus: EventBus) -> None:
+    """A being perceives co-located ruins and their remnant so it can choose to scavenge."""
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=0.0)
+    world.make_ruin("home_ada")
+    remnant = world.homes["home_ada"].remnant_materials
+
+    result = await look_around(world, event_bus, "wanderer_002")
+
+    assert "ruin" in result.lower()
+    assert f"{remnant}" in result or f"{remnant:.1f}" in result  # remnant surfaced
+
+
+async def test_look_around_own_home_still_shows_exact_vault(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """Regression: a stakeholder still sees its OWN home's exact vault (2b), not just the flag."""
+    world.build_home("home_ada", "wanderer_001", "alpha", built_at=world.now(), integrity=100.0)
+    world.deposit_to_home_vault("home_ada", 42.0)
+    result = await look_around(world, event_bus, "wanderer_001")
+    assert "42.0" in result  # exact own-home vault preserved

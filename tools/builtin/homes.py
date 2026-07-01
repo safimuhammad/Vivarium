@@ -1,8 +1,17 @@
 """Home tools: ``build_home`` (raise a private home), ``use_hearth`` (burn
 materials for energy at a home you share), ``pledge_home`` (join another's home as a
 stakeholder), ``leave_home`` (give up a stake, voluntarily), ``deposit_to_home``
-(bank personal materials into the home's shared vault), and ``withdraw_from_home``
-(draw materials back out of the vault into personal stock).
+(bank personal materials into the home's shared vault), ``withdraw_from_home``
+(draw materials back out of the vault into personal stock), ``break_in`` (a
+co-located non-stakeholder pays a pure-sink cost to wear at a STANDING home's
+integrity, breaching it at ``<= 0``; a ``"thieve"`` breach splits the vault among
+co-located living breachers and leaves the home STANDING at ~0 (Task 4a), while a
+``"colonize"`` breach seizes the home for the final striker and every currently-homeless
+co-located living breacher, evicting the prior owner + stakeholders (Task 4b)), and
+``scavenge_ruins`` (any co-located ALIVE being draws materials from a fallen home's
+``remnant_materials`` into its own stock, deduct-remnant-first and capped at what
+remains -- the collapse path that turns a home's integrity reaching ``<= 0`` into a
+RUIN, rather than destroying it outright, is Task 5).
 
 Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
@@ -18,6 +27,9 @@ from __future__ import annotations
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from core.constants import (
+    BREAKIN_ENERGY_COST,
+    BREAKIN_INTEGRITY_DAMAGE,
+    BREAKIN_MATERIALS_COST,
     HEARTH_ENERGY_PER_MATERIAL,
     HEARTH_MATERIALS_PER_USE,
     HOME_BUILD_MATERIALS_COST,
@@ -25,7 +37,7 @@ from core.constants import (
 )
 from tools.builtin.resources import _announce_if_started_hoarding, _coerce_positive_amount
 from world.agents import AgentStatus, is_hoarding
-from world.homes import Home, home_is_hoarding
+from world.homes import Home, HomeStatus, home_is_hoarding
 from world.world import WorldState
 
 
@@ -185,6 +197,8 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
     home = world.stakeholder_home_of(agent_id)
     if home is None:
         return "Error: You have no home here to rest in."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: Your home has fallen to ruin; its hearth is cold."
     if home.region != agent.current_position:
         return "Invalid: You are not where your home stands; you can rest at its hearth only there."
     if agent.current_materials <= 0.0:
@@ -270,6 +284,8 @@ async def pledge_home(world: WorldState, event_bus: EventBus, agent_id: str, hom
     home = world.get_home(home_id)
     if home is None:
         return "Error: There is no such home here to pledge to."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: That home is a ruin; there is nothing left to pledge to."
     if home.region != agent.current_position:
         return (
             "Invalid: You are not where that home stands; you can only join a home in your place."
@@ -332,6 +348,8 @@ async def leave_home(world: WorldState, event_bus: EventBus, agent_id: str) -> s
     home = world.stakeholder_home_of(agent_id)
     if home is None:
         return "Error: You do not belong to any home to leave."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: Your home has fallen to ruin; there is no place left to give up."
 
     region = home.region
     world.remove_stakeholder(home.home_id, agent_id)  # prune + promote owner + clamp integrity
@@ -397,6 +415,8 @@ async def deposit_to_home(
     home = world.stakeholder_home_of(agent_id)
     if home is None:
         return "Error: You have no home here to store materials in."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: Your home has fallen to ruin; it can hold no store."
     if home.region != agent.current_position:
         return "Invalid: You are not where your home stands; you can add to its store only there."
     if agent.current_materials < quantity:
@@ -472,6 +492,8 @@ async def withdraw_from_home(
     home = world.stakeholder_home_of(agent_id)
     if home is None:
         return "Error: You have no home here to draw materials from."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: Your home has fallen to ruin; there is no store to draw from."
     if home.region != agent.current_position:
         return (
             "Invalid: You are not where your home stands; you can draw from its store only there."
@@ -487,4 +509,282 @@ async def withdraw_from_home(
     return (
         f"You draw {quantity} materials from your home's store. It now holds "
         f"{home.vault_materials} materials; you hold {agent.current_materials}."
+    )
+
+
+async def break_in(
+    world: WorldState, event_bus: EventBus, agent_id: str, target_home: str, intent: str
+) -> str:
+    """Force your way into a co-located home that is not your own, wearing at its integrity.
+
+    Each attempt drains a PURE SINK of :data:`~core.constants.BREAKIN_ENERGY_COST` energy +
+    :data:`~core.constants.BREAKIN_MATERIALS_COST` materials from the raider (destroyed, credited
+    to no one — conservation), records the raider in the home's ``breachers``, and removes
+    :data:`~core.constants.BREAKIN_INTEGRITY_DAMAGE` integrity. The home is **breached** when the
+    blow drives integrity ``<= 0``; the breaching blow executes ``intent`` atomically. For
+    ``intent == "thieve"`` (Task 4a) the vault is split equally among every co-located, ALIVE
+    breacher (the final striker is always included, even if the cost just paralysed it). The
+    split conserves the vault exactly for up to 2 recipients; for 3+ recipients the equal
+    per-capita float division leaves at most ~N·ULP (≈1e-14, the float noise floor) of drift,
+    minimized by giving the remainder to the final striker. The vault is then zeroed exactly and
+    the home is left **STANDING at ~0** (never ``make_ruin`` here — that would double-count the
+    looted vault into a ruin remnant; the tick makes the ruin later).
+    For ``intent == "colonize"`` (Task 4b) the final striker becomes ``owner_id``; the new
+    ``stakeholders`` are the striker plus every OTHER co-located, ALIVE breacher that is
+    **currently homeless** (``world.stakeholder_home_of`` is ``None`` — a breacher who already
+    stakes a home elsewhere merely participated and is not enrolled, preserving at-most-one-home,
+    MANDATORY #3). If the final striker itself already holds a home, it is auto-detached from it
+    FIRST via :meth:`~world.world.WorldState.remove_stakeholder` (which prunes it, promotes a
+    survivor, and clamps that home's integrity) so it never ends up staking two homes at once. The
+    prior owner and stakeholders are evicted; the vault and structure are retained untouched (no
+    resource move); integrity stays at ~0 for the new owners to shore up. A lone
+    raider is out-healed by the home's repair between breaths and self-limits by the resource burn;
+    a coordinated group stacking damage inside one repair window makes net progress.
+
+    Mutates world state:
+        * Drains ``BREAKIN_ENERGY_COST`` energy + ``BREAKIN_MATERIALS_COST`` materials from the
+          raider (pure sinks); records the raider via
+          :meth:`~world.world.WorldState.record_breacher`; applies ``-BREAKIN_INTEGRITY_DAMAGE``
+          via :meth:`~world.world.WorldState.modify_home_integrity` (floored at 0).
+        * On a ``"thieve"`` breach: empties ``home.vault_materials`` to 0 via
+          :meth:`~world.world.WorldState.withdraw_from_home_vault`, then credits each recipient's
+          share via :meth:`~world.world.WorldState.modify_agent_materials` (conserved — the vault
+          is debited for the WHOLE balance before any recipient is credited; the shares plus
+          the final striker's remainder sum back to that balance exactly for <=2 recipients,
+          and within the float noise floor for 3+ (see the split note above). Deliberately
+          does NOT call ``make_ruin`` — ``home.status`` is never touched here, so it stays
+          whatever it already was (``STANDING``); ruining is the world-tick's job (Task 5),
+          and doing it here would double-count the just-emptied vault into a ruin remnant.
+        * On a ``"colonize"`` breach: possibly detaches the final striker from a home it already
+          held via :meth:`~world.world.WorldState.remove_stakeholder`, then reassigns the target
+          home's owner + stakeholders via :meth:`~world.world.WorldState.colonize_home` (evicting
+          the prior roster; vault and structure untouched — no resource move).
+
+    Emits events:
+        * On a breach (integrity ``<= 0``): one ``"home_breached"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, source = the raider, region = the home's region,
+          stamped ``world.now()``).
+        * On a ``"thieve"`` breach: one further ``"home_thieved"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, source = the raider, region = the home's region,
+          stamped ``world.now()``).
+        * On a ``"colonize"`` breach: one further ``"home_colonized"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, source = the raider, region = the home's region,
+          stamped ``world.now()``).
+
+    Args:
+        world: The live world state.
+        event_bus: The bus the resulting event is published to.
+        agent_id: Id of the raiding being.
+        target_home: Id of the co-located home to break into.
+        intent: The raider's intent on breach, one of ``"thieve"`` or ``"colonize"``.
+
+    Returns:
+        A success sentence (a distinct "breached" sentence on the breaching blow); an
+        ``"Error: "`` string if the raider or home is unknown; an ``"Invalid: "`` string for a bad
+        intent, a ruined target, a target it stakes, a target in another region, or too little
+        energy/materials to pay the cost (rejected calls mutate nothing).
+    """
+    if intent not in ("thieve", "colonize"):
+        return (
+            "Invalid: You must mean either to take a home's store (thieve) or seize it (colonize)."
+        )
+    agent = world.get_agent(agent_id)
+    if agent is None:
+        return f"Error: Cannot find Agent {agent_id} in the world."
+    if agent.status is not AgentStatus.ALIVE:
+        return (
+            "Invalid: You are fallen and cannot force your way into a home; "
+            "only another being can restore you."
+        )
+    home = world.get_home(target_home)
+    if home is None:
+        return "Error: There is no such home here to break into."
+    if home.status is not HomeStatus.STANDING:
+        return "Invalid: That home is already a ruin; there is nothing to break into."
+    if home.region != agent.current_position:
+        return (
+            "Invalid: You are not where that home stands; you can only break into a home "
+            "in your place."
+        )
+    if world.is_stakeholder(target_home, agent_id):
+        return "Invalid: This is your own home; you cannot break into it."
+    if (
+        agent.current_energy < BREAKIN_ENERGY_COST
+        or agent.current_materials < BREAKIN_MATERIALS_COST
+    ):
+        return (
+            f"Invalid: Forcing a home costs {BREAKIN_ENERGY_COST:.0f} energy and "
+            f"{BREAKIN_MATERIALS_COST:.0f} materials; you hold {agent.current_energy} energy and "
+            f"{agent.current_materials} materials."
+        )
+
+    # Pay the cost — a PURE SINK (both pools destroyed, credited to no one).
+    world.modify_agent_energy(agent_id, -BREAKIN_ENERGY_COST)
+    world.modify_agent_materials(agent_id, -BREAKIN_MATERIALS_COST)
+    world.record_breacher(target_home, agent_id)
+    world.modify_home_integrity(target_home, -BREAKIN_INTEGRITY_DAMAGE)  # floors at 0
+
+    region = home.region
+    if home.integrity <= 0.0:
+        await event_bus.publish(
+            Event(
+                "home_breached",
+                agent_id,
+                {"message": f"{agent.name} has broken into the home {home.home_id} in {region}."},
+                scope=ScopeType.LOCAL,
+                region=region,
+                timestamp=world.now(),
+            )
+        )
+        if intent == "thieve":
+            loot = home.vault_materials
+            # Recipients: the final striker ALWAYS (it landed the breaching blow, even if the cost
+            # just paralysed it), plus every OTHER breacher co-located and ALIVE.
+            recipients = [agent_id] + [
+                b
+                for b in sorted(home.breachers)
+                if b != agent_id
+                and (peer := world.get_agent(b)) is not None
+                and peer.status is AgentStatus.ALIVE
+                and peer.current_position == region
+            ]
+            # Deduct the WHOLE vault FIRST -> 0 (conservation).
+            world.withdraw_from_home_vault(target_home, loot)
+            share = loot / len(recipients)
+            for recipient in recipients:
+                if recipient == agent_id:
+                    continue
+                world.modify_agent_materials(recipient, share)
+            # Remainder to the final striker: Σ splits == loot exactly for <=2 recipients;
+            # for 3+, float per-capita division leaves at most ~N*ULP of drift (see docstring).
+            world.modify_agent_materials(agent_id, loot - share * (len(recipients) - 1))
+            await event_bus.publish(
+                Event(
+                    "home_thieved",
+                    agent_id,
+                    {
+                        "message": (
+                            f"{agent.name} and {len(recipients) - 1} other(s) stripped the home "
+                            f"{home.home_id} of {loot} materials."
+                        )
+                    },
+                    scope=ScopeType.LOCAL,
+                    region=region,
+                    timestamp=world.now(),
+                )
+            )
+            return (
+                f"You break the home {home.home_id} open and strip its store — {loot} materials, "
+                f"split among {len(recipients)}. The emptied wreck still stands, for now."
+            )
+        # intent == "colonize"
+        old = world.stakeholder_home_of(agent_id)
+        if old is not None:
+            world.remove_stakeholder(
+                old.home_id, agent_id
+            )  # at-most-one-home: abandon the old home first
+        new_stakeholders = [agent_id] + [
+            b
+            for b in sorted(home.breachers)
+            if b != agent_id
+            and (peer := world.get_agent(b)) is not None
+            and peer.status is AgentStatus.ALIVE
+            and peer.current_position == region
+            and world.stakeholder_home_of(b)
+            is None  # only currently-homeless breachers (MANDATORY #3)
+        ]
+        world.colonize_home(target_home, agent_id, new_stakeholders)
+        await event_bus.publish(
+            Event(
+                "home_colonized",
+                agent_id,
+                {
+                    "message": (
+                        f"{agent.name} and {len(new_stakeholders) - 1} other(s) seized the home "
+                        f"{home.home_id} in {region}."
+                    )
+                },
+                scope=ScopeType.LOCAL,
+                region=region,
+                timestamp=world.now(),
+            )
+        )
+        return (
+            f"You break the home {home.home_id} open and take it for your own. "
+            f"{len(new_stakeholders)} of you hold it now; shore it up before it falls."
+        )
+    return (
+        f"You batter the home {home.home_id}; its soundness drops to {home.integrity:.1f} but it "
+        f"still stands. You spent {BREAKIN_ENERGY_COST:.0f} energy and "
+        f"{BREAKIN_MATERIALS_COST:.0f} materials."
+    )
+
+
+async def scavenge_ruins(
+    world: WorldState, event_bus: EventBus, agent_id: str, target_home: str, amount: float
+) -> str:
+    """Pick over the ruins of a fallen home where you stand, drawing materials into your own stock.
+
+    Any co-located ALIVE being (a ruin has no owner to bar entry) draws up to ``amount`` materials
+    from the ruin's ``remnant_materials``. Conserved: the remnant is deducted FIRST via
+    :meth:`~world.world.WorldState.scavenge_ruin` (which caps at what remains), then the actual
+    taken is credited to the scavenger — the same amount moved, nothing minted.
+
+    Mutates world state:
+        * Deducts the actual taken from the ruin's remnant, then credits it to the being's
+          materials.
+
+    Emits events:
+        * One ``"ruins_scavenged"`` event (:attr:`~bus.events.ScopeType.LOCAL`, source = the
+          scavenger, region = the ruin's region, stamped ``world.now()``).
+
+    Args:
+        world: The live world state.
+        event_bus: The bus the resulting event is published to.
+        agent_id: Id of the scavenging being.
+        target_home: Id of the co-located ruin to pick over.
+        amount: Materials to draw from the remnant (capped at what remains).
+
+    Returns:
+        A success sentence with the new balances; an ``"Error: "`` string if the being or ruin is
+        unknown; an ``"Invalid: "`` string if the amount is not positive, the being is fallen, the
+        target still stands, it is not co-located, or the ruin is already picked clean (rejected
+        calls mutate nothing).
+    """
+    quantity = _coerce_positive_amount(amount)
+    if isinstance(quantity, str):
+        return quantity
+    agent = world.get_agent(agent_id)
+    if agent is None:
+        return f"Error: Cannot find Agent {agent_id} in the world."
+    if agent.status is not AgentStatus.ALIVE:
+        return (
+            "Invalid: You are fallen and cannot pick over ruins; "
+            "only another being can restore you."
+        )
+    home = world.get_home(target_home)
+    if home is None:
+        return "Error: There are no such ruins here to pick over."
+    if home.status is not HomeStatus.RUIN:
+        return "Invalid: That home still stands; there are no ruins here to pick over."
+    if home.region != agent.current_position:
+        return "Invalid: You are not where those ruins lie."
+    if home.remnant_materials <= 0.0:
+        return "Invalid: These ruins have already been picked clean."
+
+    taken = world.scavenge_ruin(target_home, quantity)  # deduct the remnant FIRST (conservation)
+    world.modify_agent_materials(agent_id, taken)  # THEN credit personal stock
+    await event_bus.publish(
+        Event(
+            "ruins_scavenged",
+            agent_id,
+            {"message": f"{agent.name} picks {taken} materials from the ruins in {home.region}."},
+            scope=ScopeType.LOCAL,
+            region=home.region,
+            timestamp=world.now(),
+        )
+    )
+    return (
+        f"You pick {taken} materials from the ruins. They hold {home.remnant_materials} more; "
+        f"you hold {agent.current_materials}."
     )
