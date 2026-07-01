@@ -102,3 +102,19 @@ def test_world_mechanics_describes_aging_and_the_home() -> None:
     # DD9 still holds: no goals / strategy / simulation language slipped in.
     for banned in FORBIDDEN_TERMS:
         assert banned not in lowered
+
+
+def test_world_mechanics_describes_sharing_a_home() -> None:
+    """L2a physics (DD9): a home can be shared.
+
+    A being may pledge to join it, or leave it; sharing hardens it.
+    """
+    from agents.prompt import WORLD_MECHANICS
+
+    lowered = WORLD_MECHANICS.lower()
+    assert "pledge" in lowered  # you may join another's home
+    assert "share" in lowered  # sharing its keep + hearth
+    assert "sounder" in lowered or "wear down" in lowered  # health scales with stakeholders
+    # DD9 still holds: no goals / strategy / simulation language slipped in.
+    for banned in FORBIDDEN_TERMS:
+        assert banned not in lowered
