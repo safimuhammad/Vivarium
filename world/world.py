@@ -25,11 +25,12 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from core.constants import PARALYSIS_ENERGY_THRESHOLD
+from core.constants import HOME_MAX_INTEGRITY, PARALYSIS_ENERGY_THRESHOLD
 from core.logging import get_logger
 from core.rng import Clock, SimContext, default_clock, make_rng
 
 from .agents import AgentState, AgentStatus
+from .homes import Home
 from .regions import Region, ResourceTypes
 
 logger = get_logger(__name__)
@@ -49,6 +50,7 @@ class WorldState:
             (keys ``"target"``, ``"timestamp"``, ``"resources"``).
         pending_proposal_targets: Map of initiator id -> list of target ids it
             has outstanding proposals to.
+        homes: Map of home id -> :class:`~world.homes.Home` (Layer 1).
         context: The :class:`~core.rng.SimContext` bundling the seam.
         rng: The injected :class:`random.Random`; route all randomness here.
         clock: The injected clock callable (seconds); prefer :meth:`now`.
@@ -78,6 +80,7 @@ class WorldState:
         self.agents: dict[str, AgentState] = {agent.id: agent for agent in agents}
         self.pending_proposals: dict[tuple[str, str], dict[str, Any]] = {}
         self.pending_proposal_targets: dict[str, list[str]] = {}
+        self.homes: dict[str, Home] = {}
 
         self.context: SimContext = SimContext(
             rng=rng if rng is not None else make_rng(),
@@ -568,3 +571,109 @@ class WorldState:
             region.current_materials = max(
                 0.0, min(region.current_materials + region.materials_rate, region.max_materials)
             )
+
+    # ---- Home methods ----
+
+    def build_home(
+        self, home_id: str, owner_id: str, region: str, *, built_at: float, integrity: float
+    ) -> bool:
+        """Create and store a home keyed by ``home_id``.
+
+        Sync and event-free (the world has no bus, DD4): the caller (the
+        ``build_home`` tool) publishes ``home_built``. ``last_upkeep_at`` is seeded to
+        ``built_at`` so the world-tick's time-based upkeep accrues from the moment of
+        building. Mutates :attr:`homes`.
+
+        Args:
+            home_id: Stable unique id (also the map key).
+            owner_id: Id of the owning being.
+            region: Region the home stands in.
+            built_at: World-clock time (seconds) it was raised.
+            integrity: Initial integrity (typically :data:`HOME_MAX_INTEGRITY`).
+
+        Returns:
+            ``True`` if stored; ``False`` if a home with ``home_id`` already exists
+            (no overwrite).
+        """
+        if home_id in self.homes:
+            return False
+        self.homes[home_id] = Home(
+            home_id=home_id,
+            owner_id=owner_id,
+            region=region,
+            integrity=integrity,
+            built_at=built_at,
+            last_upkeep_at=built_at,
+        )
+        return True
+
+    def remove_home(self, home_id: str) -> bool:
+        """Remove a home from the world. Mutates :attr:`homes`.
+
+        Args:
+            home_id: Id of the home to remove.
+
+        Returns:
+            ``True`` if it existed and was removed; ``False`` otherwise.
+        """
+        if home_id in self.homes:
+            del self.homes[home_id]
+            return True
+        return False
+
+    def modify_home_integrity(self, home_id: str, amount: float) -> bool:
+        """Add ``amount`` to a home's integrity, clamped to ``[0.0, HOME_MAX_INTEGRITY]``.
+
+        Mirrors :meth:`modify_region_energy`'s clamp discipline (homes are bounded
+        above as well as below). Mutates the home's
+        :attr:`~world.homes.Home.integrity`.
+
+        Args:
+            home_id: Id of the home to modify.
+            amount: Signed delta to apply.
+
+        Returns:
+            ``True`` if the home exists and was modified; ``False`` otherwise.
+        """
+        home = self.homes.get(home_id)
+        if home is None:
+            return False
+        home.integrity = min(max(home.integrity + amount, 0.0), HOME_MAX_INTEGRITY)
+        return True
+
+    def home_of(self, agent_id: str) -> Home | None:
+        """Return the home owned by ``agent_id`` (one per being in L1), or ``None``.
+
+        Homes are rare, so a linear scan is free. In L1 a being owns at most one
+        home; the first match is returned.
+
+        Args:
+            agent_id: Id of the owning being to look up.
+
+        Returns:
+            The owned :class:`~world.homes.Home`, or ``None`` if it owns none.
+        """
+        for home in self.homes.values():
+            if home.owner_id == agent_id:
+                return home
+        return None
+
+    def homes_in_region(self, region: str) -> list[Home]:
+        """Return every home standing in ``region`` (empty if none).
+
+        Args:
+            region: Region name to filter by.
+
+        Returns:
+            A list of homes whose ``region`` matches (a region may hold several,
+            one per building being).
+        """
+        return [home for home in self.homes.values() if home.region == region]
+
+    def get_all_homes(self) -> list[Home]:
+        """Return every home as a list.
+
+        Returns:
+            A new list of all :class:`~world.homes.Home` instances.
+        """
+        return list(self.homes.values())

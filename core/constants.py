@@ -131,6 +131,18 @@ by observation.
 """
 
 # ---------------------------------------------------------------------------
+# Homes (Layer 1) — build/hearth/upkeep/decay dials
+# [design: docs/superpowers/specs/2026-07-01-materials-home-layer1-design.md]
+# Game-of-Life dials: first-guess values, tuned by observation. Stability: the
+# hearth must not be a strictly-dominant fountain, build cost competes with mating,
+# and a home must weather far more than one breath-gap before it collapses.
+# ---------------------------------------------------------------------------
+
+HOME_MAX_INTEGRITY: Final[float] = 100.0
+"""Upper bound on a home's integrity; a paid tick restores it to this cap. [design —
+2026-07-01, Layer 1]."""
+
+# ---------------------------------------------------------------------------
 # Mating
 # ---------------------------------------------------------------------------
 

@@ -159,3 +159,9 @@ def test_idle_aging_cost_present_and_gentle() -> None:
     """Idle-aging is a small, positive energy cost — a fraction, not a hammer."""
     assert isinstance(constants.IDLE_AGING_ENERGY_COST, float)
     assert 0.0 < constants.IDLE_AGING_ENERGY_COST <= constants.MOVE_ENERGY_COST
+
+
+def test_home_integrity_dial_present() -> None:
+    """The home integrity ceiling exists and is a positive float."""
+    assert isinstance(constants.HOME_MAX_INTEGRITY, float)
+    assert constants.HOME_MAX_INTEGRITY > 0.0
