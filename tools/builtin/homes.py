@@ -4,7 +4,9 @@ stakeholder), ``leave_home`` (give up a stake, voluntarily), ``deposit_to_home``
 (bank personal materials into the home's shared vault), ``withdraw_from_home``
 (draw materials back out of the vault into personal stock), and ``break_in`` (a
 co-located non-stakeholder pays a pure-sink cost to wear at a STANDING home's
-integrity, breaching it at ``<= 0``; the breach outcome itself is Tasks 4a/4b).
+integrity, breaching it at ``<= 0``; a ``"thieve"`` breach splits the vault among
+co-located living breachers and leaves the home STANDING at ~0 (Task 4a), while a
+``"colonize"`` breach still falls through to the plain breach sentence until Task 4b).
 
 Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
@@ -514,19 +516,33 @@ async def break_in(
     :data:`~core.constants.BREAKIN_MATERIALS_COST` materials from the raider (destroyed, credited
     to no one — conservation), records the raider in the home's ``breachers``, and removes
     :data:`~core.constants.BREAKIN_INTEGRITY_DAMAGE` integrity. The home is **breached** when the
-    blow drives integrity ``<= 0``; the breaching blow will execute ``intent`` atomically (thieve
-    or colonize — Tasks 4a/4b). A lone raider is out-healed by the home's repair between breaths
-    and self-limits by the resource burn; a coordinated group stacking damage inside one repair
-    window makes net progress.
+    blow drives integrity ``<= 0``; the breaching blow executes ``intent`` atomically. For
+    ``intent == "thieve"`` (Task 4a) the vault is split equally among every co-located, ALIVE
+    breacher (the final striker is always included, even if the cost just paralysed it), the
+    remainder going to the final striker so the split sums exactly to the pre-theft vault; the
+    vault is then zeroed and the home is left **STANDING at ~0** (never ``make_ruin`` here — that
+    would double-count the looted vault into a ruin remnant; the tick makes the ruin later).
+    ``intent == "colonize"`` still falls through to the plain breach sentence until Task 4b. A lone
+    raider is out-healed by the home's repair between breaths and self-limits by the resource burn;
+    a coordinated group stacking damage inside one repair window makes net progress.
 
     Mutates world state:
         * Drains ``BREAKIN_ENERGY_COST`` energy + ``BREAKIN_MATERIALS_COST`` materials from the
           raider (pure sinks); records the raider via
           :meth:`~world.world.WorldState.record_breacher`; applies ``-BREAKIN_INTEGRITY_DAMAGE``
           via :meth:`~world.world.WorldState.modify_home_integrity` (floored at 0).
+        * On a ``"thieve"`` breach: empties ``home.vault_materials`` to 0 via
+          :meth:`~world.world.WorldState.withdraw_from_home_vault`, then credits each recipient's
+          share via :meth:`~world.world.WorldState.modify_agent_materials` (conserved — the vault
+          is debited for the WHOLE balance before any recipient is credited, and the shares plus
+          the final striker's remainder sum to exactly that balance). The home's ``status`` is
+          left ``STANDING``.
 
     Emits events:
         * On a breach (integrity ``<= 0``): one ``"home_breached"`` event
+          (:attr:`~bus.events.ScopeType.LOCAL`, source = the raider, region = the home's region,
+          stamped ``world.now()``).
+        * On a ``"thieve"`` breach: one further ``"home_thieved"`` event
           (:attr:`~bus.events.ScopeType.LOCAL`, source = the raider, region = the home's region,
           stamped ``world.now()``).
 
@@ -595,7 +611,46 @@ async def break_in(
                 timestamp=world.now(),
             )
         )
-        # Task 4a inserts the thieve branch, Task 4b the colonize branch, before this line.
+        if intent == "thieve":
+            loot = home.vault_materials
+            # Recipients: the final striker ALWAYS (it landed the breaching blow, even if the cost
+            # just paralysed it), plus every OTHER breacher co-located and ALIVE.
+            recipients = [agent_id] + [
+                b
+                for b in sorted(home.breachers)
+                if b != agent_id
+                and (peer := world.get_agent(b)) is not None
+                and peer.status is AgentStatus.ALIVE
+                and peer.current_position == region
+            ]
+            # Deduct the WHOLE vault FIRST -> 0 (conservation).
+            world.withdraw_from_home_vault(target_home, loot)
+            share = loot / len(recipients)
+            for recipient in recipients:
+                if recipient == agent_id:
+                    continue
+                world.modify_agent_materials(recipient, share)
+            # Remainder to the final striker so Σ splits == loot EXACTLY (no float drift).
+            world.modify_agent_materials(agent_id, loot - share * (len(recipients) - 1))
+            await event_bus.publish(
+                Event(
+                    "home_thieved",
+                    agent_id,
+                    {
+                        "message": (
+                            f"{agent.name} and {len(recipients) - 1} other(s) stripped the home "
+                            f"{home.home_id} of {loot} materials."
+                        )
+                    },
+                    scope=ScopeType.LOCAL,
+                    region=region,
+                    timestamp=world.now(),
+                )
+            )
+            return (
+                f"You break the home {home.home_id} open and strip its store — {loot} materials, "
+                f"split among {len(recipients)}. The emptied wreck still stands, for now."
+            )
         return f"You break the home {home.home_id} open — it can no longer keep anyone out."
     return (
         f"You batter the home {home.home_id}; its soundness drops to {home.integrity:.1f} but it "

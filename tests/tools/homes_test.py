@@ -1111,3 +1111,78 @@ async def test_break_in_guards(world: WorldState, event_bus: EventBus) -> None:
     assert (await break_in(world, event_bus, "wanderer_002", "h1", "thieve")).startswith("Invalid:")
     assert world.homes["h1"].integrity == 100.0  # nothing above ever damaged the home
     assert world.homes["h1"].breachers == set()
+
+
+# ---- break_in thieve outcome (L2c Task 4a) ---------------------------------
+
+
+async def test_break_in_thieve_splits_vault_conserved_and_leaves_standing_at_zero(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """The breaching blow with intent=thieve splits the vault among co-located living breachers,
+    zeros it, leaves the home STANDING at 0 (MANDATORY #2), and conserves the materials moved."""
+    world.build_home(
+        "h1",
+        "wanderer_001",
+        "alpha",
+        built_at=world.now(),
+        integrity=2 * BREAKIN_INTEGRITY_DAMAGE,
+    )  # two blows from breach
+    world.deposit_to_home_vault("h1", 90.0)
+    _add_raiders(world, event_bus, "raider_a")
+    boris = world.get_agent("wanderer_002")
+    raider_a = world.get_agent("raider_a")
+    assert boris is not None and raider_a is not None
+    boris.current_materials = 40.0
+    raider_a.current_materials = 40.0
+
+    # raider_a: -25 -> 25 (pre-breach, records raider_a).
+    await break_in(world, event_bus, "raider_a", "h1", "thieve")
+    # wanderer_002: -25 -> 0 -> breach + thieve.
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")
+
+    home = world.get_home("h1")
+    assert home is not None
+    assert home.status is HomeStatus.STANDING  # MANDATORY #2: standing at 0, NOT a ruin
+    assert home.integrity == 0.0
+    assert home.vault_materials == 0.0  # emptied
+    # 90 split two ways == 45 each (remainder to the final striker, wanderer_002).
+    assert boris.current_materials == pytest.approx(40.0 - BREAKIN_MATERIALS_COST + 45.0)
+    assert raider_a.current_materials == pytest.approx(40.0 - BREAKIN_MATERIALS_COST + 45.0)
+    thieved = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_thieved"]
+    assert len(thieved) == 1
+    assert thieved[0].scope is ScopeType.LOCAL and thieved[0].region == "alpha"
+    assert "strip" in result.lower()
+
+
+async def test_break_in_thieve_excludes_departed_or_dead_breachers(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """A breacher who left the region (or died) is not a recipient; the whole vault still goes to
+    the remaining co-located living breachers (Σ == vault; remainder to the final striker)."""
+    world.build_home(
+        "h1",
+        "wanderer_001",
+        "alpha",
+        built_at=world.now(),
+        integrity=2 * BREAKIN_INTEGRITY_DAMAGE,
+    )
+    world.deposit_to_home_vault("h1", 100.0)
+    _add_raiders(world, event_bus, "raider_a")
+    boris = world.get_agent("wanderer_002")
+    raider_a = world.get_agent("raider_a")
+    assert boris is not None and raider_a is not None
+    boris.current_materials = 0.0
+
+    # Records raider_a, integrity -> 25.
+    await break_in(world, event_bus, "raider_a", "h1", "thieve")
+    assert world.move_agent("raider_a", "beta") is True  # raider_a wanders off before the breach
+    # wanderer_002 needs to afford the cost; give it materials for the break_in fee only.
+    boris.current_materials = BREAKIN_MATERIALS_COST
+    result = await break_in(world, event_bus, "wanderer_002", "h1", "thieve")  # breach + thieve
+
+    home = world.get_home("h1")
+    assert home is not None and home.vault_materials == 0.0
+    # Only wanderer_002 is co-located+alive -> it takes the whole 100 (remainder-to-final-striker).
+    assert boris.current_materials == pytest.approx(100.0)  # 0 after paying the fee, +100 loot
+    assert "strip" in result.lower()
