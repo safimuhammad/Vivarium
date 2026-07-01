@@ -1645,3 +1645,56 @@ def test_floor_overflow_net_truncates_block_to_fit(
     agent._enforce_prompt_budget(tools)
 
     assert estimate_tokens(agent.lifecycle_history, tools) <= runtime_module.PROMPT_BUDGET_TOKENS
+
+
+# ---- self-talk: a text-only breath is perceivable but heard by no one --------
+
+
+async def test_text_only_breath_emits_private_self_talk(
+    world: WorldState, populated_registry: ToolRegistry
+) -> None:
+    """A breath with words but no tool call publishes one PRIVATE self_talk event, free."""
+    log = InMemoryEventLog()
+    event_bus = EventBus(world, event_log=log)
+    event_bus.subscribe(ADA)
+    decider = MockDecider([Decision(text="  I wonder what lies past the hills.  ")])
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
+    energy_before = _live(world, ADA).current_energy
+
+    await agent.breathe()
+
+    self_talks = [e for e in log.events if e.type == "self_talk"]
+    assert len(self_talks) == 1
+    assert self_talks[0].scope is ScopeType.PRIVATE
+    assert self_talks[0].payload["message"] == "I wonder what lies past the hills."
+    assert event_bus.get_events(ADA) == []  # delivered to no one, not even itself
+    assert _live(world, ADA).current_energy == energy_before  # self-talk is free
+
+
+async def test_acting_breath_emits_no_self_talk(
+    world: WorldState, populated_registry: ToolRegistry
+) -> None:
+    """A breath that calls a tool is an action, not self-talk -- no self_talk event."""
+    log = InMemoryEventLog()
+    event_bus = EventBus(world, event_log=log)
+    event_bus.subscribe(ADA)
+    decider = MockDecider([Decision(text="Let me look.", tool_calls=[ToolCall("look_around")])])
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
+
+    await agent.breathe()
+
+    assert [e for e in log.events if e.type == "self_talk"] == []
+
+
+async def test_resting_breath_emits_nothing(
+    world: WorldState, populated_registry: ToolRegistry
+) -> None:
+    """A blank breath is a silent rest: no self_talk event, no marker."""
+    log = InMemoryEventLog()
+    event_bus = EventBus(world, event_log=log)
+    event_bus.subscribe(ADA)
+    agent = Agent(ADA, world, event_bus, populated_registry, MockDecider([Decision()]), pace=0.0)
+
+    await agent.breathe()
+
+    assert [e for e in log.events if e.type == "self_talk"] == []
