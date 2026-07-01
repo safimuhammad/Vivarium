@@ -142,6 +142,24 @@ HOME_MAX_INTEGRITY: Final[float] = 100.0
 """Upper bound on a home's integrity; a paid tick restores it to this cap. [design —
 2026-07-01, Layer 1]."""
 
+HOME_UPKEEP_MATERIALS_PER_SECOND: Final[float] = 0.1
+"""Materials a home draws from its owner's global stock per second, on the world-tick.
+[design — 2026-07-01, Layer 1].
+
+TIME-based (``owed = rate * (now - last_upkeep_at)``), so upkeep is tick-frequency-
+INDEPENDENT — the same wall-time draws the same materials whether the tick runs every
+1s or every 5s (generalizes the mating 60s->600s lesson). Drawn from stockpile so an
+absent/slow owner still pays — no death-spiral (upkeep is materials, never energy)."""
+
+HOME_DECAY_PER_MISSED_TICK: Final[float] = 10.0
+"""Integrity a home loses on a world-tick its owner cannot pay upkeep (broke, dead, or
+swept). [design — 2026-07-01, Layer 1].
+
+With :data:`HOME_MAX_INTEGRITY` = 100, a home weathers ~10 unpaid ticks before it
+collapses — deliberately far longer than an owner's breath gap so it never crumbles
+between breaths through no fault of its own. Retune upward if a slow sequential (Ollama)
+regime is revived, exactly like ``MATING_PROPOSAL_TIMEOUT_SECONDS``."""
+
 # ---------------------------------------------------------------------------
 # Mating
 # ---------------------------------------------------------------------------

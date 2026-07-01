@@ -165,3 +165,14 @@ def test_home_integrity_dial_present() -> None:
     """The home integrity ceiling exists and is a positive float."""
     assert isinstance(constants.HOME_MAX_INTEGRITY, float)
     assert constants.HOME_MAX_INTEGRITY > 0.0
+
+
+def test_home_upkeep_and_decay_dials_present_and_sane() -> None:
+    """Upkeep/decay dials exist; a home weathers many missed ticks before it collapses."""
+    assert isinstance(constants.HOME_UPKEEP_MATERIALS_PER_SECOND, float)
+    assert constants.HOME_UPKEEP_MATERIALS_PER_SECOND > 0.0
+    assert isinstance(constants.HOME_DECAY_PER_MISSED_TICK, float)
+    assert 0.0 < constants.HOME_DECAY_PER_MISSED_TICK <= constants.HOME_MAX_INTEGRITY
+    # Collapse-when-broke must be far slower than the owner's breath gap (the mating
+    # 60s->600s lesson): a home must not crumble between an owner's breaths.
+    assert constants.HOME_MAX_INTEGRITY / constants.HOME_DECAY_PER_MISSED_TICK >= 5.0
