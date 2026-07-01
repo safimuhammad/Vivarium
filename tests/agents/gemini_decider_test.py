@@ -239,6 +239,30 @@ async def test_gemini_decider_passes_system_instruction_and_tools_in_config() ->
     assert len(config["tools"]) == 1
 
 
+async def test_gemini_decider_sets_temperature_one_and_low_thinking_by_default() -> None:
+    """Each decision requests temperature 1.0 and LOW thinking (the sim's defaults)."""
+    response = _response(parts=[SimpleNamespace(text="ok", function_call=None)])
+    fake = _FakeModels(response)
+    decider = GeminiDecider("gemini-3.1-flash-lite", client=fake)
+
+    await decider.decide([{"role": "system", "content": "shell"}], [])
+
+    config = fake.calls[0]["config"]
+    assert config["temperature"] == 1.0
+    assert config["thinking_config"].thinking_level.value == "LOW"
+
+
+async def test_gemini_decider_thinking_level_is_overridable() -> None:
+    """A caller may raise the reasoning effort (case-insensitive)."""
+    response = _response(parts=[SimpleNamespace(text="ok", function_call=None)])
+    fake = _FakeModels(response)
+    decider = GeminiDecider("gemini-3.1-flash-lite", client=fake, thinking_level="high")
+
+    await decider.decide([{"role": "system", "content": "shell"}], [])
+
+    assert fake.calls[0]["config"]["thinking_config"].thinking_level.value == "HIGH"
+
+
 # ---- make_default_decider provider branch -----------------------------------
 
 
