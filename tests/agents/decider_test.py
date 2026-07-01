@@ -28,8 +28,8 @@ from tests.conftest import MockDecider
 
 
 def test_toolcall_defaults() -> None:
-    call = ToolCall("wait")
-    assert call.name == "wait"
+    call = ToolCall("look_around")
+    assert call.name == "look_around"
     assert call.params == {}
     assert call.id is None
 
@@ -42,7 +42,7 @@ def test_toolcall_default_params_are_independent() -> None:
 
 
 def test_toolcall_uses_slots() -> None:
-    call = ToolCall("wait")
+    call = ToolCall("look_around")
     with pytest.raises(AttributeError):
         call.unexpected = "boom"  # type: ignore[attr-defined]  # slots: no ad-hoc attrs
 
@@ -58,7 +58,7 @@ def test_decision_defaults() -> None:
 def test_decision_default_tool_calls_are_independent() -> None:
     first = Decision()
     second = Decision()
-    first.tool_calls.append(ToolCall("wait"))
+    first.tool_calls.append(ToolCall("look_around"))
     assert second.tool_calls == []
 
 
@@ -147,9 +147,11 @@ async def test_mock_decider_returns_scripted_decisions_in_order_and_cycles(
     second = await mock_decider.decide([], [])
     third = await mock_decider.decide([], [])
     assert first.tool_calls[0].name == "look_around"
-    assert second.tool_calls[0].name == "wait"
+    assert second.tool_calls[0].name == "look_around"
     assert third.tool_calls[0].name == "look_around"  # cycled back to the start
     assert mock_decider.history == [first, second, third]
+    assert first is not second  # proves decider advanced from index 0 to index 1
+    assert first is third  # index 0 again, not a fresh Decision -> proves the wrap
 
 
 async def test_ollama_decider_forwards_request_and_parses_injected_client() -> None:

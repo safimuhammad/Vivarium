@@ -18,15 +18,16 @@ from bus.events import Event, ScopeType
 
 
 def test_scopetype_members_and_values() -> None:
-    """The three scope members exist with their stable string values."""
+    """The four scope members exist with their stable string values."""
     assert ScopeType.LOCAL.value == "local"
     assert ScopeType.GLOBAL.value == "global"
     assert ScopeType.TARGETED.value == "targeted"
+    assert ScopeType.PRIVATE.value == "private"
 
 
-def test_scopetype_has_exactly_three_members() -> None:
-    """No scope members were added or removed (public surface is locked)."""
-    assert {member.name for member in ScopeType} == {"LOCAL", "GLOBAL", "TARGETED"}
+def test_scopetype_has_exactly_four_members() -> None:
+    """The four scope members are locked (public surface)."""
+    assert {member.name for member in ScopeType} == {"LOCAL", "GLOBAL", "TARGETED", "PRIVATE"}
 
 
 # ---- Event field shape (backward-compatible public API) -------------------

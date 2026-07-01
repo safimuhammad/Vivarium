@@ -418,6 +418,36 @@ class Agent:
                 }
             )
 
+    async def _emit_self_talk(self, decision: Decision) -> None:
+        """Publish a private ``self_talk`` event when a breath voiced a thought and took no action.
+
+        A being may resolve a breath by simply speaking its mind -- free text with no
+        tool call -- rather than acting. That utterance is perceivable (recorded by the
+        log sink, shown in the feed) but routed to **no** other being: it is not
+        communication and costs nothing. Nothing is emitted when the breath took an
+        action (``decision.tool_calls`` non-empty) or was a silent rest (blank text).
+
+        Args:
+            decision: The just-made decision for this breath.
+
+        Side effects:
+            Publishes one ``"self_talk"`` :class:`~bus.events.Event`
+            (:attr:`~bus.events.ScopeType.PRIVATE`, stamped ``world.now()``) when
+            ``decision`` is text-only; otherwise none.
+        """
+        stripped = decision.text.strip()
+        if decision.tool_calls or not stripped:
+            return
+        await self.event_bus.publish(
+            Event(
+                type="self_talk",
+                source=self.agent_id,
+                payload={"message": stripped},
+                scope=ScopeType.PRIVATE,
+                timestamp=self.world.now(),
+            )
+        )
+
     async def refresh_status(self, previous_status: AgentStatus | None) -> None:
         """React to a status change caused by this breath's mutations.
 
@@ -891,6 +921,7 @@ class Agent:
                 else:
                     self._last_prompt_tokens = decision.prompt_tokens  # actual-token net
                     await self.execute(decision.tool_calls)
+                    await self._emit_self_talk(decision)
                     # breath_count is incremented in the finally below, so during
                     # the k-th (1-indexed) breath it still holds k-1; +1 makes the
                     # reflection fire on breaths N, 2N, ... and never on the first.

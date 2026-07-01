@@ -9,7 +9,7 @@ a :class:`~tools.registry.ToolRegistry`.
 from __future__ import annotations
 
 from tools.builtin.combat import attack
-from tools.builtin.communication import speak, wait
+from tools.builtin.communication import speak
 from tools.builtin.mating import accept_mating, initiate_mating, reject_mating
 from tools.builtin.movement import look_around, move
 from tools.builtin.resources import harvest_resources, transfer_resource
@@ -27,14 +27,12 @@ __all__ = [
     "reject_mating",
     "speak",
     "transfer_resource",
-    "wait",
 ]
 
 #: Canonical tool name -> implementation; the single source for the builtin set.
 BUILTIN_TOOLS: dict[str, ToolFn] = {
     "attack": attack,
     "speak": speak,
-    "wait": wait,
     "move": move,
     "look_around": look_around,
     "harvest_resources": harvest_resources,

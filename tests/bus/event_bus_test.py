@@ -360,3 +360,22 @@ async def test_unsubscribe_removes_inbox_and_stops_delivery(bus: EventBus) -> No
 def test_unsubscribe_unknown_agent_returns_false(bus: EventBus) -> None:
     """Unsubscribing an agent with no inbox returns ``False`` (nothing to remove)."""
     assert bus.unsubscribe("never_subscribed") is False
+
+
+async def test_private_routes_to_no_inbox_but_is_recorded(bus_world: WorldState) -> None:
+    """PRIVATE reaches no inbox (not even the source), yet is still recorded (observable)."""
+    log = InMemoryEventLog()
+    event_bus = EventBus(bus_world, event_log=log)
+    for agent in bus_world.get_all_agents():
+        event_bus.subscribe(agent.id)
+    event = Event(
+        type="self_talk",
+        source="a1",
+        payload={"message": "just musing"},
+        scope=ScopeType.PRIVATE,
+    )
+    await event_bus.publish(event)
+    assert event_bus.get_events("a1") == []  # not even the source hears it
+    assert event_bus.get_events("a2") == []
+    assert event_bus.get_events("b1") == []
+    assert log.events == [event]  # but it is observable in the log/feed

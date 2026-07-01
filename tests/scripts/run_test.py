@@ -208,7 +208,7 @@ async def test_spawn_new_agents_launches_offspring(tmp_path: Path) -> None:
 
 async def test_offspring_breathes_and_is_cleaned_up(tmp_path: Path) -> None:
     """An offspring born mid-run is detected, breathes, and is unsubscribed at shutdown."""
-    sim = _build(tmp_path, MockDecider([Decision(tool_calls=[ToolCall("wait")])] * 500))
+    sim = _build(tmp_path, MockDecider([Decision(tool_calls=[ToolCall("look_around")])] * 500))
     _inject_offspring(sim)
 
     await run_simulation(
@@ -228,7 +228,7 @@ async def test_living_offspring_keeps_run_alive_past_founder_collapse(tmp_path: 
     PARALYZED, and the run collapses fast. With it, the offspring breathes ALIVE, so
     ``_liveness_watch`` never sees zero ALIVE and the run lasts the full duration.
     """
-    sim = _build(tmp_path, MockDecider([Decision(tool_calls=[ToolCall("wait")])] * 500))
+    sim = _build(tmp_path, MockDecider([Decision(tool_calls=[ToolCall("look_around")])] * 500))
     for a in sim.agents:  # paralyze every founder
         state = sim.world.get_agent(a.agent_id)
         assert state is not None
@@ -254,7 +254,7 @@ async def test_offspring_survives_birth_when_both_parents_die(tmp_path: Path) ->
     losing the newborn. Scanning the whole world keeps the run alive until the
     spawn-watcher adopts the offspring.
     """
-    sim = _build(tmp_path, MockDecider([Decision(tool_calls=[ToolCall("wait")])] * 500))
+    sim = _build(tmp_path, MockDecider([Decision(tool_calls=[ToolCall("look_around")])] * 500))
     for a in sim.agents:  # every founder dies in the (hypothetical) mating trade
         assert sim.world.kill_agent(a.agent_id) is True
     _inject_offspring(sim)  # ALIVE newborn, not yet in the breathing set
@@ -272,7 +272,7 @@ async def test_spawn_watch_survives_a_failing_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A detection pass that raises must not kill the watcher or crash the run."""
-    sim = _build(tmp_path, MockDecider([Decision(tool_calls=[ToolCall("wait")])] * 500))
+    sim = _build(tmp_path, MockDecider([Decision(tool_calls=[ToolCall("look_around")])] * 500))
 
     def boom(_state: AgentState) -> Agent:
         raise RuntimeError("memory store unavailable")

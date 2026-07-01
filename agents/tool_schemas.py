@@ -44,14 +44,6 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
-    "wait": {
-        "type": "function",
-        "function": {
-            "name": "wait",
-            "description": "Let a moment pass without acting.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
     "move": {
         "type": "function",
         "function": {

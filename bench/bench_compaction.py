@@ -138,7 +138,7 @@ class SyntheticDecider:
         return Decision(
             text="I take stock and decide to wait a moment longer.",
             thinking=self._thinking,
-            tool_calls=[ToolCall("wait")],
+            tool_calls=[ToolCall("look_around")],
         )
 
 

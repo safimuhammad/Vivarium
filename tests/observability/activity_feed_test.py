@@ -57,3 +57,14 @@ def test_render_world_table_shows_population_summary(world: WorldState) -> None:
     assert "1 alive" in text
     assert "1 fallen" in text
     assert "0 dead" in text
+
+
+def test_render_self_talk_reads_as_a_private_thought() -> None:
+    """A self_talk event renders in a distinct thought register, not like speech."""
+    event = Event(
+        type="self_talk",
+        source="a1",
+        payload={"message": "I wonder what lies past the hills."},
+        scope=ScopeType.PRIVATE,
+    )
+    assert render_event(event) == "[a1] 💭 I wonder what lies past the hills."
