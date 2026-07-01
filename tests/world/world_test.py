@@ -982,3 +982,11 @@ def test_kill_agent_with_no_home_stake_is_a_safe_noop_for_homes(world: WorldStat
     assert home.stakeholders == ["wanderer_001"]  # untouched
     assert home.owner_id == "wanderer_001"  # untouched
     assert home.integrity == before  # untouched
+
+
+def test_build_home_starts_with_empty_vault(world: WorldState) -> None:
+    """A freshly built home has an empty (0.0) vault — the field default flows through."""
+    world.build_home(
+        "h1", "wanderer_001", "alpha", built_at=world.now(), integrity=HOME_MAX_INTEGRITY
+    )
+    assert world.homes["h1"].vault_materials == 0.0

@@ -17,7 +17,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from core.constants import HOME_HEALTH_BASE, HOME_HEALTH_CEIL, HOME_HEALTH_DIMINISH
+from core.constants import (
+    HOARDING_MATERIALS_THRESHOLD,
+    HOME_HEALTH_BASE,
+    HOME_HEALTH_CEIL,
+    HOME_HEALTH_DIMINISH,
+)
 
 
 @dataclass(slots=True)
@@ -41,6 +46,10 @@ class Home:
             is the owner AND the first stakeholder; others join via ``pledge_home``.
             Upkeep is drawn across this pool and the integrity ceiling scales with its
             length (:func:`max_integrity`).
+        vault_materials: The home's shared, materials-only store (Layer 2b). Stakeholders
+            bank materials in via ``deposit_to_home`` and draw them out via
+            ``withdraw_from_home``; the balance counts toward hoarding at the HOME level
+            (:func:`home_is_hoarding`). There is no energy vault (the hearth supplies energy).
     """
 
     home_id: str
@@ -50,6 +59,7 @@ class Home:
     built_at: float
     last_upkeep_at: float
     stakeholders: list[str] = field(default_factory=list)
+    vault_materials: float = 0.0
 
 
 def max_integrity(stakeholder_count: int) -> float:
@@ -83,3 +93,22 @@ def max_integrity(stakeholder_count: int) -> float:
     return HOME_HEALTH_BASE + (HOME_HEALTH_CEIL - HOME_HEALTH_BASE) * (
         1.0 - HOME_HEALTH_DIMINISH ** (stakeholder_count - 1)
     )
+
+
+def home_is_hoarding(home: Home) -> bool:
+    """Return whether a home's vault holds a hoard of materials.
+
+    Pure (no side effects). The vault counts toward hoarding at the HOME level (spec §12,
+    fork 3): banking materials into a home moves the hoard-signal from the depositor to the
+    home (a raid target) rather than hiding it — no laundering. Reuses the same materials
+    dial as the per-agent :func:`~world.agents.is_hoarding`, so a home and a being are judged
+    against one threshold.
+
+    Args:
+        home: The home whose vault to inspect.
+
+    Returns:
+        ``True`` if ``home.vault_materials`` is at or above
+        :data:`~core.constants.HOARDING_MATERIALS_THRESHOLD`.
+    """
+    return home.vault_materials >= HOARDING_MATERIALS_THRESHOLD
