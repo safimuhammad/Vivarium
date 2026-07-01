@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from tools.builtin.combat import attack
 from tools.builtin.communication import speak
-from tools.builtin.homes import build_home, pledge_home, use_hearth
+from tools.builtin.homes import build_home, leave_home, pledge_home, use_hearth
 from tools.builtin.mating import accept_mating, initiate_mating, reject_mating
 from tools.builtin.movement import look_around, move
 from tools.builtin.resources import harvest_resources, transfer_resource
@@ -23,6 +23,7 @@ __all__ = [
     "build_home",
     "harvest_resources",
     "initiate_mating",
+    "leave_home",
     "look_around",
     "move",
     "pledge_home",
@@ -47,6 +48,7 @@ BUILTIN_TOOLS: dict[str, ToolFn] = {
     "build_home": build_home,
     "use_hearth": use_hearth,
     "pledge_home": pledge_home,
+    "leave_home": leave_home,
 }
 
 

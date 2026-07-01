@@ -1,6 +1,6 @@
 """Home tools: ``build_home`` (raise a private home), ``use_hearth`` (burn
-materials for energy at your home), and ``pledge_home`` (join another's home as a
-stakeholder).
+materials for energy at a home you share), ``pledge_home`` (join another's home as a
+stakeholder), and ``leave_home`` (give up a stake, voluntarily).
 
 Tool functions follow the uniform Vivarium closure signature
 ``async def tool(world, event_bus, agent_id, **params) -> str`` and return a
@@ -83,7 +83,11 @@ async def build_home(world: WorldState, event_bus: EventBus, agent_id: str) -> s
 
 
 async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> str:
-    """Rest at the being's own hearth, burning materials to recover energy.
+    """Rest at the hearth of a home the being shares, burning materials to recover energy.
+
+    Any stakeholder (owner or pledged) may use the hearth (widened from L1's owner-only).
+    The fuel is unchanged: it burns the being's OWN materials (conservation — a shared home
+    is never a vault-fuelled fountain).
 
     An active, elected act (a tool) — NOT passive rest — so it does not age the breath
     and only an ALIVE being can choose it (paralysis stays social: a fallen being still
@@ -115,9 +119,9 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
 
     Returns:
         A success sentence with the new balances; an ``"Error: "`` string if the being
-        is unknown or owns no home; an ``"Invalid: "`` string if it is fallen, not
-        where its home stands, or holds no materials to burn (rejected calls mutate
-        nothing).
+        is unknown or belongs to no home; an ``"Invalid: "`` string if it is fallen,
+        not where its home stands, or holds no materials to burn (rejected calls
+        mutate nothing).
     """
     agent = world.get_agent(agent_id)
     if agent is None:
@@ -127,7 +131,7 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
             "Invalid: You are fallen and cannot rest at a hearth; "
             "only another being can restore you."
         )
-    home = world.home_of(agent_id)
+    home = world.stakeholder_home_of(agent_id)
     if home is None:
         return "Error: You have no home here to rest in."
     if home.region != agent.current_position:
@@ -236,3 +240,53 @@ async def pledge_home(world: WorldState, event_bus: EventBus, agent_id: str, hom
         "You pledge yourself to this home; you now share its keep and may rest at its hearth. "
         f"{len(home.stakeholders)} beings tend it now."
     )
+
+
+async def leave_home(world: WorldState, event_bus: EventBus, agent_id: str) -> str:
+    """Give up the being's stake in the home it shares (voluntary departure).
+
+    The being renounces its place: it stops sharing the home's upkeep and loses hearth
+    access. Departure follows the same rule as death — if the leaver owned the home and
+    other stakeholders remain, the lowest-id survivor is promoted to owner; the home's
+    integrity is clamped down to the smaller :func:`~world.homes.max_integrity`. A home
+    whose last stakeholder leaves is left ownerless-in-practice and decays via the world-tick
+    (spec §6). The vault/structure is unaffected (no vault in 2a; ruins are 2c).
+
+    Mutates world state:
+        * Removes the being from the home's :attr:`~world.homes.Home.stakeholders`,
+          promoting a new owner and clamping integrity, via
+          :meth:`~world.world.WorldState.remove_stakeholder`.
+
+    Emits events:
+        * One ``"home_left"`` event (:attr:`~bus.events.ScopeType.LOCAL`, source = the
+          leaver, region = the home's region, stamped ``world.now()``).
+
+    Args:
+        world: The live world state.
+        event_bus: The bus the resulting event is published to.
+        agent_id: Id of the departing being.
+
+    Returns:
+        A success sentence; an ``"Error: "`` string if the being is unknown or belongs to
+        no home (rejected calls mutate nothing).
+    """
+    agent = world.get_agent(agent_id)
+    if agent is None:
+        return f"Error: Cannot find Agent {agent_id} in the world."
+    home = world.stakeholder_home_of(agent_id)
+    if home is None:
+        return "Error: You do not belong to any home to leave."
+
+    region = home.region
+    world.remove_stakeholder(home.home_id, agent_id)  # prune + promote owner + clamp integrity
+    await event_bus.publish(
+        Event(
+            "home_left",
+            agent_id,
+            {"message": f"{agent.name} has left a home in {region}."},
+            scope=ScopeType.LOCAL,
+            region=region,
+            timestamp=world.now(),
+        )
+    )
+    return "You give up your place in this home; its keep and hearth are no longer yours."

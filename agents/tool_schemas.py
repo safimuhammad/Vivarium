@@ -292,6 +292,17 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "leave_home": {
+        "type": "function",
+        "function": {
+            "name": "leave_home",
+            "description": (
+                "Give up your place in the home you share; you no longer share its upkeep "
+                "or rest at its hearth."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
 }
 """Tool name -> Ollama function schema; its key set mirrors ``BUILTIN_TOOLS``."""
 
