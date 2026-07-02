@@ -21,7 +21,8 @@ class AgentStatus(Enum):
 
     Attributes:
         ALIVE: The agent can perceive and act normally.
-        PARALYZED: The agent is incapacitated (currently entered at 0.0 energy).
+        PARALYZED: The agent is incapacitated (entered at or below
+            PARALYSIS_ENERGY_THRESHOLD, 5.0 energy; revivable by another's transfer).
         DEAD: The agent has been removed from active play.
     """
 
