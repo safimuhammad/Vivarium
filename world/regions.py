@@ -16,7 +16,7 @@ class ResourceTypes(Enum):
     """The kinds of resource an agent or region can hold.
 
     Attributes:
-        ENERGY: Spent on actions; an agent at 0.0 energy is paralysed.
+        ENERGY: Spent on actions; at or below the paralysis threshold (5.0) an agent is paralysed.
         MATERIALS: Tradeable/committable stock (e.g. for mating proposals).
     """
 

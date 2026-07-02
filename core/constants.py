@@ -97,9 +97,11 @@ aggression burns the aggressor out. A world-rule dial; retune by observation.
 """
 
 KILL_ENERGY_THRESHOLD: Final[float] = 0.0
-"""At or below this energy an agent dies. [doc].
+"""A blow that would drop an agent's energy below this is lethal. [doc].
 
-DIVERGENCE: no death logic exists in the current code.
+Enforced in ``tools/builtin/combat.py`` (``attack``): a hit that overshoots this
+threshold — or any hit against an already-PARALYZED target — kills the target and
+loots all its energy and materials (live since Sprint 6).
 """
 
 PARALYSIS_ENERGY_THRESHOLD: Final[float] = 5.0
