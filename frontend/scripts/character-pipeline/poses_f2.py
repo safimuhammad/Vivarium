@@ -18,25 +18,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
-
 from derive_frames import drop_torso
+from PIL import Image
 from pxutil import contact_sheet
 
 DIR = Path(__file__).parent.parent.parent / "assets/character-claude/roster/f2-sprites"
 
 SKIN = (168, 98, 44, 255)
-SKIN_SHADE = (162, 90, 41, 255)     # also the hanging-hand tone
+SKIN_SHADE = (162, 90, 41, 255)  # also the hanging-hand tone
 PUPIL = (18, 18, 18, 255)
-TOP_MAIN = (176, 77, 29, 255)       # terracotta top
+TOP_MAIN = (176, 77, 29, 255)  # terracotta top
 TROUSER_MAIN = (72, 46, 29, 255)
-MOUTH_DARK = (53, 27, 11, 255)      # reused boot/strap-dark tone, doubling as mouth interior
+MOUTH_DARK = (53, 27, 11, 255)  # reused boot/strap-dark tone, doubling as mouth interior
 
 # -- front_blink / front_talk (front.png), from touchup_f2.py's eye geometry --
 EYE_COLS = (5, 6, 9, 10)
-EYE_TOP_ROWS = (11, 12)         # cleared to skin for the closed-eye look
-EYE_LASH_ROW = 13               # redrawn as the closed-lash line
-MOUTH_COLS = (7, 8)             # the pre-existing subtle mouth-shade columns (sprite center)
+EYE_TOP_ROWS = (11, 12)  # cleared to skin for the closed-eye look
+EYE_LASH_ROW = 13  # redrawn as the closed-lash line
+MOUTH_COLS = (7, 8)  # the pre-existing subtle mouth-shade columns (sprite center)
 MOUTH_OPEN_ROW = 19
 MOUTH_DARK_ROW = 20
 

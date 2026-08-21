@@ -1,4 +1,5 @@
 """Draw a coordinate grid over each cropped state for precise region-picking."""
+
 from PIL import Image, ImageDraw
 
 NAMES = ["state1-construction", "state2-complete", "state3-breached", "state4-collapsed"]

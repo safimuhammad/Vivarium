@@ -21,24 +21,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
-
 from derive_frames import drop_torso
+from PIL import Image
 from pxutil import contact_sheet
 
 DIR = Path(__file__).parent.parent.parent / "assets/character-claude/roster/f3-sprites"
 
 SKIN = (246, 192, 131, 255)
-SKIN_SHADE = (246, 186, 126, 255)   # also the hanging-hand tone
+SKIN_SHADE = (246, 186, 126, 255)  # also the hanging-hand tone
 PUPIL = (55, 17, 6, 255)
-TOP_MAIN = (138, 138, 84, 255)      # sage top
-MOUTH_DARK = (83, 38, 16, 255)      # reused hair-mid tone, doubling as mouth interior
+TOP_MAIN = (138, 138, 84, 255)  # sage top
+MOUTH_DARK = (83, 38, 16, 255)  # reused hair-mid tone, doubling as mouth interior
 
 # -- front_blink / front_talk (front.png), from touchup_f3.py's eye geometry --
 EYE_COLS = (5, 6, 9, 10)
-EYE_TOP_ROWS = (13, 14)         # cleared to skin for the closed-eye look
-EYE_LASH_ROW = 15               # redrawn as the closed-lash line
-MOUTH_COLS = (7, 8)             # the pre-existing lip-colored columns
+EYE_TOP_ROWS = (13, 14)  # cleared to skin for the closed-eye look
+EYE_LASH_ROW = 15  # redrawn as the closed-lash line
+MOUTH_COLS = (7, 8)  # the pre-existing lip-colored columns
 MOUTH_OPEN_ROW = 20
 MOUTH_DARK_ROW = 21
 

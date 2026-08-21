@@ -36,10 +36,10 @@ from PIL import Image
 DIR = Path(__file__).parent.parent.parent / "assets/character-claude/roster/m3-sprites"
 
 SKIN = (252, 198, 132, 255)
-SKIN_SHADE = (230, 150, 82, 255)    # neck-shadow tone, doubles as smile-crease
+SKIN_SHADE = (230, 150, 82, 255)  # neck-shadow tone, doubles as smile-crease
 RAW_PUPIL_DARK = (39, 28, 14, 255)
 PUPIL = (39, 28, 14, 255)
-CREAM = (245, 218, 172, 255)        # shirt-cream, also doubles as eye highlight
+CREAM = (245, 218, 172, 255)  # shirt-cream, also doubles as eye highlight
 
 # Vest-family tones eligible to be overwritten by the sleeve-restore mirror
 # fix. Never includes skin or the darkest outline/pupil tone.
@@ -77,15 +77,10 @@ def restore_sleeve(img: Image.Image) -> int:
     Mutates `img` in place.
     """
     px = img.load()
-    w, h = img.size
+    w, _h = img.size
     mirror = lambda x: (w - 1) - x  # noqa: E731
     restored = 0
-    cream_left = [
-        (x, y)
-        for y in range(15, 31)
-        for x in range(0, w // 2 + 1)
-        if px[x, y] == CREAM
-    ]
+    cream_left = [(x, y) for y in range(15, 31) for x in range(0, w // 2 + 1) if px[x, y] == CREAM]
     for x, y in cream_left:
         mx = mirror(x)
         if mx == x:
@@ -124,8 +119,9 @@ def main() -> None:
 
     front.save(DIR / "front.png")
     back.save(DIR / "back.png")
-    front.resize((front.size[0] * 16, front.size[1] * 16), Image.Resampling.NEAREST) \
-        .save(DIR / "front-16x.png")
+    front.resize((front.size[0] * 16, front.size[1] * 16), Image.Resampling.NEAREST).save(
+        DIR / "front-16x.png"
+    )
     print(f"m3 sleeve restore: front={n_front}px back={n_back}px")
     print("m3 front/back touched up; wrote front-16x.png")
 

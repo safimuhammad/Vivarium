@@ -9,24 +9,36 @@ from __future__ import annotations
 import random
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-from pxutil import despeckle, mode_pool, snap_palette  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image, ImageDraw
+from pxutil import despeckle, mode_pool, snap_palette
 
-WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work-sprite"
+WORK = (
+    "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work-sprite"
+)
 OUT = f"{WORK}/ruins"
 CELL = 128
 CREAM = (243, 235, 214)
 CREAM_TOL = 34
 
 HOME_RUIN_IDS = [
-    "rubble-full", "rubble-full-scavenge", "rubble-picked", "rubble-picked-scavenge",
-    "rubble-bare", "rubble-bare-scavenge", "collapse-debris", "snapshot-sweep-dissolve",
+    "rubble-full",
+    "rubble-full-scavenge",
+    "rubble-picked",
+    "rubble-picked-scavenge",
+    "rubble-bare",
+    "rubble-bare-scavenge",
+    "collapse-debris",
+    "snapshot-sweep-dissolve",
 ]
 
 
-def key_out_cream(img: Image.Image, cream: tuple[int, int, int] = CREAM, tol: int = CREAM_TOL) -> Image.Image:
+def key_out_cream(
+    img: Image.Image, cream: tuple[int, int, int] = CREAM, tol: int = CREAM_TOL
+) -> Image.Image:
     img = img.convert("RGBA")
     px = img.load()
     w, h = img.size
@@ -191,7 +203,7 @@ def main() -> None:
 
     cols, rows = 4, 2
     atlas = Image.new("RGBA", (cols * CELL, rows * CELL), (0, 0, 0, 0))
-    for i, name in enumerate(HOME_RUIN_IDS):
+    for i in range(len(HOME_RUIN_IDS)):
         cx, cy = (i % cols) * CELL, (i // cols) * CELL
         atlas.alpha_composite(despeckled[i], (cx, cy))
     atlas.save(f"{WORK}/ruins-atlas.png")

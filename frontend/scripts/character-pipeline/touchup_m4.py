@@ -36,7 +36,7 @@ from PIL import Image
 DIR = Path(__file__).parent.parent.parent / "assets/character-claude/roster/m4-sprites"
 
 SKIN = (222, 153, 81, 255)
-SHIRT = (218, 192, 150, 255)        # doubles as eye highlight (m1/F1 convention)
+SHIRT = (218, 192, 150, 255)  # doubles as eye highlight (m1/F1 convention)
 RAW_PUPIL_DARK = (46, 38, 18, 255)
 PUPIL = (46, 38, 18, 255)
 
@@ -66,8 +66,9 @@ def main() -> None:
     px[RIGHT_EYE_COLS[0], EYE_ROWS[0]] = SHIRT
 
     img.save(DIR / "front.png")
-    img.resize((img.size[0] * 16, img.size[1] * 16), Image.Resampling.NEAREST) \
-       .save(DIR / "front-16x.png")
+    img.resize((img.size[0] * 16, img.size[1] * 16), Image.Resampling.NEAREST).save(
+        DIR / "front-16x.png"
+    )
     print("m4 front touched up; wrote front-16x.png")
 
 

@@ -10,9 +10,14 @@ import sys
 from pathlib import Path
 
 from PIL import Image
-
 from pxutil import (
-    bg_mask, contact_sheet, crop_figure, despeckle, find_figure_spans, mode_pool, snap_palette,
+    bg_mask,
+    contact_sheet,
+    crop_figure,
+    despeckle,
+    find_figure_spans,
+    mode_pool,
+    snap_palette,
 )
 
 VIEW_NAMES = ["front", "back", "side"]
@@ -35,7 +40,10 @@ def main() -> None:
         sprites.append(mode_pool(fig, target_h))
     sprites = [despeckle(s) for s in snap_palette(sprites, colors=16)]
 
-    for name, sprite in zip(VIEW_NAMES, sprites):
+    # strict=False: sprites can be shorter than VIEW_NAMES when fewer figure
+    # spans were detected than expected (see the WARNING above) — the script
+    # still writes whatever views it found rather than hard-failing.
+    for name, sprite in zip(VIEW_NAMES, sprites, strict=False):
         sprite.save(out_dir / f"{name}.png")
         print(f"{name}: {sprite.size[0]}x{sprite.size[1]}")
     contact_sheet(sprites).save(out_dir / "preview.png")

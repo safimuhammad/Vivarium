@@ -6,19 +6,25 @@ from __future__ import annotations
 
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-from pxutil import despeckle, mode_pool  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image, ImageDraw
+from pxutil import despeckle, mode_pool
 
-WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work-sprite"
+WORK = (
+    "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work-sprite"
+)
 CELL = 128
 CREAM = (243, 235, 214)
 CREAM_TOL = 30
 NAMES = ["state1-construction", "state2-complete", "state3-breached", "state4-collapsed"]
 
 
-def key_out_cream(img: Image.Image, cream: tuple[int, int, int] = CREAM, tol: int = CREAM_TOL) -> Image.Image:
+def key_out_cream(
+    img: Image.Image, cream: tuple[int, int, int] = CREAM, tol: int = CREAM_TOL
+) -> Image.Image:
     img = img.convert("RGBA")
     px = img.load()
     w, h = img.size

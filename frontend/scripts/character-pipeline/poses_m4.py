@@ -26,9 +26,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
-
 from derive_frames import drop_torso
+from PIL import Image
 from pxutil import contact_sheet
 
 DIR = Path(__file__).parent.parent.parent / "assets/character-claude/roster/m4-sprites"

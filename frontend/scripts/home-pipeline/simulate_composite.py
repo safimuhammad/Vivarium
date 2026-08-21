@@ -6,7 +6,7 @@ hearth, chimney]; front = [roof, door]. Renders a few representative states.
 
 from __future__ import annotations
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 OUT = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work/components"
 PREVIEW = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work/preview"
@@ -44,8 +44,14 @@ SCENARIOS = {
     "build-foundation": (["foundation"], []),
     "build-post": (["foundation", "post"], []),
     "build-walls": (["foundation", "post", "wall-intact", "window-cold"], []),
-    "build-hearth": (["foundation", "post", "wall-intact", "window-cold", "hearth-lit-1", "chimney"], []),
-    "build-roof": (["foundation", "post", "wall-intact", "window-cold", "hearth-lit-1", "chimney"], ["roof-intact"]),
+    "build-hearth": (
+        ["foundation", "post", "wall-intact", "window-cold", "hearth-lit-1", "chimney"],
+        [],
+    ),
+    "build-roof": (
+        ["foundation", "post", "wall-intact", "window-cold", "hearth-lit-1", "chimney"],
+        ["roof-intact"],
+    ),
     "collapse-mid": (
         ["foundation", "post", "wall-falling", "window-broken", "chimney"],
         ["roof-falling", "door-falling"],
@@ -54,8 +60,11 @@ SCENARIOS = {
 
 cols = 5
 names = list(SCENARIOS.keys())
-sheet = Image.new("RGBA", (cols * (CELL + 10) + 10, ((len(names) - 1) // cols + 1) * (CELL + 26) + 10), (247, 239, 220, 255))
-from PIL import ImageDraw
+sheet = Image.new(
+    "RGBA",
+    (cols * (CELL + 10) + 10, ((len(names) - 1) // cols + 1) * (CELL + 26) + 10),
+    (247, 239, 220, 255),
+)
 
 d = ImageDraw.Draw(sheet)
 for i, name in enumerate(names):

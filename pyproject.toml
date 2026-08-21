@@ -91,6 +91,12 @@ select = [
 # Tests may use assert and don't need the same naming/annotation rigor.
 "tests/**" = ["N802", "N803", "N806"]
 
+# Author-once art-pipeline generator scripts (run by hand, verified by eye,
+# not imported by runtime code). Their long lines are data tables (pixel/
+# polygon coordinates, palette tuples) and absolute output paths, not
+# reformattable code — every other rule still applies to these files.
+"frontend/scripts/**" = ["E501"]
+
 # ---------------------------------------------------------------------------
 # Mypy (strict)
 # ---------------------------------------------------------------------------

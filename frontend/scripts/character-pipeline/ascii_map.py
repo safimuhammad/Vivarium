@@ -12,6 +12,7 @@ mapping — cross-reference by the printed RGB legend, not by letter, when
 comparing across calls. Call with the full row range when you need one
 consistent map.
 """
+
 from __future__ import annotations
 
 import string
@@ -57,8 +58,8 @@ def main() -> None:
 
     print()
     print("legend:")
-    for c, l in colors.items():
-        print(f"  {l} = {c}")
+    for c, letter in colors.items():
+        print(f"  {letter} = {c}")
 
 
 if __name__ == "__main__":

@@ -24,9 +24,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
-
 from derive_frames import drop_torso
+from PIL import Image
 from pxutil import contact_sheet
 
 DIR = Path(__file__).parent.parent.parent / "assets/character-claude/roster/m2-sprites"
@@ -39,8 +38,8 @@ MOUTH_DARK = (112, 57, 25, 255)
 
 # -- front_blink / front_talk (front.png), from touchup_m2.py's eye geometry --
 EYE_COLS = (4, 5, 11, 12)
-EYE_TOP_ROWS = (11, 12)         # cleared to skin for the closed-eye look
-EYE_LASH_ROW = 13               # redrawn as the closed-lash line
+EYE_TOP_ROWS = (11, 12)  # cleared to skin for the closed-eye look
+EYE_LASH_ROW = 13  # redrawn as the closed-lash line
 MOUTH_COLS = (7, 8)
 MOUTH_OPEN_ROW = 17
 MOUTH_DARK_ROW = 18

@@ -22,17 +22,17 @@ from PIL import Image
 
 DIR = Path(__file__).parent.parent.parent / "assets/character-claude/roster/f1-sprites"
 
-SKIN = (230, 150, 74, 255)          # 'h'
-RAW_EYE_DARK = (37, 18, 6, 255)     # 'i' — the naturally-quantized eye blob color
-PUPIL = (37, 18, 6, 255)            # redraw with the same near-black (matches m1's PUPIL tone)
-HIGHLIGHT = (234, 189, 129, 255)    # blouse cream doubles as eye highlight (m1's pattern)
-SKIN_SHADE = (194, 112, 49, 255)    # 'l' — darker skin tone, doubles as strap/bag leather
+SKIN = (230, 150, 74, 255)  # 'h'
+RAW_EYE_DARK = (37, 18, 6, 255)  # 'i' — the naturally-quantized eye blob color
+PUPIL = (37, 18, 6, 255)  # redraw with the same near-black (matches m1's PUPIL tone)
+HIGHLIGHT = (234, 189, 129, 255)  # blouse cream doubles as eye highlight (m1's pattern)
+SKIN_SHADE = (194, 112, 49, 255)  # 'l' — darker skin tone, doubles as strap/bag leather
 
 # Eye geometry, judged from the ASCII map (see ROSTER_PIPELINE_NOTES.md).
 EYE_ROWS = (8, 9, 10)
 LEFT_EYE_COLS = (6, 7)
 RIGHT_EYE_COLS = (11, 12)
-EYE_CLEAR_COLS = range(4, 16)   # face-interior band spanning both raw blobs
+EYE_CLEAR_COLS = range(4, 16)  # face-interior band spanning both raw blobs
 
 # The raw quantize pass left a 3x2 chin-shadow block (row 15-16, cols 8-10)
 # that reads as a blob rather than a smile curve. Narrow it to a 2px hint on
@@ -66,8 +66,9 @@ def main() -> None:
         px[x, SMILE_ROW] = SKIN_SHADE
 
     img.save(DIR / "front.png")
-    img.resize((img.size[0] * 16, img.size[1] * 16), Image.Resampling.NEAREST) \
-       .save(DIR / "front-16x.png")
+    img.resize((img.size[0] * 16, img.size[1] * 16), Image.Resampling.NEAREST).save(
+        DIR / "front-16x.png"
+    )
     print("f1 front touched up; wrote front-16x.png")
 
 

@@ -26,11 +26,11 @@ from PIL import Image
 
 DIR = Path(__file__).parent.parent.parent / "assets/character-claude/roster/m2-sprites"
 
-SKIN = (181, 96, 36, 255)           # 'e' — main/darker skin tone
-SKIN_LIGHT = (187, 105, 46, 255)    # 'f' — lighter skin tone, doubles as eye highlight
-RAW_PUPIL_DARK = (36, 16, 5, 255)   # 'g' — the naturally-quantized pupil/eyebrow blob color
-PUPIL = (36, 16, 5, 255)            # redraw with the same near-black-brown tone
-SKIN_SHADE = (112, 57, 25, 255)     # 'i' — doubles as strap leather / ear shadow
+SKIN = (181, 96, 36, 255)  # 'e' — main/darker skin tone
+SKIN_LIGHT = (187, 105, 46, 255)  # 'f' — lighter skin tone, doubles as eye highlight
+RAW_PUPIL_DARK = (36, 16, 5, 255)  # 'g' — the naturally-quantized pupil/eyebrow blob color
+PUPIL = (36, 16, 5, 255)  # redraw with the same near-black-brown tone
+SKIN_SHADE = (112, 57, 25, 255)  # 'i' — doubles as strap leather / ear shadow
 
 # Eye geometry, judged from the ASCII map (see ROSTER_PIPELINE_NOTES.md).
 # front.png is 17px wide; true center = (17-1)/2 = 8. Cols (4,5)/(11,12) are
@@ -38,7 +38,7 @@ SKIN_SHADE = (112, 57, 25, 255)     # 'i' — doubles as strap leather / ear sha
 EYE_ROWS = (11, 12, 13)
 LEFT_EYE_COLS = (4, 5)
 RIGHT_EYE_COLS = (11, 12)
-EYE_CLEAR_COLS = range(2, 15)   # face-interior band spanning both raw pupil blobs
+EYE_CLEAR_COLS = range(2, 15)  # face-interior band spanning both raw pupil blobs
 
 # No raw smile/chin-shadow artifact exists at any zoom (verified before
 # writing this file) — hand-author a 2px hint on one row, m1's own scale.
@@ -75,8 +75,9 @@ def main() -> None:
         px[x, SMILE_ROW] = SKIN_SHADE
 
     img.save(DIR / "front.png")
-    img.resize((img.size[0] * 16, img.size[1] * 16), Image.Resampling.NEAREST) \
-       .save(DIR / "front-16x.png")
+    img.resize((img.size[0] * 16, img.size[1] * 16), Image.Resampling.NEAREST).save(
+        DIR / "front-16x.png"
+    )
     print("m2 front touched up; wrote front-16x.png")
 
 

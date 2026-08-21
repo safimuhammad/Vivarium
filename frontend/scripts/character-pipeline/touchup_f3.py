@@ -30,8 +30,8 @@ from PIL import Image
 DIR = Path(__file__).parent.parent.parent / "assets/character-claude/roster/f3-sprites"
 
 SKIN = (246, 192, 131, 255)
-PUPIL = (55, 17, 6, 255)            # the near-black tone quantize already used for the eye blobs
-HIGHLIGHT = SKIN                    # F3's skin is already the lightest tone available
+PUPIL = (55, 17, 6, 255)  # the near-black tone quantize already used for the eye blobs
+HIGHLIGHT = SKIN  # F3's skin is already the lightest tone available
 
 # Raw eye-blob pixels (outside the new pupil columns) to clear back to skin.
 RAW_LEFT_BLOB = {(2, 13), (3, 13), (4, 13), (2, 14), (3, 14), (4, 14), (4, 15)}
@@ -57,8 +57,9 @@ def main() -> None:
     px[RIGHT_EYE_COLS[0], EYE_ROWS[0]] = HIGHLIGHT
 
     img.save(DIR / "front.png")
-    img.resize((img.size[0] * 16, img.size[1] * 16), Image.Resampling.NEAREST) \
-       .save(DIR / "front-16x.png")
+    img.resize((img.size[0] * 16, img.size[1] * 16), Image.Resampling.NEAREST).save(
+        DIR / "front-16x.png"
+    )
     print("f3 front touched up; wrote front-16x.png")
 
 

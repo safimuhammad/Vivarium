@@ -10,18 +10,26 @@ from __future__ import annotations
 import random
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-from pxutil import despeckle, mode_pool, snap_palette  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image, ImageDraw
+from pxutil import despeckle, mode_pool, snap_palette
 
 WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work"
 OUT = f"{WORK}/ruins"
 CELL = 128
 
 HOME_RUIN_IDS = [
-    "rubble-full", "rubble-full-scavenge", "rubble-picked", "rubble-picked-scavenge",
-    "rubble-bare", "rubble-bare-scavenge", "collapse-debris", "snapshot-sweep-dissolve",
+    "rubble-full",
+    "rubble-full-scavenge",
+    "rubble-picked",
+    "rubble-picked-scavenge",
+    "rubble-bare",
+    "rubble-bare-scavenge",
+    "collapse-debris",
+    "snapshot-sweep-dissolve",
 ]
 
 WOOD_HUES = range(15, 45)  # brown/tan hue band we treat as "wood" for bare-ification
@@ -35,10 +43,14 @@ def rgb_to_hsv_hue(r: int, g: int, b: int) -> float:
 
 
 def fit_to_cell(img: Image.Image, max_dim: int = 120) -> Image.Image:
-    pooled = mode_pool(img, max_dim if img.height >= img.width else round(max_dim * img.height / img.width))
+    pooled = mode_pool(
+        img, max_dim if img.height >= img.width else round(max_dim * img.height / img.width)
+    )
     if pooled.width > max_dim:
         scale = max_dim / pooled.width
-        pooled = pooled.resize((max_dim, max(1, round(pooled.height * scale))), Image.Resampling.NEAREST)
+        pooled = pooled.resize(
+            (max_dim, max(1, round(pooled.height * scale))), Image.Resampling.NEAREST
+        )
     cell = Image.new("RGBA", (CELL, CELL), (0, 0, 0, 0))
     ox = (CELL - pooled.width) // 2
     oy = CELL - pooled.height - 4
@@ -81,7 +93,11 @@ def add_basket(img: Image.Image) -> Image.Image:
     out = img.copy()
     d = ImageDraw.Draw(out)
     bx, by = 96, 104
-    d.polygon([(bx, by), (bx + 20, by), (bx + 17, by + 14), (bx + 3, by + 14)], fill=(120, 84, 46, 255), outline=(60, 40, 20, 255))
+    d.polygon(
+        [(bx, by), (bx + 20, by), (bx + 17, by + 14), (bx + 3, by + 14)],
+        fill=(120, 84, 46, 255),
+        outline=(60, 40, 20, 255),
+    )
     d.line([(bx + 4, by), (bx + 10, by - 7), (bx + 16, by)], fill=(90, 60, 32, 255), width=1)
     return out
 
@@ -144,7 +160,7 @@ def main() -> None:
 
     cols, rows = 4, 2
     atlas = Image.new("RGBA", (cols * CELL, rows * CELL), (0, 0, 0, 0))
-    for i, name in enumerate(HOME_RUIN_IDS):
+    for i in range(len(HOME_RUIN_IDS)):
         cx, cy = (i % cols) * CELL, (i // cols) * CELL
         atlas.alpha_composite(despeckled[i], (cx, cy))
     atlas.save(f"{WORK}/ruins-atlas.png")

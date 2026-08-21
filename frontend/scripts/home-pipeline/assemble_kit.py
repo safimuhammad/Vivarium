@@ -17,22 +17,59 @@ WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/hom
 KIT_DIR = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/assets/character-claude/roster/hut-kit"
 
 HOME_COMPONENT_IDS = [
-    "foundation", "post", "wall-intact", "wall-cracked", "wall-broken", "wall-falling",
-    "roof-intact", "roof-damaged", "roof-falling", "door-closed", "door-opening-1",
-    "door-opening-2", "door-opening-3", "door-open", "door-breached", "door-falling",
-    "window-cold", "window-lit", "window-broken", "hearth-cold", "hearth-lit-1",
-    "hearth-lit-2", "chimney", "dust",
+    "foundation",
+    "post",
+    "wall-intact",
+    "wall-cracked",
+    "wall-broken",
+    "wall-falling",
+    "roof-intact",
+    "roof-damaged",
+    "roof-falling",
+    "door-closed",
+    "door-opening-1",
+    "door-opening-2",
+    "door-opening-3",
+    "door-open",
+    "door-breached",
+    "door-falling",
+    "window-cold",
+    "window-lit",
+    "window-broken",
+    "hearth-cold",
+    "hearth-lit-1",
+    "hearth-lit-2",
+    "chimney",
+    "dust",
 ]
 HOME_RUIN_IDS = [
-    "rubble-full", "rubble-full-scavenge", "rubble-picked", "rubble-picked-scavenge",
-    "rubble-bare", "rubble-bare-scavenge", "collapse-debris", "snapshot-sweep-dissolve",
+    "rubble-full",
+    "rubble-full-scavenge",
+    "rubble-picked",
+    "rubble-picked-scavenge",
+    "rubble-bare",
+    "rubble-bare-scavenge",
+    "collapse-debris",
+    "snapshot-sweep-dissolve",
 ]
 YARD_SEMANTIC_FRAMES = [
-    "standing-a-base", "standing-b-base", "warm-overlay", "durable-hoarding-overlay", "persistent-ruin-base",
+    "standing-a-base",
+    "standing-b-base",
+    "warm-overlay",
+    "durable-hoarding-overlay",
+    "persistent-ruin-base",
 ]
 DETAIL_LABELS = {
-    0: "owner", 1: "stakeholder-1", 2: "stakeholder-2", 3: "stakeholder-3", 4: "stakeholder-4",
-    5: "vault", 6: "hoarding", 7: "breacher", 9: "loot", 10: "claim",
+    0: "owner",
+    1: "stakeholder-1",
+    2: "stakeholder-2",
+    3: "stakeholder-3",
+    4: "stakeholder-4",
+    5: "vault",
+    6: "hoarding",
+    7: "breacher",
+    9: "loot",
+    10: "claim",
 }
 
 
@@ -40,7 +77,9 @@ def sha256_of(path: str) -> str:
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
 
-def atlas_descriptor(atlas_id: str, filename: str, group: str, cw: int, ch: int, cols: int, rows: int) -> dict:
+def atlas_descriptor(
+    atlas_id: str, filename: str, group: str, cw: int, ch: int, cols: int, rows: int
+) -> dict:
     path = f"{KIT_DIR}/{filename}"
     img = Image.open(path)
     w, h = img.size
@@ -68,10 +107,18 @@ def main() -> None:
     os.makedirs(KIT_DIR, exist_ok=True)
 
     # write final atlas PNGs (optimized) into the kit dir
-    Image.open(f"{WORK}/components-atlas.png").convert("RGBA").save(f"{KIT_DIR}/components.png", optimize=True)
-    Image.open(f"{WORK}/ruins-atlas.png").convert("RGBA").save(f"{KIT_DIR}/ruins.png", optimize=True)
-    Image.open(f"{WORK}/yards-atlas.png").convert("RGBA").save(f"{KIT_DIR}/yards.png", optimize=True)
-    Image.open(f"{WORK}/details-atlas.png").convert("RGBA").save(f"{KIT_DIR}/details.png", optimize=True)
+    Image.open(f"{WORK}/components-atlas.png").convert("RGBA").save(
+        f"{KIT_DIR}/components.png", optimize=True
+    )
+    Image.open(f"{WORK}/ruins-atlas.png").convert("RGBA").save(
+        f"{KIT_DIR}/ruins.png", optimize=True
+    )
+    Image.open(f"{WORK}/yards-atlas.png").convert("RGBA").save(
+        f"{KIT_DIR}/yards.png", optimize=True
+    )
+    Image.open(f"{WORK}/details-atlas.png").convert("RGBA").save(
+        f"{KIT_DIR}/details.png", optimize=True
+    )
 
     atlases = [
         atlas_descriptor("hut-kit-home-components", "components.png", "home", 128, 128, 6, 4),
@@ -122,7 +169,9 @@ def build_contact_sheet() -> None:
 
     def row(names: list[str], srcdir: str, cell: int, cols: int) -> Image.Image:
         rows_ = (len(names) - 1) // cols + 1
-        sheet = Image.new("RGBA", (cols * (cell + 8) + 8, rows_ * (cell + 22) + 8), (247, 239, 220, 255))
+        sheet = Image.new(
+            "RGBA", (cols * (cell + 8) + 8, rows_ * (cell + 22) + 8), (247, 239, 220, 255)
+        )
         d = ImageDraw.Draw(sheet)
         for i, name in enumerate(names):
             img = Image.open(f"{srcdir}/{name}.png").convert("RGBA")
@@ -139,7 +188,14 @@ def build_contact_sheet() -> None:
     detail_sheet = row(detail_names, detail_dir, 32, 10)
 
     width = max(comp_sheet.width, ruin_sheet.width, yard_sheet.width, detail_sheet.width, 900)
-    total_h = section_title_h * 4 + comp_sheet.height + ruin_sheet.height + yard_sheet.height + detail_sheet.height + 40
+    total_h = (
+        section_title_h * 4
+        + comp_sheet.height
+        + ruin_sheet.height
+        + yard_sheet.height
+        + detail_sheet.height
+        + 40
+    )
     sheet = Image.new("RGBA", (width, total_h), (247, 239, 220, 255))
     d = ImageDraw.Draw(sheet)
     y = 6

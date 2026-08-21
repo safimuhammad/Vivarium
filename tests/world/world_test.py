@@ -148,9 +148,9 @@ def test_region_pressure_is_detached_frozen_sorted_and_monotonic(world: WorldSta
     assert pressure["alpha"].population_high_water == 3
     assert pressure["beta"].population_high_water == 1
     assert world.kill_agent("wanderer_002")
-    assert {
-        item.region: item.population_high_water for item in world.get_region_pressure()
-    }["alpha"] == 3
+    assert {item.region: item.population_high_water for item in world.get_region_pressure()}[
+        "alpha"
+    ] == 3
 
     assert world.build_home(
         "home_pressure",

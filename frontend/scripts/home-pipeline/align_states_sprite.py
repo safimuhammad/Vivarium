@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-from pxutil import bg_mask  # noqa: E402
-from PIL import Image  # noqa: E402
+from PIL import Image
+from pxutil import bg_mask
 
-WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work-sprite"
+WORK = (
+    "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work-sprite"
+)
 NAMES = ["state1-construction", "state2-complete", "state3-breached", "state4-collapsed"]
 CANVAS = (500, 520)
 TARGET_GROUND = (250, 500)

@@ -99,7 +99,9 @@ def main() -> None:
         count = retint_file(path)
         total += count
         print(f"{filename}: retinted {count} hair-crown pixel(s)")
-    print(f"m4 hair-crown retint complete: {total} pixel(s) changed across {len(PACKED_FILES)} files")
+    print(
+        f"m4 hair-crown retint complete: {total} pixel(s) changed across {len(PACKED_FILES)} files"
+    )
 
 
 if __name__ == "__main__":

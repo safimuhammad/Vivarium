@@ -12,46 +12,48 @@ from functools import partial
 from pathlib import Path
 
 from PIL import Image
-
 from pxutil import contact_sheet
 
 
 def hip_row(img: Image.Image, hip_frac: float) -> int:
     return int(img.size[1] * hip_frac)
 
+
 def leg_cols(img: Image.Image, hip: int) -> list[int]:
     """Columns containing any leg-region foreground."""
     px = img.load()
-    return [x for x in range(img.size[0])
-            if any(px[x, y][3] > 0 for y in range(hip, img.size[1]))]
+    return [x for x in range(img.size[0]) if any(px[x, y][3] > 0 for y in range(hip, img.size[1]))]
+
 
 def shift_cols(img: Image.Image, cols: list[int], hip: int, dx: int, dy: int) -> None:
     """Move the leg-region pixels of the given columns by (dx, dy), in place."""
     shift_band(img, cols, hip, img.size[1], dx, dy)
 
+
 def cols_in_band(img: Image.Image, y0: int, y1: int) -> list[int]:
     """Columns containing any foreground within row band [y0, y1)."""
     px = img.load()
-    return [x for x in range(img.size[0])
-            if any(px[x, y][3] > 0 for y in range(y0, y1))]
+    return [x for x in range(img.size[0]) if any(px[x, y][3] > 0 for y in range(y0, y1))]
+
 
 def shift_band(img: Image.Image, cols: list[int], y0: int, y1: int, dx: int, dy: int) -> None:
     """Move the foreground pixels of the given columns within row band [y0, y1), in place."""
     px = img.load()
     w, h = img.size
     moved = {(x, y): px[x, y] for x in cols for y in range(y0, y1) if px[x, y][3] > 0}
-    for (x, y) in moved:
+    for x, y in moved:
         px[x, y] = (0, 0, 0, 0)
     for (x, y), c in moved.items():
         nx, ny = x + dx, y + dy
         if 0 <= nx < w and 0 <= ny < h:
             px[nx, ny] = c
 
+
 def drop_torso(img: Image.Image, hip: int, bob: int) -> Image.Image:
     """Crouch-into-step: rows above the hip move down by `bob`; feet stay planted."""
     out = Image.new("RGBA", img.size, (0, 0, 0, 0))
     torso = img.crop((0, 0, img.size[0], hip))
-    out.alpha_composite(img)                       # legs (and everything) first
+    out.alpha_composite(img)  # legs (and everything) first
     top = Image.new("RGBA", img.size, (0, 0, 0, 0))
     top.paste(torso, (0, bob))
     # clear the original torso band, then lay the dropped torso over the legs
@@ -61,12 +63,13 @@ def drop_torso(img: Image.Image, hip: int, bob: int) -> Image.Image:
     out.alpha_composite(top)
     return out
 
+
 def mirror_legs(img: Image.Image, hip: int) -> Image.Image:
     """Flip only the leg region horizontally (opposite stride for free)."""
     out = img.copy()
     legs = img.crop((0, hip, img.size[0], img.size[1]))
     flipped = legs.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-    for y in range(hip, img.size[1]):              # clear then paste keeps alpha honest
+    for y in range(hip, img.size[1]):  # clear then paste keeps alpha honest
         for x in range(img.size[0]):
             out.putpixel((x, y), (0, 0, 0, 0))
     out.alpha_composite(flipped, (0, hip))
@@ -82,6 +85,7 @@ def contact_frontback(base: Image.Image, hip: int, step: int, bob: int) -> Image
     shift_cols(f, side, hip, 0, -abs(step))
     return drop_torso(f, hip, bob)
 
+
 def contact_side(base: Image.Image, hip: int, step: int, bob: int) -> Image.Image:
     """Side contact pose: legs split fore/aft by `step`; sign swaps the stride.
 
@@ -96,8 +100,9 @@ def contact_side(base: Image.Image, hip: int, step: int, bob: int) -> Image.Imag
     return drop_torso(f, hip, bob)
 
 
-def contact_side_skirted(base: Image.Image, hip: int, step: int, bob: int, boot_row: int,
-                          sway: int = 1) -> Image.Image:
+def contact_side_skirted(
+    base: Image.Image, hip: int, step: int, bob: int, boot_row: int, sway: int = 1
+) -> Image.Image:
     """Side contact pose for a skirted character: boots-only offset + hem sway.
 
     `contact_side`'s full-height column shift disconnects a skirt hem from
@@ -153,7 +158,7 @@ def build_strip(base: Image.Image, contact_fn, hip_frac: float, step: int, bob: 
     hip = hip_row(base, hip_frac)
     contact_a = contact_fn(base, hip, step, bob)
     contact_b = contact_fn(base, hip, -step, bob)  # opposite stride via sign, not mirror
-    frames = [contact_a, base, contact_b, base]    # passing == base == idle
+    frames = [contact_a, base, contact_b, base]  # passing == base == idle
     w, h = base.size
     strip = Image.new("RGBA", (w * 4, h), (0, 0, 0, 0))
     for i, fr in enumerate(frames):
@@ -177,8 +182,11 @@ def main() -> None:
         partial(contact_side_skirted, boot_row=boot_row) if boot_row is not None else contact_side
     )
 
-    plan = [("front", "down", contact_frontback, step), ("back", "up", contact_frontback, step),
-            ("side", "side", side_contact_fn, step * 2)]   # profile stride needs the extra px
+    plan = [
+        ("front", "down", contact_frontback, step),
+        ("back", "up", contact_frontback, step),
+        ("side", "side", side_contact_fn, step * 2),
+    ]  # profile stride needs the extra px
     strips = []
     for src, out_name, fn, view_step in plan:
         base = Image.open(sprites_dir / f"{src}.png").convert("RGBA")

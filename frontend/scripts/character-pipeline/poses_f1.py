@@ -17,15 +17,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
-
 from derive_frames import drop_torso
+from PIL import Image
 from pxutil import contact_sheet
 
 DIR = Path(__file__).parent.parent.parent / "assets/character-claude/roster/f1-sprites"
 
 SKIN = (230, 150, 74, 255)
-SKIN_SHADE = (194, 112, 49, 255)    # also the strap/bag leather tone
+SKIN_SHADE = (194, 112, 49, 255)  # also the strap/bag leather tone
 PUPIL = (37, 18, 6, 255)
 BLOUSE = (234, 189, 129, 255)
 SKIRT = (108, 90, 36, 255)
@@ -33,8 +32,8 @@ MOUTH_DARK = (115, 64, 26, 255)
 
 # -- front_blink / front_talk (front.png), from touchup_f1.py's eye geometry --
 EYE_COLS = (6, 7, 11, 12)
-EYE_TOP_ROWS = (8, 9)          # cleared to skin for the closed-eye look
-EYE_LASH_ROW = 10              # redrawn as the closed-lash line
+EYE_TOP_ROWS = (8, 9)  # cleared to skin for the closed-eye look
+EYE_LASH_ROW = 10  # redrawn as the closed-lash line
 MOUTH_COLS = (9, 10)
 MOUTH_OPEN_ROW = 15
 MOUTH_DARK_ROW = 16

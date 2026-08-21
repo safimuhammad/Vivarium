@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-from pxutil import despeckle  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image, ImageDraw
+from pxutil import despeckle
 
 WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work"
 OUT = f"{WORK}/details"
@@ -38,7 +40,9 @@ def canvas() -> tuple[Image.Image, ImageDraw.ImageDraw]:
 
 def owner_badge() -> Image.Image:
     img, d = canvas()
-    d.polygon([(16, 6), (24, 14), (21, 14), (21, 22), (11, 22), (11, 14), (8, 14)], fill=GOLD, outline=INK)
+    d.polygon(
+        [(16, 6), (24, 14), (21, 14), (21, 22), (11, 22), (11, 14), (8, 14)], fill=GOLD, outline=INK
+    )
     d.rectangle([13, 22, 19, 25], fill=WOOD, outline=INK)
     return img
 
@@ -122,7 +126,9 @@ def main() -> None:
     d = ImageDraw.Draw(sheet)
     for i in slots:
         cx, cy = (i % COLS) * CELL * zoom, (i // COLS) * CELL * zoom
-        d.rectangle([cx, cy, cx + CELL * zoom - 1, cy + CELL * zoom - 1], outline=(200, 40, 40, 255))
+        d.rectangle(
+            [cx, cy, cx + CELL * zoom - 1, cy + CELL * zoom - 1], outline=(200, 40, 40, 255)
+        )
     sheet.save(f"{WORK}/preview/details-full.png")
     print("saved 32 detail slots (", len(slots), "authored )")
 

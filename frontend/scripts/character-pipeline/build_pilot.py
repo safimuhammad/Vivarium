@@ -25,15 +25,16 @@ def data_uri(img: Image.Image) -> str:
 
 def main() -> None:
     sheets_dir, template_path, out_path = (Path(p) for p in sys.argv[1:4])
-    strips = {d: Image.open(sheets_dir / f"walk-{d}.png").convert("RGBA")
-              for d in ("down", "up", "side")}
-    fw = max(im.size[0] // FRAMES for im in strips.values())   # common frame width
+    strips = {
+        d: Image.open(sheets_dir / f"walk-{d}.png").convert("RGBA") for d in ("down", "up", "side")
+    }
+    fw = max(im.size[0] // FRAMES for im in strips.values())  # common frame width
     fh = max(im.size[1] for im in strips.values())
     sheets: dict[str, str] = {}
     for direction, img in strips.items():
         own_fw = img.size[0] // FRAMES
         padded = Image.new("RGBA", (fw * FRAMES, fh), (0, 0, 0, 0))
-        for i in range(FRAMES):                                 # center each frame
+        for i in range(FRAMES):  # center each frame
             frame = img.crop((i * own_fw, 0, (i + 1) * own_fw, img.size[1]))
             padded.alpha_composite(frame, (i * fw + (fw - own_fw) // 2, fh - img.size[1]))
         sheets[direction] = data_uri(padded)
@@ -43,8 +44,14 @@ def main() -> None:
         canvas = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
         canvas.alpha_composite(img, ((fw - img.size[0]) // 2, fh - img.size[1]))
         poses[pose_file.stem.removeprefix("pose-")] = data_uri(canvas)
-    manifest = {"fw": fw, "fh": fh, "frames": FRAMES, "anchorY": fh - 2,
-                "sheets": sheets, "poses": poses}
+    manifest = {
+        "fw": fw,
+        "fh": fh,
+        "frames": FRAMES,
+        "anchorY": fh - 2,
+        "sheets": sheets,
+        "poses": poses,
+    }
     html = template_path.read_text().replace("/*__SPRITES__*/", json.dumps(manifest))
     out_path.write_text(html)
     print(f"wrote {out_path} ({out_path.stat().st_size / 1024:.0f} KB, frame {fw}x{fh})")

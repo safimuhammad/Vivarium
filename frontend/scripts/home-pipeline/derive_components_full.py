@@ -13,22 +13,43 @@ from __future__ import annotations
 import random
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-import derive_components as dc  # noqa: E402
-from pxutil import despeckle, snap_palette  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+import derive_components as dc
+from PIL import Image, ImageDraw
+from pxutil import despeckle, snap_palette
 
 WORK = dc.WORK
 OUT = dc.OUT
 CELL = 128
 
 HOME_COMPONENT_IDS = [
-    "foundation", "post", "wall-intact", "wall-cracked", "wall-broken", "wall-falling",
-    "roof-intact", "roof-damaged", "roof-falling", "door-closed", "door-opening-1",
-    "door-opening-2", "door-opening-3", "door-open", "door-breached", "door-falling",
-    "window-cold", "window-lit", "window-broken", "hearth-cold", "hearth-lit-1",
-    "hearth-lit-2", "chimney", "dust",
+    "foundation",
+    "post",
+    "wall-intact",
+    "wall-cracked",
+    "wall-broken",
+    "wall-falling",
+    "roof-intact",
+    "roof-damaged",
+    "roof-falling",
+    "door-closed",
+    "door-opening-1",
+    "door-opening-2",
+    "door-opening-3",
+    "door-open",
+    "door-breached",
+    "door-falling",
+    "window-cold",
+    "window-lit",
+    "window-broken",
+    "hearth-cold",
+    "hearth-lit-1",
+    "hearth-lit-2",
+    "chimney",
+    "dust",
 ]
 
 
@@ -44,7 +65,14 @@ def darken(img: Image.Image, factor: float) -> Image.Image:
     return out
 
 
-def punch_void(img: Image.Image, rng: random.Random, cx: int, cy: int, radius: int, void_color: tuple[int, int, int, int]) -> Image.Image:
+def punch_void(
+    img: Image.Image,
+    rng: random.Random,
+    cx: int,
+    cy: int,
+    radius: int,
+    void_color: tuple[int, int, int, int],
+) -> Image.Image:
     """Carve a rough dark void (breach hole) centered at (cx, cy)."""
     out = img.copy()
     px = out.load()
@@ -58,7 +86,15 @@ def punch_void(img: Image.Image, rng: random.Random, cx: int, cy: int, radius: i
     return out
 
 
-def add_crack(img: Image.Image, rng: random.Random, x0: int, y0: int, x1: int, y1: int, color: tuple[int, int, int, int]) -> Image.Image:
+def add_crack(
+    img: Image.Image,
+    rng: random.Random,
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    color: tuple[int, int, int, int],
+) -> Image.Image:
     out = img.copy()
     px = out.load()
     w, h = out.size
@@ -106,7 +142,6 @@ def build_extra(frames: dict[str, Image.Image]) -> None:
     # door-open: door-closed with the leaf carved to a dark gap + jamb kept.
     do = frames["door-closed"].copy()
     px = do.load()
-    w, h = do.size
     for y in range(60, 122):
         for x in range(46, 74):
             if px[x, y][3] > 0:
@@ -145,11 +180,11 @@ def build_extra(frames: dict[str, Image.Image]) -> None:
         d.rectangle([56, 108, 76, 118], fill=(96, 92, 84, 255))
         d.rectangle([58, 110, 74, 116], fill=(40, 36, 32, 255))
         if glow > 0:
-            for i, (rad, col) in enumerate([
+            for rad, col in [
                 (9, (255, 140, 40, int(90 * glow))),
                 (6, (255, 170, 60, int(160 * glow))),
                 (3, (255, 210, 120, int(220 * glow))),
-            ]):
+            ]:
                 cx, cy = 66, 113
                 d.ellipse([cx - rad, cy - rad - 2, cx + rad, cy + rad - 2], fill=col)
         return img
@@ -172,9 +207,22 @@ def build_extra(frames: dict[str, Image.Image]) -> None:
 
 def main() -> None:
     frames: dict[str, Image.Image] = {}
-    for name in ["foundation", "post", "wall-intact", "wall-cracked", "roof-intact", "roof-damaged",
-                 "door-closed", "door-breached", "window-cold", "window-lit", "chimney",
-                 "roof-falling", "wall-falling", "door-falling"]:
+    for name in [
+        "foundation",
+        "post",
+        "wall-intact",
+        "wall-cracked",
+        "roof-intact",
+        "roof-damaged",
+        "door-closed",
+        "door-breached",
+        "window-cold",
+        "window-lit",
+        "chimney",
+        "roof-falling",
+        "wall-falling",
+        "door-falling",
+    ]:
         frames[name] = Image.open(f"{OUT}/{name}.png").convert("RGBA")
 
     build_extra(frames)
@@ -188,7 +236,7 @@ def main() -> None:
     # assemble 6x4 atlas
     cols, rows = 6, 4
     atlas = Image.new("RGBA", (cols * CELL, rows * CELL), (0, 0, 0, 0))
-    for i, name in enumerate(HOME_COMPONENT_IDS):
+    for i in range(len(HOME_COMPONENT_IDS)):
         cx, cy = (i % cols) * CELL, (i // cols) * CELL
         atlas.alpha_composite(despeckled[i], (cx, cy))
     atlas.save(f"{WORK}/components-atlas.png")

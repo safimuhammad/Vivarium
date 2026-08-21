@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
-
 from derive_frames import drop_torso
+from PIL import Image
 from pxutil import contact_sheet
 
 DIR = Path(__file__).parent / "sprites-chibi"
@@ -28,7 +27,7 @@ def front_blink(base: Image.Image) -> Image.Image:
     for x in (6, 7, 13, 14):
         for y in (12, 13):
             px[x, y] = SKIN
-        px[x, 14] = PUPIL          # closed-lash line
+        px[x, 14] = PUPIL  # closed-lash line
     return f
 
 
@@ -36,7 +35,7 @@ def front_talk(base: Image.Image) -> Image.Image:
     f = base.copy()
     px = f.load()
     for x in (10, 11):
-        px[x, 17] = PUPIL          # open mouth, 2x2
+        px[x, 17] = PUPIL  # open mouth, 2x2
         px[x, 18] = MOUTH_DARK
     return f
 
@@ -44,16 +43,16 @@ def front_talk(base: Image.Image) -> Image.Image:
 def side_reach(base: Image.Image) -> Image.Image:
     f = base.copy()
     px = f.load()
-    for y in range(26, 30):        # erase the hanging arm back to shirt
+    for y in range(26, 30):  # erase the hanging arm back to shirt
         for x in range(8, 12):
             if px[x, y] in (SKIN, SKIN_LIGHT, (116, 66, 34, 255)):
                 px[x, y] = SHIRT
-    for y in (24, 25):             # extended arm at shoulder height
+    for y in (24, 25):  # extended arm at shoulder height
         for x in (12, 13):
-            px[x, y] = SHIRT       # sleeve
+            px[x, y] = SHIRT  # sleeve
         for x in range(14, 20):
             px[x, y] = SKIN
-        px[19, y] = SKIN_LIGHT     # hand tip
+        px[19, y] = SKIN_LIGHT  # hand tip
     return f
 
 
@@ -63,11 +62,11 @@ def side_crouch(base: Image.Image) -> Image.Image:
 
 def side_kneel(base: Image.Image) -> Image.Image:
     f = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    legs = base.crop((0, 33, base.size[0], 48))                    # 15 rows
+    legs = base.crop((0, 33, base.size[0], 48))  # 15 rows
     legs_low = legs.resize((base.size[0], 8), Image.Resampling.NEAREST)
     torso = base.crop((0, 0, base.size[0], 33))
-    f.alpha_composite(legs_low, (0, 40))                           # folded legs
-    f.alpha_composite(torso, (0, 7))                               # body sinks 7px
+    f.alpha_composite(legs_low, (0, 40))  # folded legs
+    f.alpha_composite(torso, (0, 7))  # body sinks 7px
     return f
 
 

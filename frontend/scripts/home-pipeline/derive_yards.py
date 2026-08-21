@@ -13,10 +13,12 @@ from __future__ import annotations
 import random
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-from pxutil import despeckle  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image, ImageDraw
+from pxutil import despeckle
 
 WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work"
 OUT = f"{WORK}/yards"
@@ -79,7 +81,11 @@ def hoarding_overlay() -> Image.Image:
     d = ImageDraw.Draw(img)
     # small stashed sack + crate pile off to one side of the path
     d.rounded_rectangle([132, 118, 156, 136], radius=3, fill=WOOD, outline=(40, 33, 22, 255))
-    d.polygon([(112, 138), (128, 138), (124, 122), (116, 122)], fill=(140, 118, 80, 255), outline=(40, 33, 22, 255))
+    d.polygon(
+        [(112, 138), (128, 138), (124, 122), (116, 122)],
+        fill=(140, 118, 80, 255),
+        outline=(40, 33, 22, 255),
+    )
     d.line([(116, 128), (124, 128)], fill=(90, 70, 44, 255), width=1)
     return img
 

@@ -90,7 +90,7 @@ def snap_palette(imgs: list[Image.Image], colors: int = 14) -> list[Image.Image]
     pal_colors = [tuple(pal[i : i + 3]) for i in range(0, len(pal), 3)]
 
     def nearest(c: tuple[int, int, int]) -> tuple[int, int, int]:
-        return min(pal_colors, key=lambda p: sum((a - b) ** 2 for a, b in zip(p, c)))
+        return min(pal_colors, key=lambda p: sum((a - b) ** 2 for a, b in zip(p, c, strict=True)))
 
     out = []
     for im in imgs:
@@ -116,13 +116,19 @@ def despeckle(img: Image.Image, passes: int = 2) -> Image.Image:
                 if px[x, y][3] == 0:
                     continue
                 me = px[x, y]
-                four = [px[nx, ny] for nx, ny in ((x-1,y),(x+1,y),(x,y-1),(x,y+1))
-                        if 0 <= nx < w and 0 <= ny < h and px[nx, ny][3] > 0]
+                four = [
+                    px[nx, ny]
+                    for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1))
+                    if 0 <= nx < w and 0 <= ny < h and px[nx, ny][3] > 0
+                ]
                 if any(n == me for n in four):
                     continue
-                ring = [px[nx, ny] for nx in range(x-1, x+2) for ny in range(y-1, y+2)
-                        if (nx, ny) != (x, y) and 0 <= nx < w and 0 <= ny < h
-                        and px[nx, ny][3] > 0]
+                ring = [
+                    px[nx, ny]
+                    for nx in range(x - 1, x + 2)
+                    for ny in range(y - 1, y + 2)
+                    if (nx, ny) != (x, y) and 0 <= nx < w and 0 <= ny < h and px[nx, ny][3] > 0
+                ]
                 if ring:
                     edits.append((x, y, Counter(ring).most_common(1)[0][0]))
         for x, y, c in edits:

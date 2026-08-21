@@ -37,10 +37,12 @@ from __future__ import annotations
 import random
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-from pxutil import despeckle, mode_pool, snap_palette  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image, ImageDraw
+from pxutil import despeckle, mode_pool, snap_palette
 
 WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work"
 COMPONENTS_DIR = f"{WORK}/components"
@@ -52,21 +54,52 @@ CREAM = (247, 241, 223)
 CREAM_TOL = 30
 
 HOME_COMPONENT_IDS = [
-    "foundation", "post", "wall-intact", "wall-cracked", "wall-broken", "wall-falling",
-    "roof-intact", "roof-damaged", "roof-falling", "door-closed", "door-opening-1",
-    "door-opening-2", "door-opening-3", "door-open", "door-breached", "door-falling",
-    "window-cold", "window-lit", "window-broken", "hearth-cold", "hearth-lit-1",
-    "hearth-lit-2", "chimney", "dust",
+    "foundation",
+    "post",
+    "wall-intact",
+    "wall-cracked",
+    "wall-broken",
+    "wall-falling",
+    "roof-intact",
+    "roof-damaged",
+    "roof-falling",
+    "door-closed",
+    "door-opening-1",
+    "door-opening-2",
+    "door-opening-3",
+    "door-open",
+    "door-breached",
+    "door-falling",
+    "window-cold",
+    "window-lit",
+    "window-broken",
+    "hearth-cold",
+    "hearth-lit-1",
+    "hearth-lit-2",
+    "chimney",
+    "dust",
 ]
 
 # Slots whose PIXEL CONTENT is now baked into one of the whole-building frames
 # below and must therefore render as fully empty so nothing double-draws or
 # misaligns on top of it.
 EMPTY_SLOTS = [
-    "post", "roof-intact", "roof-damaged", "roof-falling", "door-closed",
-    "door-opening-1", "door-opening-2", "door-opening-3", "door-breached",
-    "door-falling", "window-cold", "window-broken", "hearth-cold",
-    "hearth-lit-1", "hearth-lit-2", "chimney",
+    "post",
+    "roof-intact",
+    "roof-damaged",
+    "roof-falling",
+    "door-closed",
+    "door-opening-1",
+    "door-opening-2",
+    "door-opening-3",
+    "door-breached",
+    "door-falling",
+    "window-cold",
+    "window-broken",
+    "hearth-cold",
+    "hearth-lit-1",
+    "hearth-lit-2",
+    "chimney",
 ]
 
 # Slots whose existing H1-derived content is small, genuinely additive, and
@@ -79,7 +112,9 @@ def empty_cell() -> Image.Image:
     return Image.new("RGBA", (CELL, CELL), (0, 0, 0, 0))
 
 
-def key_out_cream(img: Image.Image, cream: tuple[int, int, int] = CREAM, tol: int = CREAM_TOL) -> Image.Image:
+def key_out_cream(
+    img: Image.Image, cream: tuple[int, int, int] = CREAM, tol: int = CREAM_TOL
+) -> Image.Image:
     """Alpha-punch the reference's opaque cream matte (align_states.py only
     trims the OUTER margin to transparent; interior background pixels within
     each state's own bounding box stay fully opaque cream). Without this, a
@@ -135,7 +170,7 @@ def mute_window_glow(img: Image.Image) -> Image.Image:
     cold_pane = (58, 66, 78, 255)
     for y in range(70, 94):
         for x in range(82, 106):
-            r, g, b, a = px[x, y]
+            r, _g, b, a = px[x, y]
             if a > 0 and r > 150 and r > b + 30:
                 px[x, y] = cold_pane
     return out
@@ -154,7 +189,11 @@ def darken(img: Image.Image, factor: float) -> Image.Image:
 
 
 def punch_void(
-    img: Image.Image, rng: random.Random, cx: int, cy: int, radius: int,
+    img: Image.Image,
+    rng: random.Random,
+    cx: int,
+    cy: int,
+    radius: int,
     void_color: tuple[int, int, int, int] = (0, 0, 0, 0),
 ) -> Image.Image:
     out = img.copy()
@@ -201,7 +240,9 @@ def build() -> dict[str, Image.Image]:
     frames["wall-broken"] = wall_broken
     frames["wall-falling"] = wall_falling
 
-    assert set(frames.keys()) == set(HOME_COMPONENT_IDS), sorted(set(HOME_COMPONENT_IDS) - set(frames.keys()))
+    assert set(frames.keys()) == set(HOME_COMPONENT_IDS), sorted(
+        set(HOME_COMPONENT_IDS) - set(frames.keys())
+    )
     return frames
 
 
@@ -217,7 +258,7 @@ def main() -> None:
 
     cols, rows = 6, 4
     atlas = Image.new("RGBA", (cols * CELL, rows * CELL), (0, 0, 0, 0))
-    for i, name in enumerate(HOME_COMPONENT_IDS):
+    for i in range(len(HOME_COMPONENT_IDS)):
         cx, cy = (i % cols) * CELL, (i // cols) * CELL
         atlas.alpha_composite(despeckled[i], (cx, cy))
     atlas.save(f"{WORK}/components-atlas.png")

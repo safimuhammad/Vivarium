@@ -41,12 +41,16 @@ from __future__ import annotations
 import random
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-from pxutil import despeckle, mode_pool, snap_palette  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image, ImageDraw
+from pxutil import despeckle, mode_pool, snap_palette
 
-WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work-sprite"
+WORK = (
+    "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work-sprite"
+)
 COMPONENTS_DIR = f"{WORK}/components"
 CELL = 128
 CREAM = (243, 235, 214)
@@ -65,20 +69,51 @@ WINDOW_COLD_PANE = (54, 64, 80, 255)
 WINDOW_WARM_PANE = (255, 196, 86, 255)
 
 HOME_COMPONENT_IDS = [
-    "foundation", "post", "wall-intact", "wall-cracked", "wall-broken", "wall-falling",
-    "roof-intact", "roof-damaged", "roof-falling", "door-closed", "door-opening-1",
-    "door-opening-2", "door-opening-3", "door-open", "door-breached", "door-falling",
-    "window-cold", "window-lit", "window-broken", "hearth-cold", "hearth-lit-1",
-    "hearth-lit-2", "chimney", "dust",
+    "foundation",
+    "post",
+    "wall-intact",
+    "wall-cracked",
+    "wall-broken",
+    "wall-falling",
+    "roof-intact",
+    "roof-damaged",
+    "roof-falling",
+    "door-closed",
+    "door-opening-1",
+    "door-opening-2",
+    "door-opening-3",
+    "door-open",
+    "door-breached",
+    "door-falling",
+    "window-cold",
+    "window-lit",
+    "window-broken",
+    "hearth-cold",
+    "hearth-lit-1",
+    "hearth-lit-2",
+    "chimney",
+    "dust",
 ]
 
 # Slots whose pixel content is baked into one of the whole-building frames
 # below; rendered fully transparent so nothing double-draws or misaligns.
 EMPTY_SLOTS = [
-    "post", "roof-intact", "roof-damaged", "roof-falling", "door-closed",
-    "door-opening-1", "door-opening-2", "door-opening-3", "door-breached",
-    "door-falling", "window-cold", "window-broken", "hearth-cold",
-    "hearth-lit-1", "hearth-lit-2", "chimney",
+    "post",
+    "roof-intact",
+    "roof-damaged",
+    "roof-falling",
+    "door-closed",
+    "door-opening-1",
+    "door-opening-2",
+    "door-opening-3",
+    "door-breached",
+    "door-falling",
+    "window-cold",
+    "window-broken",
+    "hearth-cold",
+    "hearth-lit-1",
+    "hearth-lit-2",
+    "chimney",
 ]
 
 
@@ -86,7 +121,9 @@ def empty_cell() -> Image.Image:
     return Image.new("RGBA", (CELL, CELL), (0, 0, 0, 0))
 
 
-def key_out_cream(img: Image.Image, cream: tuple[int, int, int] = CREAM, tol: int = CREAM_TOL) -> Image.Image:
+def key_out_cream(
+    img: Image.Image, cream: tuple[int, int, int] = CREAM, tol: int = CREAM_TOL
+) -> Image.Image:
     img = img.convert("RGBA")
     px = img.load()
     w, h = img.size
@@ -111,14 +148,16 @@ def trim_smoke(img: Image.Image, keep_below_y: int) -> Image.Image:
     """
     out = img.copy()
     px = out.load()
-    w, h = out.size
+    w, _h = out.size
     for y in range(0, keep_below_y):
         for x in range(w):
             px[x, y] = (0, 0, 0, 0)
     return out
 
 
-def whole_frame(state: str, trim_smoke_below: int | None = None) -> tuple[Image.Image, tuple[int, int]]:
+def whole_frame(
+    state: str, trim_smoke_below: int | None = None
+) -> tuple[Image.Image, tuple[int, int]]:
     """Blit one aligned reference state as a single whole-building frame,
     anchored by its own ground vertex at CELL_GROUND. Returns the frame and
     the (x, y) cell position the ground vertex landed at (for overlay reuse).
@@ -129,7 +168,7 @@ def whole_frame(state: str, trim_smoke_below: int | None = None) -> tuple[Image.
         img = trim_smoke(img, trim_smoke_below)
     bbox = img.getbbox()
     assert bbox is not None
-    left, top, right, bottom = bbox
+    left, top, _right, _bottom = bbox
     cropped = img.crop(bbox)
     ground_col = TARGET_GROUND[0] - left
     ground_row = TARGET_GROUND[1] - top
@@ -214,7 +253,9 @@ def draw_door(base: Image.Image, bbox: tuple[int, int, int, int]) -> Image.Image
 
 
 def draw_window(
-    base: Image.Image, bbox: tuple[int, int, int, int], pane_color: tuple[int, int, int, int],
+    base: Image.Image,
+    bbox: tuple[int, int, int, int],
+    pane_color: tuple[int, int, int, int],
 ) -> Image.Image:
     """Author a clean 2x2-pane window at the reference-measured WINDOW_BBOX
     (same rationale as draw_door: the reference's fine mullion/glow detail
@@ -251,7 +292,11 @@ def darken(img: Image.Image, factor: float) -> Image.Image:
 
 
 def punch_void(
-    img: Image.Image, rng: random.Random, cx: int, cy: int, radius: int,
+    img: Image.Image,
+    rng: random.Random,
+    cx: int,
+    cy: int,
+    radius: int,
 ) -> Image.Image:
     out = img.copy()
     px = out.load()
@@ -366,7 +411,9 @@ def build() -> dict[str, Image.Image]:
     frames["window-lit"] = window_lit
     frames["dust"] = dust
 
-    assert set(frames.keys()) == set(HOME_COMPONENT_IDS), sorted(set(HOME_COMPONENT_IDS) - set(frames.keys()))
+    assert set(frames.keys()) == set(HOME_COMPONENT_IDS), sorted(
+        set(HOME_COMPONENT_IDS) - set(frames.keys())
+    )
     return frames
 
 
@@ -382,7 +429,7 @@ def main() -> None:
 
     cols, rows = 6, 4
     atlas = Image.new("RGBA", (cols * CELL, rows * CELL), (0, 0, 0, 0))
-    for i, name in enumerate(HOME_COMPONENT_IDS):
+    for i in range(len(HOME_COMPONENT_IDS)):
         cx, cy = (i % cols) * CELL, (i // cols) * CELL
         atlas.alpha_composite(despeckled[i], (cx, cy))
     atlas.save(f"{WORK}/components-atlas.png")

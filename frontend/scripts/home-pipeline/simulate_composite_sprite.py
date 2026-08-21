@@ -53,8 +53,14 @@ SCENARIOS = {
     "build-foundation": (["foundation"], []),
     "build-post": (["foundation", "post"], []),
     "build-walls": (["foundation", "post", "wall-intact", "window-cold"], []),
-    "build-hearth": (["foundation", "post", "wall-intact", "window-cold", "hearth-lit-1", "chimney"], []),
-    "build-roof": (["foundation", "post", "wall-intact", "window-cold", "hearth-lit-1", "chimney"], ["roof-intact"]),
+    "build-hearth": (
+        ["foundation", "post", "wall-intact", "window-cold", "hearth-lit-1", "chimney"],
+        [],
+    ),
+    "build-roof": (
+        ["foundation", "post", "wall-intact", "window-cold", "hearth-lit-1", "chimney"],
+        ["roof-intact"],
+    ),
     "collapse-early": (
         ["foundation", "post", "wall-broken", "window-broken", "chimney"],
         ["roof-damaged", "door-breached"],

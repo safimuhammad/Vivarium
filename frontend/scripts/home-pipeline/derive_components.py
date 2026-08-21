@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-from pxutil import despeckle, mode_pool, snap_palette  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image, ImageDraw
+from pxutil import mode_pool
 
 WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work"
 OUT = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work/components"
@@ -33,7 +35,9 @@ def crop_aligned(state: str, rect: tuple[int, int, int, int]) -> Image.Image:
     return img.crop(rect)
 
 
-def punch(img: Image.Image, origin_xy: tuple[int, int], holes: list[tuple[int, int, int, int]]) -> Image.Image:
+def punch(
+    img: Image.Image, origin_xy: tuple[int, int], holes: list[tuple[int, int, int, int]]
+) -> Image.Image:
     """Zero alpha for hole rects (in the SAME aligned coord space) relative to img's own origin."""
     out = img.copy()
     px = out.load()
@@ -97,7 +101,9 @@ def build() -> None:
 
     os.makedirs(OUT, exist_ok=True)
 
-    def cell_from(state: str, rect: tuple[int, int, int, int], holes: list | None = None) -> Image.Image:
+    def cell_from(
+        state: str, rect: tuple[int, int, int, int], holes: list | None = None
+    ) -> Image.Image:
         crop = crop_aligned(state, rect)
         if holes:
             crop = punch(crop, (rect[0], rect[1]), holes)
@@ -133,8 +139,11 @@ def build() -> None:
     # contact sheet
     names = list(frames.keys())
     cols = 5
-    zoom = 1
-    sheet = Image.new("RGBA", (cols * (CELL + 8) + 8, ((len(names) - 1) // cols + 1) * (CELL + 24) + 8), (247, 239, 220, 255))
+    sheet = Image.new(
+        "RGBA",
+        (cols * (CELL + 8) + 8, ((len(names) - 1) // cols + 1) * (CELL + 24) + 8),
+        (247, 239, 220, 255),
+    )
     d = ImageDraw.Draw(sheet)
     for i, name in enumerate(names):
         cx, cy = (i % cols) * (CELL + 8) + 8, (i // cols) * (CELL + 24) + 8

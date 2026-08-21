@@ -17,13 +17,17 @@ from __future__ import annotations
 
 import sys
 
-sys.path.insert(0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline")
+sys.path.insert(
+    0, "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/character-pipeline"
+)
 
-from pxutil import bg_mask, crop_figure, find_figure_spans  # noqa: E402
-from PIL import Image  # noqa: E402
+from PIL import Image
+from pxutil import bg_mask, crop_figure, find_figure_spans
 
 SRC = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/assets/character-claude/roster/hut-sprite-states.png"
-OUT_DIR = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work-sprite"
+OUT_DIR = (
+    "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work-sprite"
+)
 NAMES = ["state1-construction", "state2-complete", "state3-breached", "state4-collapsed"]
 
 

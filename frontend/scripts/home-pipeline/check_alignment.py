@@ -1,4 +1,5 @@
 """Overlay the aligned states (staggered, semi-transparent) to eyeball alignment."""
+
 from PIL import Image, ImageDraw
 
 WORK = "/Users/muhammadsafi/Desktop/software-dev/simulation/frontend/scripts/home-pipeline/work"

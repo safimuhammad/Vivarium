@@ -96,7 +96,7 @@ def recolored_cell(cell: Image.Image) -> Image.Image:
         base_g = round(TOP_COLOR[1] + (BOTTOM_COLOR[1] - TOP_COLOR[1]) * t)
         base_b = round(TOP_COLOR[2] + (BOTTOM_COLOR[2] - TOP_COLOR[2]) * t)
         for x in range(w):
-            r, g, b, a = px[x, y]
+            _r, _g, _b, a = px[x, y]
             if a == 0:
                 continue
             dist = ((x - gx) ** 2 + (y - gy) ** 2) ** 0.5
@@ -140,7 +140,9 @@ def apply() -> None:
         atlas = Image.open(path).convert("RGBA")
         before = atlas.crop((x0, y0, x1, y1))
         if list(before.getdata()) != list(ref_before.getdata()):
-            raise SystemExit(f"{path}: door-open cell is not byte-identical to the roster reference; aborting.")
+            raise SystemExit(
+                f"{path}: door-open cell is not byte-identical to the roster reference; aborting."
+            )
         atlas.paste(ref_after, (x0, y0))
         atlas.save(path, optimize=True)
         print(f"wrote {path}")
