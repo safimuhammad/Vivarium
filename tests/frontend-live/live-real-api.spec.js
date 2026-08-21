@@ -52,7 +52,11 @@ test('production app observes the real deterministic live API and SSE stream', a
   await page.addInitScript(() => {
     window.__vivariumEnableSnapshotRefreshForTest = true;
   });
-  await page.goto('/');
+  // Same stale half as its built sibling: this spec and the landing/config gateway
+  // shipped in one commit (74f5e8f), so it asserted bare `/` is the live world while
+  // `/` had just become the gateway. It hangs on `isReady` otherwise. Name the live
+  // surface; every assertion below is unchanged and still exercises the real API.
+  await page.goto('/?renderer=living-atlas');
 
   await page.waitForFunction(() => window.__vivariumWorld?.isReady === true);
   await expect(page.getByTestId('world-stage')).toBeVisible();

@@ -8,7 +8,18 @@ const frontendBaseUrl = `http://127.0.0.1:${frontendPort}`;
 module.exports = defineConfig({
   testDir: './tests/frontend-live',
   testMatch: /live-built-real-api\.spec\.js/,
-  timeout: 60000,
+  // Wall-clock budget for the whole test, not a bound on any assertion -- every
+  // individual wait below still has its own (unchanged) limit. This smoke drives
+  // a full three.js world, a live SSE stream and a real mechanics burst, so its
+  // cost tracks how fast the machine can produce frames. Measured end-to-end on
+  // a dev Mac with the browser CPU throttled to emulate a slow runner: 11.5s at
+  // 1x, 18.3s at 6x, 41.2s at 12x, 81.8s at 20x, 140.4s at 30x -- everything
+  // passing, nothing hanging, no individual wait running out. A CI runner
+  // rasterising WebGL in software (no GPU) sits well past the 60s this used to
+  // allow, which is why it died mid-preamble there while passing locally. 5
+  // minutes covers roughly a 60x-slower machine; a budget only costs time when
+  // something is genuinely stuck, so headroom here is free on a green run.
+  timeout: 300000,
   expect: {
     timeout: 10000,
   },

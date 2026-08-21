@@ -105,6 +105,33 @@ const STRUCTURAL_MECHANICS_REASON_MIN_COUNTS = Object.freeze({
 });
 const STRUCTURAL_MECHANICS_REASONS = Object.keys(STRUCTURAL_MECHANICS_REASON_MIN_COUNTS).sort();
 const MECHANICS_CHRONICLE_ROWS = [];
+
+// Focusing does not teleport the camera: `focusHome` / `focusRegion` start an
+// eased camera flight (0.72s under full motion) and OrbitControls damping
+// settles after it. While that flight is in the air the projected screen point
+// of anything in the world sweeps thousands of pixels per frame, so a point
+// sampled mid-flight is meaningless -- it can be inside the stage on one frame
+// and 3000px away on the next. Every projection this file asserts on or clicks
+// must therefore be taken from a *settled* camera: finite, inside the stage,
+// and unchanged for a stability window. The flight is wall-clock paced, so a
+// loaded machine loses this race far more often than a fast one -- it is a
+// race either way.
+const MECHANICS_FRAME_TIMEOUT_MS = 10000;
+const MECHANICS_FRAME_STABLE_MS = 250;
+const MECHANICS_FRAME_TOLERANCE_PX = 1;
+const MECHANICS_CLICK_OFFSETS = Object.freeze([
+  [0, 0],
+  [-18, 0],
+  [18, 0],
+  [0, -18],
+  [0, 18],
+  [-24, -14],
+  [24, -14],
+  [-24, 14],
+  [24, 14],
+  [-36, 0],
+  [36, 0],
+]);
 function uniqueSorted(values) {
   return [...new Set(values)].sort();
 }
@@ -832,25 +859,18 @@ async function focusMechanicsRegion(page, regionName) {
     window.__vivariumWorld?.focusRegion?.(name) ?? false
   ), regionName);
   expect(focused, `mechanics live smoke should focus ${regionName}`).toBe(true);
+  // Settle before returning. Callers project world points immediately after
+  // focusing -- the region itself, a home, an agent standing in it -- and every
+  // one of those projections is garbage until the camera flight has landed.
+  await expectMechanicsFrameSettled(page, { kind: 'region', id: regionName });
 }
 
 async function selectMechanicsRegion(page, regionName) {
+  // `focusMechanicsRegion` already asserts the strictly stronger property that
+  // this used to check on its own: the region's projection is finite, inside
+  // the world stage, and settled there -- rather than merely inside on some one
+  // frame while the camera was still flying past it.
   await focusMechanicsRegion(page, regionName);
-
-  await page.waitForFunction((name) => {
-    const point = window.__vivariumWorld?.screenPointForRegion?.(name);
-    const stage = document.querySelector('[data-testid="world-stage"]')?.getBoundingClientRect();
-    return Boolean(
-      point &&
-        stage &&
-        Number.isFinite(point.x) &&
-        Number.isFinite(point.y) &&
-        point.x >= stage.left &&
-        point.x <= stage.right &&
-        point.y >= stage.top &&
-        point.y <= stage.bottom
-      );
-  }, regionName, { timeout: 10000 });
 
   const selected = await clickMechanicsRegionUntilSelected(page, regionName);
   expect(
@@ -909,31 +929,14 @@ async function clickMechanicsRegionUntilSelected(page, regionName) {
 }
 
 async function selectMechanicsHome(page, homeId, { focusKind }) {
-  const focused = await page.evaluate((id) => (
-    window.__vivariumWorld?.focusHome?.(id) ?? false
-  ), homeId);
-  expect(focused, `mechanics live smoke should focus home ${homeId}`).toBe(true);
-
-  await page.waitForFunction((id) => {
-    const point = window.__vivariumWorld?.screenPointForHome?.(id);
-    const stage = document.querySelector('[data-testid="world-stage"]')?.getBoundingClientRect();
-    return Boolean(
-      point &&
-        stage &&
-        Number.isFinite(point.x) &&
-        Number.isFinite(point.y) &&
-        point.x >= stage.left &&
-        point.x <= stage.right &&
-        point.y >= stage.top &&
-        point.y <= stage.bottom
-      );
-  }, homeId, { timeout: 10000 });
+  await focusMechanicsHome(page, homeId);
+  const frame = await expectMechanicsFrameSettled(page, { kind: 'home', id: homeId });
 
   const focusPulse = page.getByTestId('selected-focus-activity-pulse');
-  const selected = await clickMechanicsHomeUntilSelected(page, homeId);
+  const attempt = await clickMechanicsHomeUntilSelected(page, homeId, frame);
   expect(
-    selected,
-    `mechanics live smoke should select rendered home ${homeId}`,
+    attempt.selected,
+    `mechanics live smoke should select rendered home ${homeId}: ${JSON.stringify(attempt)}`,
   ).toBe(true);
   await expect(focusPulse).toBeVisible();
   await expect(focusPulse).toHaveAttribute('data-focus-state', 'active');
@@ -944,36 +947,178 @@ async function selectMechanicsHome(page, homeId, { focusKind }) {
   await expect(focusPulse).toHaveAttribute('data-focus-kind', focusKind);
 }
 
-async function clickMechanicsHomeUntilSelected(page, homeId) {
-  const offsets = [
-    [0, 0],
-    [-18, 0],
-    [18, 0],
-    [0, -18],
-    [0, 18],
-    [-24, -14],
-    [24, -14],
-    [-24, 14],
-    [24, 14],
-    [-36, 0],
-    [36, 0],
-  ];
-  for (const [dx, dy] of offsets) {
-    const point = await page.evaluate((id) => window.__vivariumWorld?.screenPointForHome?.(id), homeId);
-    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
-      continue;
+async function focusMechanicsHome(page, homeId) {
+  const focused = await page.evaluate((id) => (
+    window.__vivariumWorld?.focusHome?.(id) ?? false
+  ), homeId);
+  expect(focused, `mechanics live smoke should focus home ${homeId}`).toBe(true);
+}
+
+/**
+ * Assert that focusing a subject genuinely brings it into the visible stage,
+ * and return the settled projection.
+ *
+ * `focusHome` / `focusRegion` returning true only proves the subject exists and
+ * a camera flight was started. This is the assertion that proves the viewer can
+ * actually see it: the projected point must become finite, land inside the
+ * world-stage rect, and hold still there for a stability window -- so it cannot
+ * be satisfied by a transient frame while the camera is still flying past.
+ */
+async function expectMechanicsFrameSettled(page, subject) {
+  const frame = await settleMechanicsFrame(page, subject);
+  expect(
+    frame.settled,
+    `mechanics live smoke should frame ${subject.kind} ${subject.id} inside the world stage: ${JSON.stringify(frame)}`,
+  ).toBe(true);
+  return frame;
+}
+
+async function settleMechanicsFrame(page, { kind, id }) {
+  return page.evaluate(async ({ subjectKind, subjectId, timeoutMs, stableMs, tolerancePx }) => {
+    const round = (value) => (Number.isFinite(value) ? Math.round(value * 10) / 10 : value);
+    const project = (world) => (subjectKind === 'region'
+      ? world?.screenPointForRegion?.(subjectId)
+      : world?.screenPointForHome?.(subjectId));
+    const sample = () => {
+      const raw = project(window.__vivariumWorld) ?? null;
+      const stageElement = document.querySelector('[data-testid="world-stage"]');
+      const rect = stageElement?.getBoundingClientRect() ?? null;
+      const stage = rect
+        ? { left: round(rect.left), top: round(rect.top), right: round(rect.right), bottom: round(rect.bottom) }
+        : null;
+      const finite = Boolean(raw && Number.isFinite(raw.x) && Number.isFinite(raw.y));
+      const point = finite ? { x: round(raw.x), y: round(raw.y) } : null;
+      const inside = Boolean(
+        point &&
+          rect &&
+          point.x >= rect.left &&
+          point.x <= rect.right &&
+          point.y >= rect.top &&
+          point.y <= rect.bottom,
+      );
+      const overflow = point && rect
+        ? {
+          left: round(Math.max(0, rect.left - point.x)),
+          right: round(Math.max(0, point.x - rect.right)),
+          top: round(Math.max(0, rect.top - point.y)),
+          bottom: round(Math.max(0, point.y - rect.bottom)),
+        }
+        : null;
+      return { kind: subjectKind, id: subjectId, point, stage, finite, inside, overflow };
+    };
+    const nextFrame = () => new Promise((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+
+    const startedAt = performance.now();
+    const deadline = startedAt + timeoutMs;
+    let anchor = null;
+    let latest = sample();
+    for (;;) {
+      latest = sample();
+      if (!latest.inside) {
+        anchor = null;
+      } else if (
+        anchor === null ||
+        Math.abs(latest.point.x - anchor.x) > tolerancePx ||
+        Math.abs(latest.point.y - anchor.y) > tolerancePx
+      ) {
+        anchor = { x: latest.point.x, y: latest.point.y, since: performance.now() };
+      } else if (performance.now() - anchor.since >= stableMs) {
+        return { ...latest, settled: true, elapsedMs: Math.round(performance.now() - startedAt) };
+      }
+      if (performance.now() >= deadline) {
+        return { ...latest, settled: false, elapsedMs: Math.round(performance.now() - startedAt) };
+      }
+      await nextFrame();
     }
-    await page.mouse.click(point.x + dx, point.y + dy);
+  }, {
+    subjectKind: kind,
+    subjectId: id,
+    timeoutMs: MECHANICS_FRAME_TIMEOUT_MS,
+    stableMs: MECHANICS_FRAME_STABLE_MS,
+    tolerancePx: MECHANICS_FRAME_TOLERANCE_PX,
+  });
+}
+
+/**
+ * Click the settled projection of `homeId` until the inspector reports it
+ * selected.
+ *
+ * Two hazards make a naive retry loop unrecoverable, and both are handled here
+ * rather than by loosening what is asserted:
+ *
+ * 1. Live event bubbles are real DOM buttons floating over the canvas with
+ *    `pointer-events: auto`, and the burst anchors several of them on these
+ *    very homes. A mouse click that lands on one is swallowed by the bubble,
+ *    which focuses the camera on that beat's subject -- so the click both
+ *    misses and drags the home off screen. Probe `elementFromPoint` first and
+ *    dispatch straight at the canvas when an overlay is on top; that still
+ *    exercises the renderer's raycast hit-test at the same client coordinates
+ *    (the established precedent in `clickMechanicsRegionUntilSelected`).
+ * 2. Any miss can still move the camera (clicking bare land re-focuses it), and
+ *    the old loop kept projecting against the moved camera, so every remaining
+ *    offset clicked at nonsense coordinates. Re-focus and re-settle before each
+ *    retry so each attempt starts from a frame that is proven on screen.
+ */
+async function clickMechanicsHomeUntilSelected(page, homeId, initialFrame) {
+  const attempts = [];
+  let frame = initialFrame;
+  for (const [index, [dx, dy]] of MECHANICS_CLICK_OFFSETS.entries()) {
+    if (index > 0) {
+      await focusMechanicsHome(page, homeId);
+      frame = await settleMechanicsFrame(page, { kind: 'home', id: homeId });
+      if (!frame.settled) {
+        return { selected: false, reason: 'home-left-the-stage-after-a-missed-click', frame, attempts };
+      }
+    }
+    const target = { x: frame.point.x + dx, y: frame.point.y + dy };
+    const cover = await page.evaluate(({ x, y }) => {
+      const canvas = document.querySelector('[data-testid="world-stage"] canvas');
+      const topMost = document.elementFromPoint(x, y);
+      return {
+        onCanvas: Boolean(canvas) && topMost === canvas,
+        topMost: topMost
+          ? `${topMost.tagName.toLowerCase()}.${String(topMost.className || '').split(' ').filter(Boolean).join('.')}`
+          : null,
+      };
+    }, target);
+    if (cover.onCanvas) {
+      await page.mouse.click(target.x, target.y);
+    } else {
+      await dispatchMechanicsCanvasClick(page, target);
+    }
     const selected = await page.waitForFunction((id) => (
       document
         .querySelector('[data-testid="selected-focus-activity-pulse"]')
         ?.getAttribute('data-focus-selection-id') === id
     ), homeId, { timeout: 500 }).then(() => true).catch(() => false);
+    attempts.push({ offset: [dx, dy], target, ...cover, selected });
     if (selected) {
-      return true;
+      return { selected: true, attempts };
     }
   }
-  return false;
+  return { selected: false, reason: 'no-offset-selected-the-home', frame, attempts };
+}
+
+async function dispatchMechanicsCanvasClick(page, { x, y }) {
+  await page.evaluate(({ clientX, clientY }) => {
+    const canvas = document.querySelector('[data-testid="world-stage"] canvas');
+    if (!(canvas instanceof HTMLCanvasElement)) {
+      return;
+    }
+    canvas.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      clientX,
+      clientY,
+      pointerId: 1,
+    }));
+    canvas.dispatchEvent(new MouseEvent('click', {
+      bubbles: true,
+      clientX,
+      clientY,
+    }));
+  }, { clientX: x, clientY: y });
 }
 
 async function expectSelectedEventSummary(page, expected, options = {}) {
@@ -1073,7 +1218,14 @@ async function expectMechanicsRetainedDensityAfterBubblesExpire(page, burst) {
   );
 
   await focusMechanicsRegion(page, 'warm_springs');
+  // The camera has settled (see `focusMechanicsRegion`), so these projections
+  // are trustworthy. A being is only clickable where the world canvas is the
+  // top-most element: at narrow viewports the chronicle surface is a full-bleed
+  // sheet over the world, and a click there selects nothing. When no being is
+  // reachable on the canvas, fall through to the presence rail below -- the
+  // same selection by another route, which is what this assertion is about.
   const selectionPoint = await page.evaluate(() => {
+    const canvas = document.querySelector('[data-testid="world-stage"] canvas');
     for (const agentId of ['wanderer_001', 'wanderer_002', 'wanderer_003']) {
       const point = window.__vivariumWorld?.screenPointForAgent?.(agentId);
       if (
@@ -1083,7 +1235,9 @@ async function expectMechanicsRetainedDensityAfterBubblesExpire(page, burst) {
         point.x >= 0 &&
         point.y >= 0 &&
         point.x <= window.innerWidth &&
-        point.y <= window.innerHeight
+        point.y <= window.innerHeight &&
+        canvas &&
+        document.elementFromPoint(point.x, point.y) === canvas
       ) {
         return { agentId, x: point.x, y: point.y };
       }
