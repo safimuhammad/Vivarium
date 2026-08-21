@@ -2,8 +2,29 @@ import { describe, expect, it } from "vitest";
 
 import coreSource from "../../../assets/renderer2d/core/production-core-source.json";
 import springRegion from "../../../assets/renderer2d/regions/spring-terraces/pack.json";
-import packingReport from "../../../../../scratchpad/2d-production-art/evidence/packing-report.json";
-import nativeContract from "../../../../../scratchpad/2d-production-art/source/native/production-native-contract.json";
+// --- Art-contract fixtures: tracked, not scratch ---------------------------
+// `production-native-contract.json` is the hand-authored native art geometry
+// contract (per-kit `authoredVariants` with `cellRectPx`, `connectionPorts`,
+// `contactPivotPx`, `geometryHash`). Nothing in this repository generates it --
+// it is an INPUT to `frontend/scripts/pack-2d-production-assets.mjs`, not an
+// output. `packing-report.json` is that pipeline's byte-accounting report
+// (`pack-2d-production-assets.mjs`, the `evidence/packing-report.json` entry).
+//
+// Both used to be imported from `../../../../../scratchpad/2d-production-art/`,
+// which `.gitignore` excludes wholesale. That resolved on an authoring machine
+// and could never resolve on a fresh checkout, so this file collected ZERO tests
+// on CI (and `tsc --noEmit`, and therefore `npm run build:frontend`, would have
+// failed on the same specifier at the next step). They are now tracked here,
+// byte-identical to the working-tree originals:
+//   production-native-contract.json  615,592 B
+//     sha256 20f118b2da1ce3b04a5cf462b36f8ac43672bfafa5fceab0f074d6f5f445a1b5
+//   packing-report.json               70,592 B
+//     sha256 ad8ce4d695793df97056871301678b84642e238d7632ab680fb428cba3c06dfd
+// To refresh after re-authoring native art: re-run the packing pipeline in the
+// scratch tree and copy both files back over the copies in `../artContract/`,
+// updating the sizes and hashes above.
+import packingReport from "../artContract/packing-report.json";
+import nativeContract from "../artContract/production-native-contract.json";
 import { getBiomeKit, type RegionKitId } from "../maps/biomeKits";
 import * as productionManifestModule from "./productionManifest";
 import {

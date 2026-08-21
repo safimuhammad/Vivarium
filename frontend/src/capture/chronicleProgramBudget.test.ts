@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { getChronicleManifest } from "../presentation/fixtures/chronicleCatalog";
 import { planChronicleProgramBudget } from "./chronicleProgramBudget";
 
-// Goldens below were re-derived twice from live current truth, both traced and
-// explained (not papered over):
+// Goldens in this file are re-derived from live current truth and traced, never
+// papered over. The history, in order:
 //   1. The R3 Task 5 actor-envelope change (BEING_CHIBI_GEOMETRY, 22x48 feet
 //      (11,46), replacing the old wider LayeredHumanActor envelope) shifted
 //      staging-point/gate placement geometry region recipes derive at
@@ -18,6 +18,14 @@ import { planChronicleProgramBudget } from "./chronicleProgramBudget";
 //      on top of #1. Departure ("agent_left_region") programs are untouched
 //      by C-fix-2 (see C02 cursor 11 below, unchanged) since that fix only
 //      touches the arrival-goal fallback.
+//   3. Truncate-then-walk / transition bounding (2026-08-01) elided the MIDDLE of
+//      every departure walk, bounding it at `WALK_MAX_DISTANCE_PX`. It moved C01
+//      (re-baselined then) and C02 (re-baselined 2026-08-21, see below).
+//   4. 2026-08-21: the two C02 pins, carried deliberately red for a week, were
+//      re-baselined as a decision. The full decomposition -- including a 2_464 ms
+//      term that remains UNATTRIBUTED and is retired on purpose, not swallowed --
+//      is written at the C02 assertions, together with the per-program duration
+//      vectors that now replace the protection that residual used to provide.
 describe("chronicle program capture budget", () => {
   it("budgets C01 from its two split-envelope programs", () => {
     const manifest = getChronicleManifest("C01");
@@ -81,40 +89,74 @@ describe("chronicle program capture budget", () => {
   it("sums all twenty causally resolved C02 programs", () => {
     const budget = planChronicleProgramBudget(getChronicleManifest("C02"));
 
-    // durationMs/frameCount reflect both re-derivations (see file header); the
-    // per-program/per-metric spot checks below (cursor 11 departure, max
-    // waypoints/length across all 20 programs) are unchanged by either --
-    // C02's real route-length/waypoint maxima and its one directly-checked
-    // departure program are not on the arrival-goal path C-fix-2 touched.
+    // RE-BASELINED 2026-08-21, DELIBERATELY, WITH THE RESIDUAL RETIRED ON PURPOSE.
+    // This pin protects the exact serial presentation budget AS AN EQUALITY, so any
+    // change to how long the world takes to watch fails loudly. It did exactly that
+    // and was carried red for a week. The whole chain, every term measured:
     //
-    // KNOWN RED, DELIBERATELY NOT RE-BASELINED (2026-08-01). This pin protects
-    // the exact serial presentation budget AS AN EQUALITY, so that any change to
-    // how long the world takes to watch fails loudly. It did exactly that. The
-    // gap now decomposes EXACTLY into two independent terms, measured by A/B on
-    // the single `LocomotionPolicy` line at
-    // `lifecycleMovementCommunicationResource.ts`'s departure call site:
-    //   570_327 (pinned)
-    //   - 364_625  truncate-then-walk, ATTRIBUTABLE and deliberate (see C01 above)
-    //   -   2_394  the PRE-EXISTING, still-unattributed step this pin already
-    //              carried before this work (it measured 567_933 against 570_327
-    //              on the unchanged tree, byte-identical to the ledger's record)
-    //   = 203_308 (measured now; frameCount 17_111 -> 6_101)
-    // The 2_394 is not this work's to absorb: re-baselining to 203_308 would
-    // silently swallow an unexplained drift that has been deliberately left
-    // visible. So the number stays, and the red keeps meaning what it meant.
-    // Whoever attributes the 2_394 can re-baseline both terms in one step; the
-    // measured values are recorded here and in
-    // `.superpowers/sdd/transition-bounding-report.md` so no re-measurement is
-    // needed. The sibling test below carries the identical -364_625 / -2_394
-    // split (551_057 -> 184_038, frameCount 16_533 -> 5_523), and the fact that
-    // the attributable term is bit-identical across two differently-partitioned
-    // budgets is itself evidence the change is the surgical one it claims to be.
+    //   570_327  pinned 2026-07-24 06:31 by C-fix-2 (`c18-fix2-report.md`, which moved
+    //            it 844_124 -> 570_327 / 25_325 -> 17_111 frames)
+    //   + 2_464  UNATTRIBUTED. Bracketed by two dated measurements: 570_327 at
+    //            2026-07-24 06:31 and 572_791 at 2026-07-27 ~21:00 (the torus author's
+    //            torus-DISABLED arm, `torus-physics-report.md`). Already present at the
+    //            2026-07-26 23:50 tracked-cleanup sweep, which recorded it as
+    //            pre-existing and unrelated to itself. Nobody has named it. See below.
+    //   - 3_587  torus wrap routing (`navigation/wrapSeams.ts`, 2026-07-27 22:38),
+    //            A/B-measured by its own author: 572_791 -> 569_204, and identically
+    //            553_521 -> 549_934 on the split partition.
+    //   - 1_271  bracketed by 569_204 (2026-07-27 22:38) and 567_933 (2026-07-31).
+    //            The only other named change in that bracket, Phase 1 "region capacity
+    //            as a state", touches `PlacementLedger.placeHome` -- and this fixture
+    //            has `homes: []`, so that method is never called for C02. What remains
+    //            in the bracket is the Nirvana West/East terrain productionisation.
+    //   -364_625 truncate-then-walk (transition bounding), attributable and deliberate
+    //            -- see the C01 test above, and RE-PROVEN TODAY: flipping the single
+    //            `LocomotionPolicy` literal at `lifecycleMovementCommunicationResource.ts`'s
+    //            departure call site from `"bound"` back to `"whole"` reproduces
+    //            567_933 / 17_039 serial, 548_663 / 16_461 split and C01
+    //            49_644 `[42_278, 7_366]` -- byte-identical to the 2026-07-31 ledger.
+    //            That also proves NOTHING since 2026-07-31 has moved this budget by a
+    //            single millisecond, so the two-lane split, distance-gated locomotion,
+    //            the scene-graph wedge fix and the utterance-lane fix each contribute
+    //            EXACTLY 0 here and none of them can be the missing 2_464.
+    //   = 203_308 (frameCount 17_111 -> 6_101). Sums to the millisecond, twice: the
+    //            identical -364_625 and the identical residual appear on both the
+    //            serial and the differently-partitioned split budget.
+    //
+    // One further term was newly measured while trying to attribute the 2_464, and is
+    // recorded here rather than lost: restoring the Nirvana region geometry to its
+    // 2026-07-26 16:17 snapshot moves the unbounded budget 567_933 -> 569_056, so all
+    // Nirvana geometry work since then nets **-1_123 ms** -- while C01 stays at 49_644
+    // in both arms, which is exactly why C01 never went red and C02 did. That snapshot
+    // sits inside the +2_464 window, so the term refines the composition without
+    // closing it; it is not the 2_464.
+    //
+    // THE 2_464 IS RETIRED HERE AS A DECISION, NOT SWALLOWED. Its window is dated, its
+    // candidates are exhausted (every in-window change either never reaches this
+    // planning chain -- the terrain-seam collision gate, spread-legality, the
+    // motion-bugs fixes and the convergence veto fix all live in
+    // `ProductionSceneGraph.applySceneCommands`, the execution layer -- or was measured
+    // and rejected, including the `getNavigationGrid` wiring's +1_848 near-miss, which
+    // was proven byte-identical wired and unwired for C01/C02), and the tree it moved in
+    // was untracked, so it can never be bisected. Rather than keep an opaque -2_394
+    // inside a SUM, the per-program duration vector below now pins every one of the
+    // twenty programs individually: the next drift fails at a named cursor instead of
+    // hiding in a total. That is strictly more protection than the number it replaces.
     expect(budget).toMatchObject({
-      durationMs: 570_327,
-      frameCount: 17_111,
+      durationMs: 203_308,
+      frameCount: 6_101,
       programCount: 20,
       transactionCount: 10,
     });
+    // The twenty programs, in evidence order (cursor 1..20), alternating
+    // departure/arrival. Seven departures sit at exactly 9_633 -- the same value as
+    // C01's departure -- because truncate-then-walk pins them to `WALK_MAX_DISTANCE_PX`
+    // (320 px, 11 waypoints). The three that differ (cursors 7, 9, 11) and every
+    // arrival are unbounded and carry their real route.
+    expect(budget.programs.map(({ durationMs }) => durationMs)).toEqual([
+      9_633, 9_195, 9_633, 11_992, 9_633, 18_477, 9_941, 11_468, 10_865, 12_114,
+      8_300, 5_895, 9_633, 8_562, 9_633, 14_195, 9_633, 9_810, 9_633, 5_063,
+    ]);
     expect(budget.programs.find(({ cursor }) => cursor === 11)).toMatchObject({
       eventType: "agent_left_region",
       durationMs: 8_300,
@@ -123,8 +165,12 @@ describe("chronicle program capture budget", () => {
     expect(budget.programs.every(({ fallbackDiagnostics }) => (
       fallbackDiagnostics.length === 0
     ))).toBe(true);
-    expect(Math.max(...budget.programs.map(({ maxRouteWaypoints }) => maxRouteWaypoints))).toBe(113);
-    expect(Math.max(...budget.programs.map(({ maxRouteLengthPixels }) => maxRouteLengthPixels))).toBe(3_584);
+    // 113 -> 23 and 3_584 -> 686, by truncate-then-walk and nothing else: the longest
+    // remaining route is cursor 6's ARRIVAL (warm_springs -> nirvana_west), which is
+    // never truncated because its first waypoint IS the gate the placement hint
+    // publishes. Every departure is now bounded at 320 px / 11 waypoints.
+    expect(Math.max(...budget.programs.map(({ maxRouteWaypoints }) => maxRouteWaypoints))).toBe(23);
+    expect(Math.max(...budget.programs.map(({ maxRouteLengthPixels }) => maxRouteLengthPixels))).toBe(686);
   });
 
   it("binds its semantics to the real split delivery partition", () => {
@@ -133,21 +179,36 @@ describe("chronicle program capture budget", () => {
       manifest.entries.slice(index * 2, index * 2 + 2)
     ));
 
+    // RE-BASELINED 2026-08-21 alongside its sibling above, which carries the full
+    // decomposition. This partition delivers the same twenty entries as TEN paired
+    // travel transactions instead of twenty single programs, and it moved by the
+    // identical -364_625 and carries the identical retired residual -- 551_057 ->
+    // 184_038, 16_533 -> 5_523. That the attributable term is bit-identical across two
+    // differently-partitioned budgets is itself evidence the change is the surgical one
+    // it claims to be. The structural invariant also survives untouched: serial minus
+    // split is 203_308 - 184_038 = 19_270, exactly what it was at golden time
+    // (570_327 - 551_057 = 19_270).
     const budget = planChronicleProgramBudget(manifest, { deliveryBatches: paired });
     expect(budget).toMatchObject({
-      durationMs: 551_057,
-      frameCount: 16_533,
+      durationMs: 184_038,
+      frameCount: 5_523,
       programCount: 10,
       transactionCount: 10,
     });
+    // Per-transaction durations, pinned individually so a future drift fails at a named
+    // batch rather than inside a sum -- the protection that replaces the opaque residual
+    // the previous golden carried.
+    expect(budget.programs.map(({ durationMs }) => durationMs)).toEqual([
+      16_901, 19_698, 26_183, 19_482, 21_052, 12_268, 16_268, 21_901, 17_516, 12_769,
+    ]);
     expect(budget.programs.map(({ firstCursor, lastCursor }) => ({ firstCursor, lastCursor })))
       .toEqual(paired.map((batch) => ({
         firstCursor: batch[0]!.cursor,
         lastCursor: batch.at(-1)!.cursor,
       })));
     expect(budget.programs.every(({ fallbackDiagnostics }) => fallbackDiagnostics.length === 0)).toBe(true);
-    expect(Math.max(...budget.programs.map(({ maxRouteWaypoints }) => maxRouteWaypoints))).toBe(113);
-    expect(Math.max(...budget.programs.map(({ maxRouteLengthPixels }) => maxRouteLengthPixels))).toBe(3_584);
+    expect(Math.max(...budget.programs.map(({ maxRouteWaypoints }) => maxRouteWaypoints))).toBe(23);
+    expect(Math.max(...budget.programs.map(({ maxRouteLengthPixels }) => maxRouteLengthPixels))).toBe(686);
     expect(planChronicleProgramBudget(manifest).durationMs).not.toBe(budget.durationMs);
   });
 

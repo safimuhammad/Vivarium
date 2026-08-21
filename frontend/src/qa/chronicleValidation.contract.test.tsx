@@ -641,6 +641,39 @@ afterEach(async () => {
   expect(reactActWarnings, "React external-store updates must remain inside act").toEqual([]);
 });
 
+// --- Declared wall-clock bounds for the heavy production-route tests ------------
+// Every bound below is a MEASURED cost, re-derived on 2026-08-21 after CI failed six
+// tests in this file that all pass locally. Two numbers per test: "isolated" is this
+// file run alone on an idle machine (x3); "contended" is the same test inside
+// `vitest run` over all 233 files, measured twice with every timeout lifted so nothing
+// is truncated and the real cost is visible.
+//
+//   test                                   isolated x3 (ms)      contended (ms)
+//   `yields immediate-clock collaborator…` 1,807/1,832/1,862      4,414 /  4,511
+//   `boots C00 through the entry API…`     2,141/2,170/2,159      5,363 /  5,708
+//   `route-binds C14 controls…`            2,079/2,022/2,050      5,458 /  5,921
+//   `route-binds C15 controls…`            2,195/2,233/2,184      6,163 /  5,888
+//   `disposes every C14/C15 owner…`        8,648/8,685/8,729     26,338 / 25,811
+//   `sends all C16 envelopes…`             6,812/6,821/6,941     14,993 / 17,701
+//
+// The GitHub runner is measured at a further **1.5x** this machine: per-test floors
+// 1.16-1.48x on the tests CI killed, and whole-file totals 1.25x (this file: 79,116 ms
+// here vs 98,521 ms there) and 1.35x (`homeContestSystem.test.ts`). Each bound is
+// therefore `ceil(heaviest contended x 1.5 runner factor x 2 run-to-run variance)`.
+//
+// `disposes every C14/C15 owner…` is the important one: it carried `15_000`, and its
+// measured cost inside the full suite is 25,811-26,338 ms. The bound was BELOW the
+// test's own contended cost on this machine, so it could only ever have passed when the
+// suite happened to be quiet. It is not slow because it is broken -- with the bound
+// lifted it passes and the whole file goes 42/42.
+//
+// These declare wall-clock costs only. No assertion, matcher, fixture or skip changes;
+// the other 36 tests in this file keep vitest's 5,000 ms default; and a genuine hang
+// still fails at the bound instead of running forever.
+const QA_PRODUCTION_ROUTE_BINDING_TIMEOUT_MS = 20_000;
+const QA_PRODUCTION_OWNER_DISPOSAL_TIMEOUT_MS = 80_000;
+const QA_C16_PRESSURE_TIMEOUT_MS = 55_000;
+
 describe("development-only Chronicle validation route", () => {
   it("declares the complete QA API before dependent contracts execute", () => {
     expect(missingApiFiles, "Chronicle QA API missing; implement only after this RED is reviewed")
@@ -1308,7 +1341,7 @@ describe("development-only Chronicle validation route", () => {
         }
       }
     }
-  });
+  }, QA_PRODUCTION_ROUTE_BINDING_TIMEOUT_MS);
 
   contractIt("mounts predecoded C01 and settles its first cue through the real renderer with exact identity", async () => {
     installRendererBrowserHarness();
@@ -2847,7 +2880,7 @@ describe("development-only Chronicle validation route", () => {
     } finally {
       for (const record of [...routeResources].reverse()) await releaseRoute(record);
     }
-  });
+  }, QA_PRODUCTION_ROUTE_BINDING_TIMEOUT_MS);
 
   contractIt("C-fix-2 regression: steps C18 cursor-by-cursor through the Nirvana arrival and recovers settlement at cursor 21", async () => {
     // C16-pattern per-checkpoint deliverThroughCursor+settle() loop (the same shape as
@@ -3041,15 +3074,21 @@ describe("development-only Chronicle validation route", () => {
     expect(network.webSocket).not.toHaveBeenCalled();
     expect(network.xmlHttpRequest).not.toHaveBeenCalled();
     // C16 is the pressure chronicle: 4_096 envelopes through the real production
-    // ingress, director and settlement handshake. Measured wall clock on an idle
-    // machine across four runs: 7_176 / 7_400 / 7_411 / 7_454 ms -- i.e. it has
-    // always exceeded vitest's 5_000 ms default, and only ever reported a timeout
-    // once the stale `checkpointFeeds[0].reset` assertion above stopped throwing
-    // first and hiding it. 30_000 ms is ~4x the measured cost, which is the usual
-    // allowance for a CI runner slower than this machine. This declares a wall-clock
-    // cost; it relaxes no assertion, and a genuine hang still fails here rather than
-    // running forever.
-  }, 30_000);
+    // ingress, director and settlement handshake. Isolated wall clock on an idle
+    // machine: 7_176 / 7_400 / 7_411 / 7_454 ms originally, and 6_812 / 6_821 / 6_941 ms
+    // re-measured 2026-08-21 -- i.e. it has always exceeded vitest's 5_000 ms default,
+    // and only ever reported a timeout once the stale `checkpointFeeds[0].reset`
+    // assertion above stopped throwing first and hiding it.
+    //
+    // 30_000 was derived as ~4x the ISOLATED cost. Measurement on 2026-08-21 showed
+    // that factor is too thin: inside `vitest run` over all 233 files this test costs
+    // 14_993 / 17_701 ms, and the GitHub runner is measured at a further 1.5x this
+    // machine -- so 30_000 leaves only ~1.1x headroom on CI and this test was next in
+    // line to fail. Re-derived the same way as the rest of the suite's declared bounds:
+    // 55_000 = ceil(17_701 heaviest contended x 1.5 runner factor x 2 variance).
+    // This declares a wall-clock cost; it relaxes no assertion, and a genuine hang
+    // still fails here rather than running forever.
+  }, QA_C16_PRESSURE_TIMEOUT_MS);
 
   contractIt("route-binds C14 controls to production recovery and proves stale callback identity is inert", async () => {
     installRendererBrowserHarness();
@@ -3180,7 +3219,7 @@ describe("development-only Chronicle validation route", () => {
     expect(exactTransport?.dispose).toHaveBeenCalledTimes(1);
     expect(exactCheckpointFeed?.dispose).toHaveBeenCalledTimes(1);
     expect(exactReplayClient?.dispose).toHaveBeenCalledTimes(1);
-  });
+  }, QA_PRODUCTION_ROUTE_BINDING_TIMEOUT_MS);
 
   contractIt("route-binds C15 controls to isolated production Live and Archive owners", async () => {
     installRendererBrowserHarness();
@@ -3294,7 +3333,7 @@ describe("development-only Chronicle validation route", () => {
     expect(composed.fixtureTransports.at(-1)?.dispose).toHaveBeenCalledTimes(1);
     expect(composed.checkpointFeeds.at(-1)?.dispose).toHaveBeenCalledTimes(1);
     expect(exactReplayClient?.dispose).toHaveBeenCalledTimes(1);
-  });
+  }, QA_PRODUCTION_ROUTE_BINDING_TIMEOUT_MS);
 
   contractIt("disposes every C14/C15 production owner cleanly from every intermediate phase", async () => {
     const { createProductionChronicleQaOwner } = await loadProductionModule();
@@ -3379,7 +3418,7 @@ describe("development-only Chronicle validation route", () => {
     expect(network.eventSource).not.toHaveBeenCalled();
     expect(network.webSocket).not.toHaveBeenCalled();
     expect(network.xmlHttpRequest).not.toHaveBeenCalled();
-  }, 15_000);
+  }, QA_PRODUCTION_OWNER_DISPOSAL_TIMEOUT_MS);
 
   contractIt("executes typed C14 gap, 413, overflow, replacement, and stale rejection in order", async () => {
     const { createC14ChronicleValidationScenario } = await loadScenariosModule();

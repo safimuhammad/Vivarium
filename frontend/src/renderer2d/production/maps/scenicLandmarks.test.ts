@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import nativeContract from "../../../../../scratchpad/2d-production-art/source/native/production-native-contract.json";
+// Tracked art-contract fixture. `production-native-contract.json` is the
+// hand-authored native art geometry contract and has no generator in this
+// repository -- it is an INPUT to `frontend/scripts/pack-2d-production-assets.mjs`.
+// It used to be imported from the gitignored `scratchpad/2d-production-art/`
+// working tree, which resolved only on an authoring machine, so this file
+// collected ZERO tests on CI. It now lives under `../artContract/`,
+// byte-identical (615,592 B,
+// sha256 20f118b2da1ce3b04a5cf462b36f8ac43672bfafa5fceab0f074d6f5f445a1b5).
+// Provenance and refresh procedure are documented once, at the sibling import in
+// `../assets/productionManifest.test.ts`.
+import nativeContract from "../artContract/production-native-contract.json";
 
 import type { RegionKitId } from "./biomeKits";
 import * as scenicLandmarksModule from "./scenicLandmarks";

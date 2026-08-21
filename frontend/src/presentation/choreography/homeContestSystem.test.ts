@@ -110,6 +110,42 @@ function doorStandingPointFor(
   return standing;
 }
 
+// Wall-clock bound for the six choreographies below that resolve real plans over
+// real seeded region recipes (collision grid -> navigation -> route -> phase fit).
+// Re-derived by measurement, not inflation, after CI failed three of them while the
+// whole file passed locally (2026-08-21):
+//
+//   test                                     isolated x3 (ms)   contended (ms)
+//   `resolves every home, contest, ruin...`  2,323/2,352/2,385   5,649 / 6,227
+//   `replaces reduced-motion travel...`      1,970/1,993/2,015   5,009 / 5,198
+//   `fits every standard-motion C route...`  2,014/2,010/2,013   4,832 / 4,980
+//   `retains legal Task 6 home and ruin...`  1,991/1,982/2,009   4,763 / 4,836
+//   `uses the exact frozen Chronicle seed...`1,738/1,737/1,760   4,247 / 4,162
+//   `reverses every physical home/ruin...`   1,385/1,377/1,325   3,227 / 3,180
+//
+// "isolated" is this file run alone on an idle machine; "contended" is the same test
+// inside `vitest run` over all 233 files, measured twice with every timeout lifted so
+// nothing is truncated. FIVE of the six already exceed vitest's out-of-box 5,000 ms
+// default under contention on this machine, and the GitHub runner is measured at a
+// further **1.5x** it (per-test floors 1.16-1.48x; whole-file totals 1.25x and 1.35x).
+// So 5,000 ms was never a bound anyone chose for these tests -- it is the framework
+// default, and it sits BELOW their measured cost on the target runner. That is why the
+// failing set moves between runs: `fits every standard-motion...` (2,014 ms isolated)
+// passed on the same CI run where `retains legal Task 6...` (2,009 ms isolated) failed.
+// Five milliseconds apart; pure scheduling luck, nothing about the tests.
+//
+// Two of the six (`resolves...`, `fits...`) already carried their own `15_000`; the
+// same measurement shows that is also under cost once the runner factor is applied
+// (6,227 x 1.5 = 9,341, only 1.6x of 15,000), so they join the shared constant.
+//
+// 20_000 = ceil(6,227 heaviest contended x 1.5 runner factor x 2 run-to-run variance).
+// This declares a wall-clock cost only. No assertion, matcher, fixture or skip is
+// touched; the other 45 tests in this file keep the 5,000 ms default, so a cheap test
+// that suddenly costs seconds still fails; and a genuine hang still fails here instead
+// of running forever. Same derivation the repo already used at
+// `qa/chronicleValidation.contract.test.tsx` for its C16 pressure test.
+const HOME_CONTEST_ROUTE_RESOLVE_TIMEOUT_MS = 20_000;
+
 describe("home, contest, ruin, and system choreographies", () => {
   it("exports exactly eleven immutable canonical definitions", () => {
     expect(HOME_CONTEST_SYSTEM_CHOREOGRAPHIES.map(({ eventType }) => eventType)).toEqual(TYPES);
@@ -157,7 +193,7 @@ describe("home, contest, ruin, and system choreographies", () => {
       compactResourceRouting: false,
     });
     expectExecutorValid(frame, moment, program);
-  }, 15_000);
+  }, HOME_CONTEST_ROUTE_RESOLVE_TIMEOUT_MS);
 
   it("reserves a real free Task 6 plot from the untouched C06 placement for a provisional same-ID home", () => {
     const context = contextFor("C06", "home_built");
@@ -639,7 +675,7 @@ describe("home, contest, ruin, and system choreographies", () => {
       expect(contactIndex, type).toBeGreaterThan(phaseIndex);
       assertLegalWaypoints(move.waypoints ?? [], recipe);
     }
-  });
+  }, HOME_CONTEST_ROUTE_RESOLVE_TIMEOUT_MS);
 
   it("reuses the deterministic build plot while a projected home awaits durable placement", () => {
     const buildContext = contextFor("C06", "home_built");
@@ -771,7 +807,7 @@ describe("home, contest, ruin, and system choreographies", () => {
       expect(recover.endMs - recover.startMs, `${type} return budget`)
         .toBeGreaterThanOrEqual(certifiedProductionRouteBudgetMs(returning?.waypoints ?? [], 48));
     }
-  });
+  }, HOME_CONTEST_ROUTE_RESOLVE_TIMEOUT_MS);
 
   // CONVERGENCE: a contest beat's raider STAYS at the house it breached, looted
   // or claimed. The old shape walked him back to his staging anchor for the
@@ -910,7 +946,7 @@ describe("home, contest, ruin, and system choreographies", () => {
         expect(reducedActor.nextDeadlineMs()).toBeNull();
       }
     }
-  });
+  }, HOME_CONTEST_ROUTE_RESOLVE_TIMEOUT_MS);
 
   it("uses the exact frozen Chronicle seed for every injected C06-C09 recipe", () => {
     for (const [chronicleId, type] of [
@@ -930,7 +966,7 @@ describe("home, contest, ruin, and system choreographies", () => {
         expect(context.recipes.get(region.name)?.identityHash).toBe(expected.identityHash);
       }
     }
-  });
+  }, HOME_CONTEST_ROUTE_RESOLVE_TIMEOUT_MS);
 
   it("fits every standard-motion C home/ruin route before Director hold at 48px/s under 30/60/120Hz clocks", () => {
     const cases = [
@@ -1016,7 +1052,7 @@ describe("home, contest, ruin, and system choreographies", () => {
           }
         }
     }
-  }, 15_000);
+  }, HOME_CONTEST_ROUTE_RESOLVE_TIMEOUT_MS);
 
   it.each([
     ["C06", "home_built", "builder_id", "build"],
