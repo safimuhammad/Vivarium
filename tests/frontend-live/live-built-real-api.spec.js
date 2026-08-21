@@ -52,7 +52,13 @@ test('built frontend observes the real deterministic live API and SSE stream', a
   await page.addInitScript(() => {
     window.__vivariumEnableSnapshotRefreshForTest = true;
   });
-  const documentResponse = await page.goto('/');
+  // Name the live surface explicitly. Bare `/` is the landing/configuration
+  // gateway by design -- a viewer sets initial conditions and presses "Let's go
+  // live" -- so the root route no longer mounts the world. This spec was added
+  // in the same commit that made the gateway the default, shipping both facts at
+  // once; it is the stale half. Every assertion below is unchanged: this is the
+  // real live API + SSE path, not the canned `?source=event-demo` client.
+  const documentResponse = await page.goto('/?renderer=living-atlas');
   expect(documentResponse?.ok()).toBe(true);
 
   await page.waitForFunction(() => window.__vivariumWorld?.isReady === true);
@@ -237,4 +243,17 @@ test('built frontend observes the real deterministic live API and SSE stream', a
   await expectNoLiveDiagnosticCopy(page);
   await expectNoBannedObserverCopy(page);
   await expectNoRawRunMetadataCopy(page, rawRunMetadataBannedCopy);
+});
+
+// Root-route coverage. The spec above deliberately names `?renderer=living-atlas`
+// because bare `/` is the landing/configuration gateway. That makes the root
+// route untested by this file unless it is asserted here -- and it regressed
+// once already, silently, when the gateway became the default and this suite
+// kept pointing at `/`. Pin both halves so neither can drift alone.
+test('the built root route serves the gateway, not the world', async ({ page }) => {
+  const documentResponse = await page.goto('/');
+  expect(documentResponse?.ok()).toBe(true);
+
+  await expect(page.locator('.gateway')).toBeVisible();
+  expect(await page.evaluate(() => window.__vivariumWorld === undefined)).toBe(true);
 });

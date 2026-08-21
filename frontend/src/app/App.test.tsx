@@ -99,6 +99,21 @@ describe("App renderer boundary", () => {
     expect(imports.productionImport).not.toHaveBeenCalled();
   });
 
+  // Regression: `?source=event-demo` is the public, no-backend-required demo
+  // route (a canned deterministic event stream `LivingAtlasApp` already knows
+  // how to read). It names no renderer, so before `parseRendererMode` learned
+  // about the source param this fell through every branch to the gateway and
+  // `window.__vivariumWorld` was never published — the demo/tour route hung.
+  it("mounts Living Atlas for the public event-demo route, without naming a renderer", async () => {
+    const imports = await renderApp("?source=event-demo");
+
+    expect(container?.querySelector('[data-testid="living-atlas"]')).not.toBeNull();
+    expect(imports.livingImport).toHaveBeenCalledOnce();
+    expect(imports.gatewayImport).not.toHaveBeenCalled();
+    expect(imports.sliceImport).not.toHaveBeenCalled();
+    expect(imports.productionImport).not.toHaveBeenCalled();
+  });
+
   it("disposes the selected renderer route before the next surface claims ownership", async () => {
     const trace: string[] = [];
     let productionGeneration = 0;

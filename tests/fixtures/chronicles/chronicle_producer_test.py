@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -891,7 +892,7 @@ def test_canonical_json_and_non_writing_check(tmp_path: Path) -> None:
         assert payload == (json.dumps(parsed, indent=2, sort_keys=True) + "\n").encode()
 
     completed = subprocess.run(
-        [str(ROOT / "venv/bin/python"), str(BUILD_SCRIPT), "--check", "--output", str(tmp_path)],
+        [sys.executable, str(BUILD_SCRIPT), "--check", "--output", str(tmp_path)],
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -907,7 +908,7 @@ def test_checked_in_data_matches_two_byte_identical_builds(tmp_path: Path) -> No
     two = tmp_path / "two"
     for target in (one, two):
         subprocess.run(
-            [str(ROOT / "venv/bin/python"), str(BUILD_SCRIPT), "--output", str(target)],
+            [sys.executable, str(BUILD_SCRIPT), "--output", str(target)],
             cwd=ROOT,
             check=True,
         )
