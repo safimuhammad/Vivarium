@@ -416,7 +416,19 @@ test("prepared capture rejects a marker whose presentation time does not match i
   }
 });
 
-test("seals and strictly checks recursive artifact hashes, normalized sidecars, and stale files", { timeout: 30_000 }, async () => {
+// 60_000, re-derived by measurement on 2026-08-21 after this test timed out in CI at
+// 30_000 while passing locally. It is not slow because it is broken -- before ffmpeg was
+// installed on the runner it crashed in milliseconds, so its real cost had never been
+// observed anywhere. Measured here: 12,246 / 14,072 ms isolated, 14,025 / 18,040 ms
+// inside the full `node --test` run (four files in parallel). The GitHub runner is a
+// further ~1.5x, which puts the heaviest contended case around 27s -- under the old
+// bound only until run-to-run variance pushed it over, which is exactly what CI hit.
+// Bound = ceil(18,040 heaviest contended x 1.5 runner x 2 variance), the same derivation
+// the repo uses elsewhere. Its two 120_000 siblings measure 23,663 ms and are genuinely
+// heavier; the other four 30_000 tests in this file all finish under 8s and are
+// deliberately left alone. This declares a wall-clock cost only -- no assertion changes,
+// and a genuine hang still fails here rather than running forever.
+test("seals and strictly checks recursive artifact hashes, normalized sidecars, and stale files", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "vivarium-tree-"));
   try {
     const fixtures = path.join(root, "fixtures");
