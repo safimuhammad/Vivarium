@@ -40,9 +40,17 @@ async def test_attack_success_applies_costs_and_emits_event(
     assert event.type == "attack"
     assert event.source == "wanderer_001"
     assert event.scope is ScopeType.LOCAL
+    assert event.region == "alpha"
     assert event.target == "wanderer_002"
     assert event.timestamp == world.now()
     assert "message" in event.payload
+    assert event.payload["attacker_id"] == "wanderer_001"
+    assert event.payload["victim_id"] == "wanderer_002"
+    assert event.payload["region"] == "alpha"
+    assert event.payload["damage"] == ATTACK_DAMAGE
+    assert event.payload["attack_energy_cost"] == ATTACK_ENERGY_COST
+    assert event.payload["attacker_energy"] == attacker.current_energy
+    assert event.payload["victim_energy"] == target.current_energy
     # The attacker, also in alpha, hears the same LOCAL event.
     assert len(event_bus.get_events("wanderer_001")) == 1
 
@@ -148,6 +156,9 @@ async def test_attack_kills_paralyzed_target(world: WorldState, event_bus: Event
     died = [e for e in event_bus.get_events("wanderer_001") if e.type == "agent_died"]
     assert died and died[0].scope is ScopeType.LOCAL
     assert died[0].region == "alpha" and died[0].source == "wanderer_002"
+    assert died[0].payload["victim_id"] == "wanderer_002"
+    assert died[0].payload["killer_id"] == "wanderer_001"
+    assert died[0].payload["victim_was_paralyzed"] is True
 
 
 async def test_death_is_heard_only_in_its_region(world: WorldState, event_bus: EventBus) -> None:
@@ -206,6 +217,8 @@ async def test_attack_kill_loots_victim_resources_to_killer(
     # The death is announced with what was taken.
     died = [e for e in event_bus.get_events("wanderer_001") if e.type == "agent_died"]
     assert died
+    assert died[0].payload.get("victim_id") == "wanderer_002"
+    assert died[0].payload.get("killer_id") == "wanderer_001"
     assert died[0].payload.get("looted_materials") == looted_materials
     assert died[0].payload.get("looted_energy") == looted_energy
 
@@ -255,6 +268,10 @@ async def test_attack_paralyzing_blow_emits_agent_paralyzed(
     assert paralyzed[0].scope is ScopeType.LOCAL
     assert paralyzed[0].region == "alpha"
     assert paralyzed[0].timestamp == world.now()
+    assert paralyzed[0].payload["agent_id"] == "wanderer_002"
+    assert paralyzed[0].payload["victim_id"] == "wanderer_002"
+    assert paralyzed[0].payload["attacker_id"] == "wanderer_001"
+    assert paralyzed[0].payload["trigger"] == "attack"
     # The damage 'attack' event is still emitted alongside it.
     assert any(e.type == "attack" for e in inbox)
 

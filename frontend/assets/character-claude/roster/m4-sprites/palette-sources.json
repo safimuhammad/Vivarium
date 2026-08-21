@@ -1,0 +1,32 @@
+{
+  "characterId": "m4",
+  "description": "Exact RGBs in M4's final 16-color quantized palette eligible for palette-variant remapping. Only the shirt (top) and trousers families are listed — skin, hair, and the beard (a hair-family feature) are never remapped, matching the roster-integration structural decision (#2).",
+  "sourcePalette": {
+    "top": [
+      { "role": "shirt-main", "rgb": [218, 192, 150], "hex": "#dac096", "note": "Dominant bone-grey shirt fill (verified via strap-clear sample rectangles on front chest + back)." },
+      { "role": "shirt-light", "rgb": [222, 198, 156], "hex": "#dec69c", "note": "Shoulder highlight tone; appears only on back.png (rows 19-22), clean, no cross-role sharing found anywhere in the file." }
+    ],
+    "trousers": [
+      { "role": "trousers-main", "rgb": [78, 72, 39], "hex": "#4e4827", "note": "Dominant dark-olive trousers fill." },
+      { "role": "trousers-shade", "rgb": [63, 52, 28], "hex": "#3f341c", "note": "Fold/shadow shading." },
+      { "role": "trousers-shade-2", "rgb": [72, 66, 30], "hex": "#48421e", "note": "Second fold-shading tone; distinct pixel cluster from trousers-shade, both verified clean." }
+    ]
+  },
+  "excludedFromRemap": {
+    "skin": [[222, 153, 81], [208, 170, 122], [177, 138, 97], [181, 116, 52]],
+    "hairAndBeard": [[128, 116, 104], [172, 152, 129], [92, 83, 67]],
+    "bootsAndStrap": [[101, 56, 16], [122, 78, 36], [46, 38, 18]],
+    "note": "The roster plan's named risk for M4 — grey hair vs. bone-grey shirt being close in tone — was checked with full-file pixel scans (not just sample rectangles), per ROSTER_PIPELINE_NOTES.md's guidance that the ASCII legend alone can mislead. Verdict: hair and shirt occupy fully separate silhouette regions (hair rows 0-18, shirt rows 19+) and never spatially merge or bleed into each other anywhere in front/back/side — confirmed both numerically (the hair family (128,116,104)/(172,152,129)/(92,83,67) and shirt family (218,192,150)/(222,198,156) are distinct clusters) and visually (zoomed crops of the beard, the hairline-to-collar boundary on the back view, and the crown). An EXACT-VALUE sharing was previously found here (shirt-main (218,192,150) doubling as a handful of hair-crown highlight pixels, 6-10px per reference view at the very top of the head) — RESOLVED (R3 review fix) by `character-pipeline/retint_m4_hair.py`, which retints every hair-crown occurrence (y<=12 across all 8 packed source files, verified via a full before/after pixel diff to touch zero shirt pixels, y>=17) to a new dedicated (217,193,152) hair-highlight tone that is not a member of any remap table's 'from' list, so it is immune to garment-variant remapping regardless of which palette a given being resolves to. shirt-main (218,192,150) itself is now used ONLY for the actual shirt fill."
+  },
+  "suggestedVariant": {
+    "name": "violet-grey",
+    "note": "One example remap into the world's muted garment families (BEING_PALETTE_VARIANTS in beingPalette.ts: slate-blue / violet-grey / moss / ochre / bone). M4 already ships in a bone-adjacent tone, so 'violet-grey' is proposed instead for visually distinct variant testing — re-validate visually against the actual atlas render before locking in for R3.",
+    "remap": [
+      { "from": [218, 192, 150], "to": [172, 168, 188], "role": "shirt-main" },
+      { "from": [222, 198, 156], "to": [188, 184, 202], "role": "shirt-light" },
+      { "from": [78, 72, 39], "to": [96, 92, 112], "role": "trousers-main" },
+      { "from": [63, 52, 28], "to": [76, 70, 92], "role": "trousers-shade" },
+      { "from": [72, 66, 30], "to": [88, 82, 104], "role": "trousers-shade-2" }
+    ]
+  }
+}

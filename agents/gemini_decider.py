@@ -224,6 +224,19 @@ class _GeminiModels(Protocol):
         ...
 
 
+class _GeminiAsyncClient(Protocol):
+    """Owned Google SDK async client retained for models access and shutdown."""
+
+    @property
+    def models(self) -> _GeminiModels:
+        """Return the asynchronous model-generation surface."""
+        ...
+
+    async def aclose(self) -> None:
+        """Close the SDK's owned asynchronous HTTP transport."""
+        ...
+
+
 class GeminiDecider:
     """Production :class:`~agents.decider.Decider` backed by a hosted Gemini model.
 
@@ -278,6 +291,8 @@ class GeminiDecider:
         self.thinking_level: str = thinking_level
         self._api_key: str | None = api_key
         self._client: _GeminiModels | None = client
+        self._owned_async_client: _GeminiAsyncClient | None = None
+        self._closed: bool = False
 
     async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
         """Query the model once (non-streaming, time-bounded) and parse the result.
@@ -295,6 +310,8 @@ class GeminiDecider:
                 (the in-flight request is cancelled). The breathing loop catches this
                 and ends the breath gracefully.
         """
+        if self._closed:
+            raise RuntimeError("Gemini decider is closed")
         client = self._client
         if client is None:  # pragma: no cover - real network client construction
             import httpx
@@ -313,9 +330,12 @@ class GeminiDecider:
             # ``aio.models`` provides ``generate_content`` but is not declared against our
             # loose ``_GeminiModels`` seam; assert the fit at this boundary (mirrors
             # OllamaDecider's cast of ``ollama.AsyncClient``).
-            client = cast(
-                _GeminiModels, genai.Client(api_key=key, http_options=http_options).aio.models
+            async_client = cast(
+                _GeminiAsyncClient, genai.Client(api_key=key, http_options=http_options).aio
             )
+            self._owned_async_client = async_client
+            client = async_client.models
+            self._client = client
 
         config: dict[str, Any] = {
             "system_instruction": gemini_system_instruction(messages),
@@ -336,3 +356,16 @@ class GeminiDecider:
             self.timeout,
         )
         return parse_gemini_response(response)
+
+    async def aclose(self) -> None:
+        """Close the lazily-created SDK client exactly once.
+
+        The ``client=`` constructor seam supplies only a caller-owned models surface,
+        so injected clients are deliberately never closed here.
+        """
+        if self._closed:
+            return
+        client = self._owned_async_client
+        if client is not None:
+            await client.aclose()
+        self._closed = True

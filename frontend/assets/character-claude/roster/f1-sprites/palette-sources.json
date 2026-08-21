@@ -1,0 +1,28 @@
+{
+  "characterId": "f1",
+  "description": "Exact RGBs in F1's final 16-color quantized palette eligible for palette-variant remapping. Only the blouse (top) and skirt families are listed — skin and hair are never remapped, matching the roster-integration structural decision (#2) and beingPalette.ts's existing remap-table shape (garment-only exact-RGB swap).",
+  "sourcePalette": {
+    "blouse": [
+      { "role": "blouse-main", "rgb": [234, 189, 129], "hex": "#eabd81", "note": "Flat single-tone top; no distinct fold/shade color survived quantization (verified by sampling a strap-free sleeve region)." }
+    ],
+    "skirt": [
+      { "role": "skirt-main", "rgb": [108, 90, 36], "hex": "#6c5a24", "note": "Dominant skirt fill." },
+      { "role": "skirt-shade", "rgb": [82, 68, 25], "hex": "#524419", "note": "Pleat/fold shading, consistently ~0.76x the main tone's luminance." }
+    ]
+  },
+  "excludedFromRemap": {
+    "skin": [[230, 150, 74], [194, 112, 49]],
+    "hair": [[104, 47, 18], [96, 48, 18], [72, 36, 17], [48, 24, 12], [42, 24, 12], [37, 18, 6]],
+    "bootsAndStrap": [[115, 64, 26], [57, 36, 14], [82, 40, 17], [102, 64, 28], [90, 41, 16]],
+    "note": "Several of these are palette-shared across roles (e.g. (194,112,49) doubles as the smile shade AND the strap/bag leather; (104,47,18) doubles as hair AND the bag pouch) because the character quantizes to only 16 colors total. Excluded from remap in every role since none of their roles is blouse or skirt."
+  },
+  "suggestedVariant": {
+    "name": "slate-blue",
+    "note": "One example remap into the world's muted garment families (BEING_PALETTE_VARIANTS in beingPalette.ts: slate-blue / violet-grey / moss / ochre / bone). Values are a first-pass proposal in the same desaturated/muted register as m1's shipped slate-blue table — re-validate visually against the actual atlas render before locking in for R3.",
+    "remap": [
+      { "from": [234, 189, 129], "to": [180, 188, 200], "role": "blouse-main" },
+      { "from": [108, 90, 36], "to": [114, 104, 132], "role": "skirt-main" },
+      { "from": [82, 68, 25], "to": [78, 68, 92], "role": "skirt-shade" }
+    ]
+  }
+}

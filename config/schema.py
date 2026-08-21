@@ -20,8 +20,8 @@ from core.constants import GENESIS_SEED
 from world.agents import AgentState, AgentStatus
 from world.regions import Region
 
-_STRICT = ConfigDict(extra="forbid")
-"""Shared model config: reject unknown fields so config typos fail loudly."""
+_STRICT = ConfigDict(extra="forbid", allow_inf_nan=False)
+"""Shared model config: reject unknown fields and non-finite floats."""
 
 
 class RegionConfig(BaseModel):

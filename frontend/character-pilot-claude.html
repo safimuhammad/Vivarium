@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='5' fill='%23f3ebce' stroke='%23111712' stroke-width='3'/%3E%3Cpath d='M10 21h12M12 15h2m4 0h2' stroke='%23a6ad63' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Vivarium character pilot — Claude (Approach A)</title>
+<style>
+  :root { --ink:#111712; --cream:#f3ebce; --moss:#a6ad63; --moss-dk:#7c854a; --paper:#efe6c8; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--cream); color:var(--ink); font:14px/1.45 ui-monospace,'SF Mono',Menlo,monospace; height:100vh; display:flex; overflow:hidden; }
+  #stage-wrap { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; min-width:0; }
+  canvas#stage { image-rendering:pixelated; border:3px solid var(--ink); border-radius:6px; background:var(--moss); max-width:calc(100% - 32px); }
+  #caption { max-width:calc(100% - 32px); font-size:12.5px; text-align:center; min-height:34px; }
+  #caption b { font-size:13.5px; }
+  #caption .ev { opacity:.65; font-size:11.5px; display:block; }
+  aside { width:330px; flex:0 0 330px; border-left:3px solid var(--ink); background:var(--paper); padding:18px 16px; overflow-y:auto; }
+  h1 { font-size:15px; margin-bottom:2px; }
+  .sub { font-size:11.5px; opacity:.72; margin-bottom:14px; }
+  fieldset { border:2px solid var(--ink); border-radius:6px; padding:10px 12px 12px; margin-bottom:14px; }
+  legend { font-weight:700; font-size:12px; padding:0 6px; }
+  select { width:100%; font:inherit; font-size:12.5px; padding:4px 6px; border:2px solid var(--ink); border-radius:4px; background:var(--cream); margin-bottom:8px; }
+  .row { display:flex; gap:8px; }
+  button { flex:1; font:inherit; font-size:12.5px; font-weight:700; padding:5px 0; border:2px solid var(--ink); border-bottom-width:4px; border-radius:5px; background:var(--cream); cursor:pointer; }
+  button:active { border-bottom-width:2px; transform:translateY(2px); }
+  label { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; margin:7px 0 2px; }
+  label output { font-weight:700; }
+  input[type=range] { width:100%; accent-color:var(--moss-dk); }
+  .toggle { display:flex; align-items:center; gap:8px; font-size:12.5px; margin-top:8px; cursor:pointer; }
+  #state { font-size:12px; white-space:pre; line-height:1.6; }
+  .gallery-dir { margin:8px 0 2px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; }
+  .gallery img { image-rendering:pixelated; display:block; background:var(--cream); border:2px solid var(--ink); border-radius:4px; padding:4px; }
+  .hint { font-size:11px; opacity:.7; margin-top:10px; }
+  kbd { border:1.5px solid var(--ink); border-bottom-width:3px; border-radius:3px; padding:0 4px; font-size:10.5px; background:var(--cream); }
+</style>
+</head>
+<body>
+<div id="stage-wrap">
+  <canvas id="stage" width="720" height="480"></canvas>
+  <div id="caption"></div>
+</div>
+<aside>
+  <h1>Character pilot — Approach A</h1>
+  <div class="sub">reference-anchored sheets · pose grammar · distance-driven playback</div>
+
+  <fieldset>
+    <legend>Performance</legend>
+    <select id="perf-select"></select>
+    <div class="row">
+      <button id="prev">◀ prev</button>
+      <button id="replay">↻ replay</button>
+      <button id="next">next ▶</button>
+    </div>
+    <label class="toggle"><input type="checkbox" id="showcase" checked /> showcase — auto-cycle everything</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Feel</legend>
+    <label>walk speed <output id="speed-out"></output></label>
+    <input type="range" id="speed" min="30" max="160" step="5" value="70" />
+    <label>stride (px / step) <output id="stride-out"></output></label>
+    <input type="range" id="stride" min="4" max="18" step="1" value="9" />
+    <label>zoom <output id="zoom-out"></output></label>
+    <input type="range" id="zoom" min="2" max="6" step="1" value="3" />
+  </fieldset>
+
+  <fieldset>
+    <legend>State</legend>
+    <div id="state"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>The sheets (as shipped)</legend>
+    <div id="gallery"></div>
+  </fieldset>
+
+  <div class="hint">Pick <b>free roam</b> to drive with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>. URL: <b>?perf=fall</b> jumps straight to one performance.</div>
+</aside>
+
+<script>
+"use strict";
+/* ================= sprite data (injected by build_pilot.py) ================= */
+const SPRITES = {"fw": 22, "fh": 48, "frames": 4, "anchorY": 46, "sheets": {"down": "data:image/png;base64,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", "up": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFgAAAAwCAYAAACVMr0DAAAFjklEQVR42tWbT2zbVBzHv8/zkq5JStMSJcrWtYIcInVIVB3SkJA2bXCpcuHPrZUGByTK0JA2DiDODA6sEqiiSByQ0MaFAyd6QlMHEyAIKhJMSqcM0pZFqQJ11vxZk7KZQ/qyZ8d2nNjPsX9SpPjl+euPv+9nv/diP4I+xqWZhHzt1l0AwLfZIoHLoxde4qQRx4+GZQBIb0jk0kxCBoD8joxMYQfJ2BAAIFPYsXwcN/ESJ4146/Rj8kpWQizkw0Q4qFsvU9jpStfNvKJW4alEGCtZCanJqJzfkVvlFJZ+p9BmQDvVKVUrAIDhQBDJ2BCSsSEZABZv3O5oiJt5iZ6wXsuxwmzoGTE3FZVj4UBre7ehrDbgkzXL1aGl7wVewtOIualoywA9bbXugE9GJO7HZq5haIZXeAVWuCBV24T0YsAnY2zCZ5gVmX8bGA4EMRwIIhL3IxL3a8J2OuYbzzwuq831Cq/A0wgaOamC71e328ojcX/bdiTuRzFfx4BP1j2Ol3gFnkacODqi2C7m6xib8CkyabdBWuYU83UU8/W2cj0zvMBL2I2c1OwQktFAC3Iz18DYhE9xj2EBte5xizduEzp0YjueTvvlpIrucIi9nL3Ey9WI1GTzXqlVV927U7P0RgFXVrcIO+b1Cq+Y3pAIFdaC1BPWA2Aj+08NesDDgSBK1UprP6OBPBte4xWoMBXXEqZApWozE8yKA0DQL+KnjW1DbfUYlc28UuNhNrBGeIVX4GlEZqtM2Ixhs0ZvAkAzTi/zvMYr8DRibioqJ0d9SI4+7IVZU9jj5KSKpubSuWlsfjIjO9FwPHhF9QyGFabDllK1onlPUwsvAfLY68ttvUyh/KCp0/ivDbRUbWaTViydm9Y1wiu8RDEzUgmzLdks7yysBp6bispU13Cm5Rf2T055kK/fflpT0yu8hKcRNJ5NRGQzHQw1Sj1q0MtiL/AS3kawkYyGZAA4EhroqGlGzwu8xAkjOmnz0HQLL3HSCMXkYH1ZTp05i+dOPAoA+Oq7giU9t/ISJ43YXV9uu6Q/evdi6/ub711u3jfHZ1zRcHbwEqeM0NI07JwsaruFlzhlRLe6ZrXdzivAYpgB6VRnYf48FubPAwC2rl8Fz3CaV+i3EVTvwtLHbb+tfzEru63huuUVnDCCxtb1q5onqqXZz4azk1fUEwaA6MlZW4wofrPYas0HwbChAdGTs4r6Zo1wK6/opBFqQ6yGF3gFJ4zQC60Moyb0Em7kFXkbwf43+vwHPwIAXjg2qlk3deYsAODzC0/1reHs5hX7acRrF+fx6eWlnvb1Cq/I2wg2xhOHAAC3BvcU2jSOPDmIv3+r4ZWFXyyZ4SZe0SkjvvzhL1P1YiGh7X9f9bMzL/EKVoRZca3HON1GeXsP98IHAADvfPar7Ub0g7fN4J/zzTfDQyMHUd7ea33++P1uT0bQpwZGuvQ7jUytjvdfnVa8wNGrAfRzL3wAmVq94z5282rCv/zSuKJ1qbnjhwcRGjmoKE+vlUwb8OLpuMzuX97ew/qdGjfdY088AvV5OM1resydXisRVrSXUO+/fqemWW6XLptl/eIV9C6tbsqtRHqtRHjp8phsdMsrwMHgYWQnXfb+OX540HFewYw4mw1WgM12SHbq8kwWM7yi5lsz0n2k8zXFA0X2dSWrYPQeZudlrKd782Z5/9XUiGLJgVO8ujO54/FBhclWgTs1HA/dQ9J9pCYjPTWYXbxtBl9Z3SJ0BU9qf6XNh9f+JABgBdio4XjpAugpa+3k1cxgdgmTXcBGDcdT1+hcnOAVtZalrmQlnEqE0a35HaerBvvy0LWiaRev7ihiJSvZCkwbzm4jjHTZjFvJStCrx5O3616RLl+lBzf71gxdvAKgdXWwBvDStbrS3irv/0EdivBAatInAAAAAElFTkSuQmCC", "side": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAFgAAAAwCAYAAACVMr0DAAAE30lEQVR42tWbQWgcVRjH//Oc7g6a3WZXQ9ZaE2sXKjY9SGPR0NIiyaV4sOCp24OB9qIBRXoQaSmFoh5EFAoePFQqepJ6kVwMolSqYA5CI0RNMRu0xJbspsnWTtaQ56G8Yebtm7ezM29m3nyn7GbmN7/5vzffzM7OAinX6FCJjg6VKDJSvfoavYABYHapaUSRY+u/c7RKAeDK3AoA4LmhMgDg4g83DFVB6OBrJBkE22nG4GtHsRP59vSCkdbAqfA1kgrCfVjJuDfXqOd10IB19TVlYFnxYL8arw5QAFhtb6JSyAEAFpstPFHqkzJZuWek6HDX3deQgQEIwbIZwgcxXh2gVp4IeTuKBhr2FgDAbhtStoibBV/PDLbyBJV8rmfwzTXqOyueqhSlO1u2CBr2FqwcFfLZdo9US5hdaiJrvmacQUwd3E27HbaMx5ff+1nzJUHBTEgE7haGX/HrfbfQxE9LDcz8cct5z24bTjinX3iSZs3XCCIsAgNAa2MTL+4d8MwQtuwvS+vOYSzqi/PLa1htb+JIteRhMm5fvuP86/TKLPka7GShGuzm2htbHYc044rqq7eed/4+9t6Pvtws+Jo8xK+3uUVZfXPukBAMADMLt40TzwxSAFje8K632GzByhOgLZac/OBnAMClN5/tmL1Z8zWTCIKFUSkQrLblMwAA/lq3ha0hqYFT6UuEh9jdFhabrUBgN5yXnV9pY36ljUqBwH1tCQAfv7YfADzXsMKrhYfl/9fdl8QZBL8DbDYwJh9A0MqSL4kzCHcgfsW2wfdK1i/fPbU/sYGLw9fgP9O7R14Ek9Xjr0773jzqz5nOGZrvg2G4WfEl/KxgQHtjyzkpRC2eDQAT569i4vxVZUxdfUncQbjP/jMLt52R3VmwAABfXPsz1CzLii9JIgie71w2TewMxE564FT6kqSCELGPj+3C8bFdvuygIejs23UHxqsDlDV4BmUbCRMEq/rlGh08XPPeQxg+Gvn7ON18jTSCqF+uUQDguarYOvkaaQRh16fld8NCsnX0JbIVBw/XhLJBNiqr06fe8Lz+5/vPlfRKHX1JGkHEVTr6kjQ2+v4nHyJLFcXXTCOIky9Nej+z95W0HrgovmYaQcRVOvqm0iL4O06k1dR64KL4El2CODM5hTOTU5HO+Dr6mmHAAHDh0kXY9Wmq4tPXZ1//jrJFcGVuBQcP1dCfM5UGkaavqUMQ7ElI1aWDL+kVHEcY7BuIkQNFjBwoem7cRA0ibV+iQxCMCQBz1+9oP3C9+AqPmdE9/TQImC03+9tqT+LHPrp2P4DXxwAAZ7/9VXm4Kgcuiq9vMKN7+unwYw8CAArlbfj0y7pn2VdeHqZsA70GLOK7hcPw/PiF8jbMXb8TmRnWt2uLYLC4Km5+2r4kCmxk3/ZIM4PnR+X58Uf2bY8l3CC+RBZet4rS10R8lT3YzVfBDesb6MJwvfFfoPfClkpWEuxemCRs36n//a/SvqaSF5dnGF/fGbx54/5DcuZuS7zAvWitsoN/z1AaAuOr4ob17doiHmk8EOtZOW5+2r7SFlEpPQTZ04ndHi3tVm6+Cp6Ir5IbxpeECVfFj7n9+Kp+HB7UP27fQCe5siVe7OlHC0rkGV8VLy7PML6+AS8370rDheR53SAl40f5hTzPV1Vhff8HHcJ5SLbMMYEAAAAASUVORK5CYII="}, "poses": {"blink": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAwCAYAAAAVQYoQAAADjUlEQVR42q2XS2gTQRjH/7vEGJvUdlOk9ZVaDfhoCy0NiqIgPhCiF6Wg1IIKevCBgig+br1UBRErVQ+9iFYRLAhie5KKerBCgoIPUilSU9GEaDbaBzUxXQ/rjJvdmelu9DvNznzz2/98M983u4DAQgFFaw8HtfZwUAOA9nBQa22s1FobK+kzb64kggLAjroKy9i7L6MAgBVzSwEAZ/uGJCGYKAGA+lo/Roaz3NUMq2O0PflzCo+GUgUs2fhQpXhRrG0KztGMwlyksa1W76xSvJgzb+a0oEWKD7HEDwhjTKDE1jX6LY4kLB637jqZlWg4yt26T7nXB49bw8X+D5JENqmq1G0Bpz7/5KofGc5ywVTxkbVLChSTQbo5WX1fFi76+/KWNTUAgINXowViyMqYYAAYiKexPqgAABLqOMq9PgDAqZalFvUX7gyyY2wGD8TTtL2sQld57kCTcDPNcFcooGgD8TSNcWJUXwp55gFJCK4fbrKca6o4FFA0M/j+6dWOzvH288+poIdvkxJNEKNSp1CjEMKRASASVyXSSQaKMaMgmdUJAJvbnmFz2zMmQDRGNpsWjpFrYQ3/wc50RdH90hDjhYf6pP8B7n6ZlCzVTQSf8imY8ilCqHE+E+Q0LCxBsl1HJ1Dh1WRWf6YrSvtINooEcAcmP/Zxw5Hq7cSth++59x0XzIKmejtpm0CPX7+il9nqsFQ0mNilg0cLoLSGm+AyD5p8cts2lGUWMAvIgxp9zauURW8lE0VKeUJcliWMqUj1dqJy6xFbyyf+thLErMZOTIVgYyoTFbt3rSqqGMmiC/H23RfYcvIBGlbu/DcwsY6eGDp6YswJ2zbu0Veybz+O33gMWyltDEVHTwx+j4z+998BAAsaSvDp1QQAoCwwg8653NzALEou3hv9Hn0xmewv1K2cTeFGG03nuIpdvOsFAGLfxBdrqX8GbFc3Y5l0LfHQ/jev9ZDU1ZcV+JP++8fWTH+DAMDe5mqNBWCBI4MZyVGC/Is5ArOUOQYbd9zYJiGZzlyiQd5xMvZXzy9BZDBTfCichIELPrFhsVaDv0dtlpqn/4DLSmZilpoHABh9HCmugYdCWGMiOBN8sf+DxPsmM2cj76+KuXkXWpfT5Eio48gwMjuhjqO+1m8/FKGAot17mgAA5NM5+iPOsnw6h3w6R3/oheBIXJV21FUg/+dI3YwmMfR1omDczqn4DYZvhw6faA6RAAAAAElFTkSuQmCC", "crouch": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAwCAYAAAAVQYoQAAAC4klEQVR42u2XPUwTYRjHf3eW9qIUaJVQEUFCE4nCYMRECUQGWYiDrtSliSzIYIyDMSSGRR2McTBxcDDB6IiLYZFBg9FBNjtUU6IlampIPyyobW04h3rnvddre/0gcfA/Xd977/f+73ne97mn8F/Vaqjbow51e1S786VSkJW1pARwfcKvAiyE4gAc7/YCcPflqlQT2Agxq7Ol+LGrixFh0FEKWklf0mrZhfSRU/52FSCVy+NzO/UJBzzNFRcxghdCcVbWkpLgWHHJ+FzOImBni0QiswVAJidZuje71sH9vpayrryKTCKzheJULRfQFh7ze1hZSxbAMyN9aqV4akCzSo1LdsDmh59HkgBsZvOcPtwuvIE2V9KSprhky0SFY2lSuTxjfo8A1cDNrqKNVZy8cCxdMtZGoKZn10b167M3X4vJW4qsS+eOdKgAsaz44MfkJopLhtzfsSdXTujXwdtvAHhw6Zjg1vKAhGNpfG6ZVK7YtREK8GkjUxQC7VoGCMdzhOM5fG654NCgexeOAgiHxkr9u8X7snmlwukToWanVVU3rUYYnWlgu9o/vSiGwug6k/1zdLNbenJqkWwVfA0OMD63zPjccn1ggKXIurQUWddfqcutAPD41QfbYbAEGxfQ9+t4ly24LbARPjncy+Rwb0m42W3JT5NR0fmA2nEyIBalngmpLsfR+YBl1ctEF9WavtJ2AeWcl3V8eeqi8Pvri0eNSV49Kgu+df9OzWBHuZvnzwS5MWWoF82efzwUgltA3kxun+PZ4AyzwZmK29FRDfTh0/d4FZmFUJyR0QBtTgcNAWutbM39sdB9HmxTe/btBMDtbQIg9PZboX6/S0l1x1iDNjR5ZujAYGtZt7bAA4OtRWNaKGo+eWZtJH5tzz52e5uIfv5Rf60AyK8W2ihHX+Gjyk+pMWBNexI7Gr8rfJ5dQo9m7tNqAhuh1fxTrSp5XqUw/dBed/2OY8nvArRUP2zWbxtuAOjbAIugAAAAAElFTkSuQmCC", "kneel": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAwCAYAAAAVQYoQAAAC1UlEQVR42u2WMWgTURjHf3fE5NAmmkhprLW1GLBoHcRatLTYwS7FQdfGJWAXLSjiIFKRLuog4iA4OAgVHdtFulhEqehgNyNESdEWkUhJE2PFJISew3nnvcvlck0idOh/evfdu9/73/fe+96DTW1q46mnPaj2tAdVt/2lSpD5pYwEcHM4ogJMxdMAHGsPAXD/9YJUE9gMsao1UP7ZtZmkEPRUglbTt5zqOJARORlpVgGyxRJhv9fosDfYVHUQM3gqnmZ+KSMJjhWfTNjnLQO2BiRW8msA5IuSrXurawPcFQ44ugopMiv5NRSvajuAPvBgJMj8UkYDj/XvU6vlUwdaVSkuuQFbP36ZzACwWihx6mCz8Ad6X0mfNMUn205UIpUjWywxGAkKUB3c5CtbWOWTl0jlKubaDNT1/MaA0T5z+604ebPJZens4RYVIFUQP/ySWUXxyVD8F5u+etxox+6+A+DR5aOCW9sNkkjlCPtlssVy12YowNef+bIU6G0ZIJEukkgXCftlzaFJDy4cARA2jZ26dorvZetI2u4ToVan66pueo0wO9PBbrXn/IyYCrPrfOHv1i2sGZNTi2S75OtwgKGJOYYm5uoDA8wml6XZ5LLxS21+BYCnbz67ToMt2DyAsV6H2lzBXYHN8JG+Tkb6OivCrW4rHk1mLU5G1ZYTUbEodQxLdTlenIzaVr384oxa0yntFuDk3NHxldFLwvP3V08aM3n1yBF85+G9msEep5fnTse4NWqqF03BDZ4KwS0gr2b+n+Px2BjjsbGqy9GzHujjZ58IKTJT8TT9A1F2eD00BKxfZRueCv2I6u4N0N0bECrgurZ0z/4dKsD0xT4Arr/4AED8/Q/tYPiYrQ2swzt2b8Uf2mLE3ICr5rj70HbbuBO0puWmu61rSwOUFrTbTji4TQv8lhoDNoBlNx7tHmK97LhORSrzy7jRhxSt+4FdfpygAH8Ar18IrFpkZckAAAAASUVORK5CYII=", "reach": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAwCAYAAAAVQYoQAAADEklEQVR42rWXS2gTQRjH/7O2yaLdtBstjbW2lgYtmh6ktWhpsQfroXjQayNCQS9aEDyJIFIQ9SCiEPTgoVCpJ2kv2otFlIoezM0IUVI09UEk5GFaNVlD1sM6686+snn0f9pMZn7z3++bx7eAQw10ivJApyg77U+sIOHVDAGAa+N+GQDmIykAwMFOLwAg9HKFVAXWQvRq9xiHXVqMMY0NVtBy+paTbSdSW474W2UAyEpF+ASX2mGX2FR2Ei14PpJCeDVDGMe8m4PP7TIA2z0E6XwJAJCXiKl7vWsV3Ovz2Lry8hzS+RJ4l2w6AZ141C8ivJpRwFPDPXK5eFKgXlbtxAlYP/h5LAMAWC8UcWxfK/MGtC+hSePdnGmiookcslIRo36RgVJwk9uwsIzJiyZylrHWAqmeXhlRn0/ceM0mbymWJCf3t8kAkCiwAz9l1sG7OUD637Zw8ZD6PHnrDQBg5sIBxq3pBokmcvAJHLKS0bUWCgBf1vKGENBnDgCiKQnRlASfwCkONbp3rh8AmE1jpt6t7P+cfiZl97FQvdOKTjd6RmidUbBT7Ty7yIZC6zpf+Ld1CyU1OdWIMws+hQPA2PQyxqaXawMDwFIsSZZiSfWVOgQeAPDw1UfHYTAFaydQ1+tYhyO4I7AWPjHUjYmhbku43q3l1aRVfDYotx0OsodS1zipyXF8Nmh66uXji3JVt7RTgJ1zW/DU0d3yzfu31d/fX8yBhiX5JGToX2oS0XVqjpQNRS3asFDYOj59fLI+W7qesgVfP9O/MTH+fHfcEOM7j6IAgKszIds4N1Ti4sHjD/DyHOYjKQyPBNHish5eEZiWsnVPHr2iAoMeBAY9zAlY86oIDCp1R+Ttj+qTN7CnRQaAhfNDAIDLz94x0PD7bHVnBYV37dgMABC8jY7BjkNBoXVNnh4a6Gu2desIHOhrNrSVS1zF63gt/Wdj1rHgbUT86y9Hfcs6Lq4oFWVDj1Jf4DepD5hqW3pT/VeFT9zClKv6krUqsBZayUd7Rcnz8kr3vduF2h0nMj8ZqNWngV5/Ae0nGiToXdoSAAAAAElFTkSuQmCC", "talk": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAwCAYAAAAVQYoQAAADl0lEQVR42q2XX0hTURzHv3dMnZumm4hmOTUHWSooDkMpiEqC6UsiFCZUUA+WFEiR9uaLJUhkWD74EqURJAihPoVRPmQwMegPU0RsRk1Wuyv/oLN1e7id4912zt3d9Pd0dn7nfO73fM85v7sLqITdapY6HTap02GTAKDTYZOayrOkpvIs+ps3V1CDAkB9SUZE7vP3ZQDAwd2pAIBbY3OCKpgoAYDSYgsWFwLc1SyIK7S9vvEXL+e8ISyd8ke22YR444QtU1IK05NGXbHcmW02ITMnKSoo35wCl+c3VD0mUBJHyi0RA4kthkR56HpAoHakJ8pj0k0pMCRK6B6fFwSySdmpiRFg77cNrvrFhQAXTBW3HC4MUUySdHMC8r7k5m89vLG6AADQ/GAqRAxZGRMMAJNuH47azAAAj7iKdFMKAOBm4/4I9V1PZ9geh4Mn3T7aLsqQVd6+VKG6meFwvd1qlibdPuqxZ1leCvnNAxIL+q5URJxrqthuNUvh4OG2qpjO8ak7b6mgkU9LAr0gSqXDbVXIrG1BTccEE8LKESGEowMAp1sUSCdJlFWe5qrj5ZSr1LE6txNks2nhWHzokHYC3N4/hYFphce5l8eEnQAPTC8JEdVNDV7TMcHdTNZ8PSvJssWeY9QEjPoG0eo5b5VRfSUPaO+fon3kNqpZx02sfxnjKvaO9uLJyCz3fccFs6De0V7aJtDWvvtymc1zCHGDSdxtvhoCpTU8DK7jQZdeD2qGsiICzALyoMqx4avUqT2VTFRTyhMScUF0KyK8o73Iqm3RtHwyPqoVLDVaPFUFK28bUXH2zKG4ipFO7YU4+OwdTt54oVr0NZ8KAOgZcqFnyMWcUHf8nLySCxfR+ugVNF1ppRU9Qy5YDDqMz/4CAOwtM+Lr+zUAQJo1gc6511DGLEp63hMtBnkx/sAflFTuonBlLPs2uYr1vNcLALh+BlR9TLUkQHN1U5ZJfaGB9n/8IFtSUpoWMp70D1+rDimj3LJ5viFPYgFYYOeMX4jpgmwnYgKzlMUMVu64sk0siRZ6tSTvOCn78/YY4Zzxx29FLDZwwdeP7ZMKsHXUksUg/QYsMiYhWQwCAJRjYlJcAAOFsHJqcCa4e3xe4P0nC7+NvK8q5uZ1NR2gl8MjrsLPuNkecRWlxRbtVtitZun5Gw8AIOjbpB/irAj6NhH0bdIPelWw0y0K9SUZCP4/Uo+nljD3Yy0kr+VU/AP6FYsGzHNq0QAAAABJRU5ErkJggg=="}};
+
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(20260723);
+
+/* ================= stage + backdrop ================= */
+const W = 240, H = 160;
+const stage = document.getElementById("stage");
+const sctx = stage.getContext("2d");
+const field = document.createElement("canvas");
+field.width = W; field.height = H;
+{
+  const f = field.getContext("2d");
+  f.fillStyle = "#a6ad63"; f.fillRect(0, 0, W, H);
+  const speck = mulberry32(7);
+  for (let i = 0; i < 340; i++) {
+    f.fillStyle = ["#9aa159", "#b2b96f", "#8f9651"][(speck() * 3) | 0];
+    f.fillRect((speck() * W) | 0, (speck() * H) | 0, 1 + ((speck() * 2) | 0), 1);
+  }
+  for (let i = 0; i < 26; i++) {
+    const x = (speck() * W) | 0, y = (speck() * H) | 0;
+    f.fillStyle = "#7c854a";
+    f.fillRect(x, y, 1, 2); f.fillRect(x + 2, y - 1, 1, 3); f.fillRect(x + 4, y, 1, 2);
+  }
+}
+
+/* ================= image loading + partner recolor ================= */
+const { fw, fh, anchorY } = SPRITES;
+const IMAGES = { A: { sheets: {}, poses: {} }, B: { sheets: {}, poses: {} } };
+const RECOLOR = [   // shirt cream -> slate, olive pants -> violet-grey (per-being variation)
+  [[248, 225, 182], [154, 166, 192]],
+  [[96, 84, 31], [110, 98, 128]],
+  [[52, 39, 16], [72, 62, 88]],
+  [[83, 66, 26], [92, 82, 108]],
+];
+function recolor(img) {
+  const c = document.createElement("canvas");
+  c.width = img.width; c.height = img.height;
+  const x = c.getContext("2d");
+  x.drawImage(img, 0, 0);
+  const d = x.getImageData(0, 0, c.width, c.height);
+  for (let i = 0; i < d.data.length; i += 4) {
+    for (const [from, to] of RECOLOR) {
+      if (d.data[i] === from[0] && d.data[i + 1] === from[1] && d.data[i + 2] === from[2]) {
+        d.data[i] = to[0]; d.data[i + 1] = to[1]; d.data[i + 2] = to[2];
+        break;
+      }
+    }
+  }
+  x.putImageData(d, 0, 0);
+  return c;
+}
+
+/* ================= actor ================= */
+const scratch = document.createElement("canvas");
+scratch.width = fw; scratch.height = fh;
+const scx = scratch.getContext("2d");
+
+class Actor {
+  constructor(images) {
+    this.img = images;
+    this.reset();
+  }
+  reset() {
+    this.x = W / 2; this.y = H / 2;
+    this.facing = "down"; this.pose = null; this.poseMirror = false;
+    this.rot = 0; this.scaleF = 1; this.alpha = 1;
+    this.tint = null;            // e.g. "rgba(200,40,30,.45)"
+    this.visible = true;
+    this.distAcc = 0; this.moving = false;
+    this.dx = 0; this.dy = 0;
+  }
+  frameSource() {
+    if (this.pose) return { img: this.img.poses[this.pose], sx: 0, mirror: this.poseMirror || false };
+    const dir = this.facing;
+    const sheet = this.img.sheets[dir === "left" || dir === "right" ? "side" : dir];
+    const stride = +controls.stride.value;
+    const fi = this.moving ? Math.floor(this.distAcc / stride) % 4 : 1;
+    return { img: sheet, sx: fi * fw, mirror: dir === "left" };
+  }
+  draw() {
+    if (!this.visible) return;
+    const s = stage.width / W;
+    const px = Math.round(this.x), py = Math.round(this.y);
+    const lie = Math.abs(Math.sin(this.rot));
+    sctx.fillStyle = "rgba(17,23,18,0.18)";
+    sctx.beginPath();
+    sctx.ellipse(px * s, (py + 1) * s, (fw * 0.32 + lie * fh * 0.22) * this.scaleF * s,
+                 2.2 * s, 0, 0, Math.PI * 2);
+    sctx.fill();
+    const { img, sx, mirror } = this.frameSource();
+    let src = img, srcX = sx;
+    if (this.tint) {
+      scx.clearRect(0, 0, fw, fh);
+      scx.drawImage(img, sx, 0, fw, fh, 0, 0, fw, fh);
+      scx.globalCompositeOperation = "source-atop";
+      scx.fillStyle = this.tint;
+      scx.fillRect(0, 0, fw, fh);
+      scx.globalCompositeOperation = "source-over";
+      src = scratch; srcX = 0;
+    }
+    sctx.save();
+    sctx.globalAlpha = this.alpha;
+    sctx.translate(px * s, py * s);
+    sctx.rotate(this.rot);
+    sctx.scale((mirror ? -1 : 1) * this.scaleF * s, this.scaleF * s);
+    sctx.drawImage(src, srcX, 0, fw, fh, -fw / 2, -anchorY, fw, fh);
+    sctx.restore();
+  }
+  walkToward(tx, ty, dt) {
+    const speed = +controls.speed.value;
+    const dx = tx - this.x, dy = ty - this.y, d = Math.hypot(dx, dy);
+    if (d < 1.5) { this.moving = false; this.distAcc = 0; return true; }
+    const step = Math.min(d, speed * dt);
+    this.x += (dx / d) * step; this.y += (dy / d) * step;
+    this.distAcc += step; this.moving = true;
+    this.facing = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? "left" : "right") : (dy < 0 ? "up" : "down");
+    return false;
+  }
+}
+
+/* ================= effects ================= */
+const parts = [];
+function mote(x, y, vx, vy, life, color, g = 0) {
+  parts.push({ x, y, vx, vy, g, life, age: 0, color });
+}
+function motesBurst(x, y, n, color = "#e0b23e") {
+  for (let i = 0; i < n; i++)
+    mote(x, y, (rng() - 0.5) * 30, -12 - rng() * 22, 0.7 + rng() * 0.5, color, 40);
+}
+function moteArc(x1, y1, x2, y2) {
+  const t = 0.75;
+  mote(x1, y1, (x2 - x1) / t, (y2 - y1) / t - 22, t, "#e0b23e", 60);
+}
+function drawParts() {
+  const s = stage.width / W;
+  for (const p of parts) {
+    sctx.globalAlpha = Math.max(0, 1 - p.age / p.life);
+    sctx.fillStyle = p.color;
+    sctx.fillRect(Math.round(p.x) * s, Math.round(p.y) * s, 1.6 * s, 1.6 * s);
+  }
+  sctx.globalAlpha = 1;
+}
+function stepParts(dt) {
+  for (const p of parts) {
+    p.age += dt; p.vy += p.g * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+  }
+  for (let i = parts.length - 1; i >= 0; i--) if (parts[i].age > parts[i].life) parts.splice(i, 1);
+}
+function drawBubble(x, topY, t) {
+  const s = stage.width / W;
+  sctx.fillStyle = "#f3ebce"; sctx.strokeStyle = "#111712"; sctx.lineWidth = s * 0.7;
+  for (const [dx, dy, r] of [[3, -2, 1.1], [5, -6, 1.8]]) {
+    sctx.beginPath(); sctx.arc((x + dx) * s, (topY + dy) * s, r * s, 0, 7); sctx.fill(); sctx.stroke();
+  }
+  const bx = (x + 6) * s, by = (topY - 16) * s, bw = 20 * s, bh = 10 * s;
+  sctx.beginPath(); sctx.roundRect(bx, by, bw, bh, 4 * s); sctx.fill(); sctx.stroke();
+  sctx.fillStyle = "#111712";
+  for (let i = 0; i < 3; i++) {
+    const on = Math.floor(t * 2.5) % 4 > i - 1;
+    sctx.globalAlpha = on ? 1 : 0.25;
+    sctx.beginPath(); sctx.arc(bx + (5 + i * 5) * s, by + bh / 2, 1.1 * s, 0, 7); sctx.fill();
+  }
+  sctx.globalAlpha = 1;
+}
+function drawSpeech(x, y, t) {
+  const s = stage.width / W;
+  sctx.strokeStyle = "#f3ebce"; sctx.lineWidth = s * 0.9; sctx.lineCap = "round";
+  const k = Math.floor(t * 6) % 3;
+  for (let i = 0; i <= k; i++) {
+    sctx.beginPath();
+    sctx.arc(x * s, y * s, (2.5 + i * 2.6) * s, -0.6, 0.6);
+    sctx.stroke();
+  }
+}
+function drawToken(x, y, t, alpha) {
+  const s = stage.width / W;
+  const bob = Math.sin(t * 3) * 1.5;
+  sctx.globalAlpha = alpha;
+  sctx.fillStyle = "#e0b23e"; sctx.strokeStyle = "#111712"; sctx.lineWidth = s * 0.6;
+  sctx.beginPath();
+  const cx = x * s, cy = (y + bob) * s, r = 3.4 * s;
+  sctx.moveTo(cx, cy - r); sctx.lineTo(cx + r * 0.72, cy); sctx.lineTo(cx, cy + r); sctx.lineTo(cx - r * 0.72, cy);
+  sctx.closePath(); sctx.fill(); sctx.stroke();
+  sctx.globalAlpha = 1;
+}
+function drawGlow(x, y, radius, t) {
+  const s = stage.width / W;
+  const r = (radius + Math.sin(t * 2.4) * 2) * s;
+  const g = sctx.createRadialGradient(x * s, y * s, 0, x * s, y * s, r);
+  g.addColorStop(0, "rgba(238,166,64,0.4)");
+  g.addColorStop(1, "rgba(238,166,64,0)");
+  sctx.fillStyle = g;
+  sctx.fillRect(x * s - r, y * s - r, r * 2, r * 2);
+}
+function drawCrate(x, y) {
+  const s = stage.width / W;
+  sctx.fillStyle = "#8a5a2b"; sctx.strokeStyle = "#3f2a12"; sctx.lineWidth = s * 0.7;
+  sctx.fillRect((x - 4) * s, (y - 3) * s, 8 * s, 6 * s);
+  sctx.strokeRect((x - 4) * s, (y - 3) * s, 8 * s, 6 * s);
+  sctx.beginPath(); sctx.moveTo((x - 4) * s, y * s); sctx.lineTo((x + 4) * s, y * s); sctx.stroke();
+}
+function drawBush(x, y) {
+  const s = stage.width / W;
+  sctx.fillStyle = "#6d7a45";
+  for (const [dx, dy, r] of [[-3, 0, 4], [3, 0, 4], [0, -3, 4.5]]) {
+    sctx.beginPath(); sctx.arc((x + dx) * s, (y + dy) * s, r * s, 0, 7); sctx.fill();
+  }
+  sctx.fillStyle = "#e0b23e";
+  for (const [dx, dy] of [[-3, -2], [2, -4], [4, 0]])
+    sctx.fillRect((x + dx) * s, (y + dy) * s, 1.4 * s, 1.4 * s);
+}
+function drawHearth(x, y, t) {
+  const s = stage.width / W;
+  sctx.fillStyle = "#8d8676";
+  for (const [dx, r] of [[-4, 1.7], [0, 2], [4, 1.7]]) {
+    sctx.beginPath(); sctx.arc((x + dx) * s, y * s, r * s, 0, 7); sctx.fill();
+  }
+  const fl = 3 + Math.sin(t * 9) * 0.8;
+  sctx.fillStyle = "#e8a13e";
+  sctx.beginPath();
+  sctx.moveTo((x - 2) * s, y * s); sctx.quadraticCurveTo(x * s, (y - fl * 2) * s, (x + 2) * s, y * s);
+  sctx.fill();
+}
+function drawFrameHouse(x, y, progress) {
+  const s = stage.width / W;
+  sctx.globalAlpha = 0.25 + progress * 0.75;
+  sctx.strokeStyle = "#6b4a26"; sctx.lineWidth = s * 1.1;
+  sctx.strokeRect((x - 10) * s, (y - 14) * s, 20 * s, 14 * s);
+  sctx.beginPath();
+  sctx.moveTo((x - 11) * s, (y - 14) * s); sctx.lineTo(x * s, (y - 21) * s); sctx.lineTo((x + 11) * s, (y - 14) * s);
+  sctx.stroke();
+  sctx.globalAlpha = 1;
+}
+
+/* ================= performance definitions ================= */
+const A = new Actor(IMAGES.A);
+const B = new Actor(IMAGES.B);
+const C = new Actor(IMAGES.A);          // the child
+let sceneT = 0;
+
+function resetScene() {
+  parts.length = 0;
+  for (const a of [A, B, C]) a.reset();
+  B.visible = false; C.visible = false;
+  A.x = W / 2; A.y = H / 2 + 10;
+  sceneT = 0;
+}
+function pair(gap = 26) {
+  B.visible = true;
+  A.x = W / 2 - gap / 2; B.x = W / 2 + gap / 2;
+  A.y = B.y = H / 2 + 10;
+  A.facing = "right"; B.facing = "left";
+}
+const st = (dur, opts = {}) => ({ dur, ...opts });
+
+const PERFS = {
+  roam: {
+    label: "free roam (wander / WASD)", events: "the original walking pilot",
+    steps: [st(1e9, { tick: (u, t, dt) => roamTick(dt) })],
+  },
+  idle: {
+    label: "1 · idle / breathe", events: "between actions — breathing, blinking, weight shifts",
+    steps: [st(4.8, {
+      tick: (u, t) => {
+        A.pose = (t % 2.7) < 0.16 ? "blink" : null;
+        A.scaleF = 1 + Math.sin(t * 2.2) * 0.012;
+        A.x = W / 2 + (Math.floor(t / 2.4) % 2 ? 0.7 : 0);
+      },
+    })],
+  },
+  turn: {
+    label: "2 · turn / orient", events: "orienting in four directions",
+    steps: ["down", "right", "up", "left", "down"].map((d) =>
+      st(0.55, { enter: () => { A.facing = d; A.pose = null; } })),
+  },
+  walk: {
+    label: "3 · walk / start / stop", events: "agent_moved",
+    steps: [
+      st(9, {
+        tick: (u) => {
+          const path = [[60, 90], [180, 90], [180, 120], [60, 120]];
+          const target = path[Math.floor(u * 8) % 4];
+          A.walkToward(target[0], target[1], lastDt);
+        },
+      }),
+      st(0.8, { enter: () => { A.moving = false; A.facing = "down"; } }),
+    ],
+  },
+  look: {
+    label: "4 · look around / inspect", events: "look_around",
+    steps: [
+      st(0.9, { enter: () => (A.facing = "right") }),
+      st(0.9, { enter: () => (A.facing = "left") }),
+      st(0.6, { enter: () => (A.facing = "up") }),
+      st(1.1, { enter: () => (A.facing = "down"), tick: (u, t) => (A.pose = t < 0.15 ? "blink" : null) }),
+    ],
+  },
+  talk: {
+    label: "5 · talk / listen", events: "speak — face listener, gesture; listener idles",
+    steps: [st(5, {
+      enter: () => { pair(22); A.facing = "down"; B.facing = "down"; },
+      tick: (u, t) => {
+        A.pose = Math.floor(t * 5) % 2 ? "talk" : null;
+        B.pose = (t % 3.1) < 0.15 ? "blink" : null;
+        drawSpeech(A.x + 7, A.y - anchorY + 14, t);
+      },
+    })],
+  },
+  think: {
+    label: "6 · think privately", events: "self_talk — thought bubble, quiet posture",
+    steps: [st(4.5, {
+      tick: (u, t) => {
+        A.facing = "down";
+        A.pose = (t % 2.9) < 0.14 ? "blink" : null;
+        drawBubble(A.x + 4, A.y - anchorY + 2, t);
+      },
+    })],
+  },
+  give: {
+    label: "7 · reach / offer / give", events: "resource_transferred — giver reaches, resource arcs across",
+    steps: [
+      st(0.7, { enter: () => pair(30) }),
+      st(2.6, {
+        enter: () => (A.pose = "reach"),
+        tick: (u, t) => {
+          if (Math.floor(t * 2.4) !== Math.floor((t - lastDt) * 2.4))
+            moteArc(A.x + 8, A.y - 22, B.x - 4, B.y - 20);
+        },
+      }),
+      st(0.9, { enter: () => { A.pose = null; B.scaleF = 1.03; }, tick: (u) => (B.scaleF = 1.03 - u * 0.03) }),
+    ],
+  },
+  gather: {
+    label: "8 · gather / rummage", events: "resource gathered · ruins_scavenged — crouch, motes stream in",
+    steps: [
+      st(1.4, { enter: () => { A.x = W / 2 - 26; A.y = H / 2 + 10; }, tick: () => A.walkToward(W / 2 - 12, H / 2 + 10, lastDt) }),
+      st(3.2, {
+        enter: () => { A.facing = "right"; A.pose = "crouch"; },
+        tick: (u, t) => {
+          if (Math.floor(t * 3) !== Math.floor((t - lastDt) * 3))
+            moteArc(W / 2 + 4, H / 2 + 8, A.x + 2, A.y - 14);
+        },
+      }),
+      st(0.8, { enter: () => (A.pose = null) }),
+    ],
+    props: (t) => drawBush(W / 2 + 6, H / 2 + 8),
+  },
+  build: {
+    label: "9 · work / build", events: "home_built — strike the frame, structure solidifies",
+    steps: [st(5.5, {
+      enter: () => { A.x = W / 2 - 18; A.y = H / 2 + 14; A.facing = "right"; },
+      tick: (u, t) => {
+        A.pose = Math.floor(t * 3) % 2 ? "reach" : "crouch";
+        if (Math.floor(t * 3) % 2 && Math.floor(t * 3) !== Math.floor((t - lastDt) * 3))
+          motesBurst(W / 2 + 2, H / 2 - 2, 3, "#c9b18a");
+        buildProgress = u;
+      },
+    }), st(0.8, { enter: () => (A.pose = null) })],
+    props: () => drawFrameHouse(W / 2 + 10, H / 2 + 12, buildProgress),
+  },
+  carry: {
+    label: "10 · carry / deposit / withdraw", events: "store/withdraw (silent today) — haul, set down",
+    steps: [
+      st(2.6, { enter: () => { A.x = 60; A.y = H / 2 + 10; carryOn = true; }, tick: () => A.walkToward(150, H / 2 + 10, lastDt) }),
+      st(0.9, { enter: () => { A.facing = "right"; A.pose = "crouch"; } }),
+      st(0.4, { enter: () => { carryOn = false; crateDown = [158, H / 2 + 12]; A.pose = null; } }),
+      st(1.6, { tick: () => A.walkToward(80, H / 2 + 10, lastDt) }),
+      st(0.6, { enter: () => { A.moving = false; A.facing = "down"; } }),
+    ],
+    props: () => { if (crateDown) drawCrate(crateDown[0], crateDown[1]); },
+  },
+  tend: {
+    label: "11 · kneel / tend / warm", events: "hearth_used — kneel at the fire, take warmth",
+    steps: [st(5, {
+      enter: () => { A.x = W / 2 - 14; A.y = H / 2 + 12; A.facing = "right"; A.pose = "kneel"; },
+      tick: (u, t) => {
+        drawGlow(W / 2 + 2, H / 2 + 8, 22, t);
+        if (Math.floor(t * 2) !== Math.floor((t - lastDt) * 2))
+          mote(W / 2 + 2, H / 2 + 4, (rng() - 0.5) * 6, -14, 0.9, "#e8a13e");
+      },
+    }), st(0.7, { enter: () => (A.pose = null) })],
+    props: (t) => drawHearth(W / 2 + 2, H / 2 + 8, t),
+  },
+  refuse: {
+    label: "12 · refuse / turn away", events: "mating_rejected · mating_proposal_timeout — token fades",
+    steps: [
+      st(1, { enter: () => pair(30) }),
+      st(1.6, { enter: () => (B.pose = "reach", B.poseMirror = true), tick: (u, t) => drawToken(W / 2, H / 2 - 18, t, 1) }),
+      st(1.4, {
+        enter: () => (A.facing = "up"),
+        tick: (u, t) => { A.x -= lastDt * 6; drawToken(W / 2, H / 2 - 18, t, 1 - u); },
+      }),
+      st(1, { enter: () => { B.pose = null; B.poseMirror = false; B.facing = "down"; } }),
+    ],
+  },
+  attack: {
+    label: "13 · attack / strike", events: "attack · home_breached — lunge; victim recoils",
+    steps: [
+      st(0.8, { enter: () => pair(34) }),
+      st(0.4, { enter: () => (A.rot = -0.15) }),
+      st(0.18, { enter: () => { A.rot = 0.26; A.pose = "reach"; A.x += 5; } }),
+      st(0.7, {
+        enter: () => { B.tint = "rgba(196,44,28,0.5)"; B.rot = 0.18; B.x += 3; },
+        tick: (u) => { B.tint = `rgba(196,44,28,${0.5 * (1 - u)})`; B.rot = 0.18 * (1 - u); },
+      }),
+      st(0.8, { enter: () => { A.rot = 0; A.pose = null; A.x -= 5; B.tint = null; B.rot = 0; } }),
+    ],
+  },
+  hurt: {
+    label: "14 · hurt / stagger", events: "attacked — flash, recoil, recover",
+    steps: [
+      st(0.5, { enter: () => { A.tint = "rgba(196,44,28,0.5)"; A.x += 3; }, tick: (u) => (A.tint = `rgba(196,44,28,${0.5 * (1 - u)})`) }),
+      st(1.2, { tick: (u, t) => (A.rot = Math.sin(t * 14) * 0.09 * (1 - u)) }),
+      st(0.8, { enter: () => { A.tint = null; A.rot = 0; A.x -= 3; } }),
+    ],
+  },
+  fall: {
+    label: "15 · fall", events: "agent_paralyzed — collapse",
+    steps: [
+      st(0.5, { enter: () => (A.facing = "right") }),
+      st(0.55, { tick: (u) => (A.rot = u * u * (Math.PI / 2)) }),
+      st(0.25, { tick: (u) => (A.rot = Math.PI / 2 - Math.sin(u * Math.PI) * 0.08) }),
+      st(1.4, { enter: () => (A.rot = Math.PI / 2) }),
+    ],
+  },
+  prone: {
+    label: "16 · prone / paralyzed", events: "PARALYZED — dimmed, breathing shallow, awaiting a gift",
+    steps: [st(4.5, {
+      enter: () => { A.facing = "right"; A.rot = Math.PI / 2; A.tint = "rgba(60,60,80,0.35)"; },
+      tick: (u, t) => (A.alpha = 0.88 + Math.sin(t * 1.8) * 0.1),
+    })],
+  },
+  rescue: {
+    label: "17 · rescue / recover / rise", events: "resource_transferred + agent_recovered — gift re-lights, rise",
+    steps: [
+      st(0.6, { enter: () => { pair(30); A.rot = Math.PI / 2; A.tint = "rgba(60,60,80,0.35)"; A.facing = "right"; } }),
+      st(1.6, {
+        enter: () => { B.pose = "kneel"; B.poseMirror = true; },
+        tick: (u, t) => {
+          if (Math.floor(t * 3) !== Math.floor((t - lastDt) * 3))
+            moteArc(B.x - 6, B.y - 14, A.x + 8, A.y - 4);
+        },
+      }),
+      st(0.7, { enter: () => (A.tint = null), tick: (u) => (A.rot = Math.PI / 2 - u * (Math.PI / 4)) }),
+      st(0.5, { enter: () => (B.pose = null), tick: (u) => (A.rot = Math.PI / 4 - u * (Math.PI / 4)) }),
+      st(1, { enter: () => { A.rot = 0; A.facing = "down"; B.facing = "down"; motesBurst(A.x, A.y - 20, 6); } }),
+    ],
+  },
+  dead: {
+    label: "18 · dead + return to earth", events: "agent_died · agent_decayed — dissolve into motes",
+    steps: [
+      st(0.4, { enter: () => (A.facing = "right") }),
+      st(0.5, { tick: (u) => (A.rot = u * u * (Math.PI / 2)) }),
+      st(1.2, { enter: () => { A.rot = Math.PI / 2; A.tint = "rgba(30,25,20,0.55)"; } }),
+      st(1.8, {
+        tick: (u, t) => {
+          A.alpha = 1 - u;
+          if (Math.floor(t * 8) !== Math.floor((t - lastDt) * 8))
+            mote(A.x + rng() * 20, A.y - 2 - rng() * 4, (rng() - 0.5) * 4, -16 - rng() * 10, 1.1, "#e0b23e");
+        },
+      }),
+      st(1, { enter: () => (A.visible = false) }),
+    ],
+  },
+  birth: {
+    label: "19 · birth + child", events: "agent_born — a child appears beside the parent",
+    steps: [
+      st(1, { enter: () => { A.x = W / 2 - 8; A.facing = "down"; } }),
+      st(0.9, { enter: () => (A.pose = "reach"), tick: (u, t) => drawGlow(A.x + 16, A.y - 6, 12, t) }),
+      st(0.5, { enter: () => { A.pose = null; motesBurst(A.x + 16, A.y - 8, 12); } }),
+      st(3, {
+        enter: () => { C.visible = true; C.x = A.x + 16; C.y = A.y; C.scaleF = 0.62; C.facing = "down"; },
+        tick: (u, t) => {
+          C.pose = (t % 2.2) < 0.14 ? "blink" : null;
+          C.scaleF = 0.62 * (1 + Math.sin(t * 2.6) * 0.02);
+        },
+      }),
+    ],
+  },
+};
+let buildProgress = 0, carryOn = false, crateDown = null;
+
+/* ================= sequencer ================= */
+const ORDER = Object.keys(PERFS);
+let current = "idle", stepI = 0, stepT = 0, lastDt = 0.016;
+
+function play(name) {
+  current = name;
+  resetScene();
+  buildProgress = 0; carryOn = false; crateDown = null;
+  stepI = -1; stepT = 0;
+  nextStep();
+  document.getElementById("perf-select").value = name;
+  const p = PERFS[name];
+  document.getElementById("caption").innerHTML =
+    `<b>${p.label}</b><span class="ev">${p.events}</span>`;
+}
+function nextStep() {
+  const steps = PERFS[current].steps;
+  stepI++;
+  if (stepI >= steps.length) {
+    if (controls.showcase.checked && current !== "roam") {
+      const i = ORDER.indexOf(current) + 1;
+      play(i >= ORDER.length ? ORDER[1] : ORDER[i]);   // wrap past the end, skip roam at 0
+      return;
+    }
+    stepI = 0;  // loop this performance
+    resetScene();
+  }
+  stepT = 0;
+  PERFS[current].steps[stepI].enter?.();
+}
+function stepScene(dt) {
+  lastDt = dt; sceneT += dt;
+  const step = PERFS[current].steps[stepI];
+  stepT += dt;
+  step.tick?.(Math.min(1, stepT / step.dur), sceneT, dt);
+  if (stepT >= step.dur) nextStep();
+}
+
+/* ================= roam mode (the original pilot) ================= */
+const keys = new Set();
+addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) { keys.add(k); e.preventDefault(); }
+});
+addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+let roamTarget = null, roamPause = 0;
+function roamTick(dt) {
+  let dx = 0, dy = 0;
+  if (keys.has("a") || keys.has("arrowleft")) dx -= 1;
+  if (keys.has("d") || keys.has("arrowright")) dx += 1;
+  if (keys.has("w") || keys.has("arrowup")) dy -= 1;
+  if (keys.has("s") || keys.has("arrowdown")) dy += 1;
+  if (dx || dy) {
+    roamTarget = null;
+    const n = Math.hypot(dx, dy);
+    const speed = +controls.speed.value;
+    A.x = Math.min(W - 8, Math.max(8, A.x + (dx / n) * speed * dt));
+    A.y = Math.min(H - 6, Math.max(14, A.y + (dy / n) * speed * dt));
+    A.distAcc += speed * dt; A.moving = true;
+    A.facing = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? "left" : "right") : (dy < 0 ? "up" : "down");
+  } else if (sceneT > roamPause) {
+    if (!roamTarget) roamTarget = [14 + rng() * (W - 28), 20 + rng() * (H - 30)];
+    if (A.walkToward(roamTarget[0], roamTarget[1], dt)) {
+      roamTarget = null; roamPause = sceneT + 0.8 + rng() * 2.2;
+    }
+  } else { A.moving = false; A.distAcc = 0; }
+}
+
+/* ================= UI + main loop ================= */
+const $ = (id) => document.getElementById(id);
+const controls = { speed: $("speed"), stride: $("stride"), zoom: $("zoom"), showcase: $("showcase") };
+function syncOutputs() {
+  $("speed-out").textContent = controls.speed.value + " px/s";
+  $("stride-out").textContent = controls.stride.value;
+  $("zoom-out").textContent = controls.zoom.value + "×";
+}
+["input", "change"].forEach((ev) => [controls.speed, controls.stride, controls.zoom]
+  .forEach((c) => c.addEventListener(ev, syncOutputs)));
+syncOutputs();
+function fitStage() {
+  const z = +controls.zoom.value;
+  stage.width = W * z; stage.height = H * z;
+  sctx.imageSmoothingEnabled = false;
+}
+controls.zoom.addEventListener("input", fitStage);
+
+{
+  const sel = $("perf-select");
+  for (const name of ORDER) {
+    const o = document.createElement("option");
+    o.value = name; o.textContent = PERFS[name].label;
+    sel.append(o);
+  }
+  sel.addEventListener("change", () => { controls.showcase.checked = false; play(sel.value); });
+  $("replay").addEventListener("click", () => play(current));
+  $("prev").addEventListener("click", () => {
+    controls.showcase.checked = false;
+    play(ORDER[(ORDER.indexOf(current) - 1 + ORDER.length) % ORDER.length]);
+  });
+  $("next").addEventListener("click", () => {
+    controls.showcase.checked = false;
+    play(ORDER[(ORDER.indexOf(current) + 1) % ORDER.length]);
+  });
+}
+
+let last = performance.now(), fps = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  fps = fps * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
+  const s = stage.width / W;
+  sctx.clearRect(0, 0, stage.width, stage.height);
+  sctx.drawImage(field, 0, 0, W, H, 0, 0, stage.width, stage.height);
+  PERFS[current].props?.(sceneT);
+  stepScene(dt);
+  stepParts(dt);
+  for (const actor of [B, A, C]) actor.draw();
+  if (carryOn) drawCrate(A.x + (A.facing === "right" ? 7 : A.facing === "left" ? -7 : 0), A.y - 16);
+  drawParts();
+  $("state").textContent =
+    `performance  ${current}\n` +
+    `step         ${stepI + 1}/${PERFS[current].steps.length}\n` +
+    `fps          ${fps.toFixed(0)}`;
+  requestAnimationFrame(loop);
+}
+
+function buildGallery() {
+  const g = $("gallery");
+  for (const dir of ["down", "up", "side"]) {
+    const label = document.createElement("div");
+    label.className = "gallery-dir"; label.textContent = dir + " · 4 frames";
+    const img = document.createElement("img");
+    img.src = SPRITES.sheets[dir];
+    img.width = fw * 4 * 3; img.height = fh * 3;
+    g.append(label, img);
+  }
+  const label = document.createElement("div");
+  label.className = "gallery-dir"; label.textContent = "poses · " + Object.keys(SPRITES.poses).join(" · ");
+  g.append(label);
+  for (const uri of Object.values(SPRITES.poses)) {
+    const img = document.createElement("img");
+    img.src = uri; img.width = fw * 3; img.height = fh * 3;
+    img.style.display = "inline-block";
+    g.append(img);
+  }
+}
+
+/* load: build plain + recolored image sets, then start */
+{
+  const entries = [];
+  for (const [key, uri] of Object.entries(SPRITES.sheets)) entries.push(["sheets", key, uri]);
+  for (const [key, uri] of Object.entries(SPRITES.poses)) entries.push(["poses", key, uri]);
+  let loaded = 0;
+  for (const [kind, key, uri] of entries) {
+    const img = new Image();
+    img.onload = () => {
+      IMAGES.A[kind][key] = img;
+      IMAGES.B[kind][key] = recolor(img);
+      if (++loaded === entries.length) {
+        fitStage(); buildGallery();
+        const want = new URLSearchParams(location.search).get("perf");
+        if (want && PERFS[want]) { controls.showcase.checked = false; play(want); }
+        else play("idle");
+        requestAnimationFrame(loop);
+      }
+    };
+    img.src = uri;
+  }
+}
+</script>
+</body>
+</html>

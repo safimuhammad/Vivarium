@@ -1,0 +1,1014 @@
+{
+  "checkpoints": [
+    {
+      "checkpoint": {
+        "event_cursor": 20,
+        "reason": "world_tick",
+        "run_id": "mock-c02-v1",
+        "schema": 1,
+        "snapshot": {
+          "agents": [
+            {
+              "died_at": null,
+              "energy": 100.0,
+              "home_id": null,
+              "id": "wanderer_001",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Joe",
+              "offspring_count": 0,
+              "position": "warm_springs",
+              "status": "alive"
+            },
+            {
+              "died_at": null,
+              "energy": 100.0,
+              "home_id": null,
+              "id": "wanderer_002",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Mae",
+              "offspring_count": 0,
+              "position": "warm_springs",
+              "status": "alive"
+            },
+            {
+              "died_at": null,
+              "energy": 50.0,
+              "home_id": null,
+              "id": "wanderer_003",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Dick",
+              "offspring_count": 0,
+              "position": "nirvana",
+              "status": "alive"
+            },
+            {
+              "died_at": null,
+              "energy": 100.0,
+              "home_id": null,
+              "id": "wanderer_004",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Allen",
+              "offspring_count": 0,
+              "position": "nirvana",
+              "status": "alive"
+            }
+          ],
+          "event_cursor": 20,
+          "homes": [],
+          "pending_proposals": [],
+          "region_pressure": [
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 2,
+              "region": "nirvana"
+            },
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 1,
+              "region": "nirvana_east"
+            },
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 1,
+              "region": "nirvana_west"
+            },
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 3,
+              "region": "warm_springs"
+            }
+          ],
+          "regions": [
+            {
+              "connections": [
+                "warm_springs",
+                "nirvana_east",
+                "nirvana_west"
+              ],
+              "current_energy": 60.0,
+              "current_materials": 60.0,
+              "description": "a once-heavenly landscape, now thinning and picked-over",
+              "energy_rate": 0.2,
+              "materials_rate": 0.2,
+              "max_energy": 120.0,
+              "max_materials": 120.0,
+              "name": "nirvana"
+            },
+            {
+              "connections": [
+                "warm_springs",
+                "nirvana"
+              ],
+              "current_energy": 20.0,
+              "current_materials": 15.0,
+              "description": "a struggling, near-barren stretch",
+              "energy_rate": 0.1,
+              "materials_rate": 0.1,
+              "max_energy": 70.0,
+              "max_materials": 70.0,
+              "name": "nirvana_east"
+            },
+            {
+              "connections": [
+                "warm_springs",
+                "nirvana"
+              ],
+              "current_energy": 15.0,
+              "current_materials": 0.0,
+              "description": "a nuclear wasteland, all but dead",
+              "energy_rate": 0.05,
+              "materials_rate": 0.0,
+              "max_energy": 50.0,
+              "max_materials": 10.0,
+              "name": "nirvana_west"
+            },
+            {
+              "connections": [
+                "nirvana_west",
+                "nirvana_east",
+                "nirvana"
+              ],
+              "current_energy": 90.0,
+              "current_materials": 80.0,
+              "description": "hot spring lakes \u2014 the least-poor refuge, but no longer plentiful",
+              "energy_rate": 0.25,
+              "materials_rate": 0.2,
+              "max_energy": 130.0,
+              "max_materials": 130.0,
+              "name": "warm_springs"
+            }
+          ],
+          "ruins": [],
+          "run_id": "mock-c02-v1",
+          "schema": 1,
+          "seed_persona": "You have just awoken into this world \u2014 aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover \u2014 and freely reshape \u2014 the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+          "world_time": 1800020010.0
+        },
+        "type": "world_snapshot_checkpoint",
+        "world_time": 1800020010.0
+      },
+      "line": 1,
+      "safety": "safe-world-tick"
+    }
+  ],
+  "entries": [
+    {
+      "cursor": 1,
+      "event": {
+        "payload": {
+          "agent_energy": 95.0,
+          "agent_energy_before": 100.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana",
+          "message": "Dick has left the region nirvana\n Currently en route to nirvana_east",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana_east"
+        },
+        "region": "nirvana",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020000.0,
+        "type": "agent_left_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 2,
+      "event": {
+        "payload": {
+          "agent_energy": 95.0,
+          "agent_energy_before": 100.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana",
+          "message": "Dick has entered the region nirvana_east\n Migrated from nirvana",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana_east"
+        },
+        "region": "nirvana_east",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020000.0,
+        "type": "agent_entered_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana_east"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 3,
+      "event": {
+        "payload": {
+          "agent_energy": 90.0,
+          "agent_energy_before": 95.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana_east",
+          "message": "Dick has left the region nirvana_east\n Currently en route to warm_springs",
+          "move_energy_cost": 5.0,
+          "to_region": "warm_springs"
+        },
+        "region": "nirvana_east",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020001.0,
+        "type": "agent_left_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana_east"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 4,
+      "event": {
+        "payload": {
+          "agent_energy": 90.0,
+          "agent_energy_before": 95.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana_east",
+          "message": "Dick has entered the region warm_springs\n Migrated from nirvana_east",
+          "move_energy_cost": 5.0,
+          "to_region": "warm_springs"
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020001.0,
+        "type": "agent_entered_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 5,
+      "event": {
+        "payload": {
+          "agent_energy": 85.0,
+          "agent_energy_before": 90.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "warm_springs",
+          "message": "Dick has left the region warm_springs\n Currently en route to nirvana_west",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana_west"
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020002.0,
+        "type": "agent_left_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 6,
+      "event": {
+        "payload": {
+          "agent_energy": 85.0,
+          "agent_energy_before": 90.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "warm_springs",
+          "message": "Dick has entered the region nirvana_west\n Migrated from warm_springs",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana_west"
+        },
+        "region": "nirvana_west",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020002.0,
+        "type": "agent_entered_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana_west"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 7,
+      "event": {
+        "payload": {
+          "agent_energy": 80.0,
+          "agent_energy_before": 85.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana_west",
+          "message": "Dick has left the region nirvana_west\n Currently en route to nirvana",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana"
+        },
+        "region": "nirvana_west",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020003.0,
+        "type": "agent_left_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana_west"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 8,
+      "event": {
+        "payload": {
+          "agent_energy": 80.0,
+          "agent_energy_before": 85.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana_west",
+          "message": "Dick has entered the region nirvana\n Migrated from nirvana_west",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana"
+        },
+        "region": "nirvana",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020003.0,
+        "type": "agent_entered_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 9,
+      "event": {
+        "payload": {
+          "agent_energy": 75.0,
+          "agent_energy_before": 80.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana",
+          "message": "Dick has left the region nirvana\n Currently en route to warm_springs",
+          "move_energy_cost": 5.0,
+          "to_region": "warm_springs"
+        },
+        "region": "nirvana",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020004.0,
+        "type": "agent_left_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 10,
+      "event": {
+        "payload": {
+          "agent_energy": 75.0,
+          "agent_energy_before": 80.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana",
+          "message": "Dick has entered the region warm_springs\n Migrated from nirvana",
+          "move_energy_cost": 5.0,
+          "to_region": "warm_springs"
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020004.0,
+        "type": "agent_entered_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 11,
+      "event": {
+        "payload": {
+          "agent_energy": 70.0,
+          "agent_energy_before": 75.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "warm_springs",
+          "message": "Dick has left the region warm_springs\n Currently en route to nirvana_east",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana_east"
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020005.0,
+        "type": "agent_left_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 12,
+      "event": {
+        "payload": {
+          "agent_energy": 70.0,
+          "agent_energy_before": 75.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "warm_springs",
+          "message": "Dick has entered the region nirvana_east\n Migrated from warm_springs",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana_east"
+        },
+        "region": "nirvana_east",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020005.0,
+        "type": "agent_entered_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana_east"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 13,
+      "event": {
+        "payload": {
+          "agent_energy": 65.0,
+          "agent_energy_before": 70.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana_east",
+          "message": "Dick has left the region nirvana_east\n Currently en route to nirvana",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana"
+        },
+        "region": "nirvana_east",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020006.0,
+        "type": "agent_left_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana_east"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 14,
+      "event": {
+        "payload": {
+          "agent_energy": 65.0,
+          "agent_energy_before": 70.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana_east",
+          "message": "Dick has entered the region nirvana\n Migrated from nirvana_east",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana"
+        },
+        "region": "nirvana",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020006.0,
+        "type": "agent_entered_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 15,
+      "event": {
+        "payload": {
+          "agent_energy": 60.0,
+          "agent_energy_before": 65.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana",
+          "message": "Dick has left the region nirvana\n Currently en route to nirvana_west",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana_west"
+        },
+        "region": "nirvana",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020007.0,
+        "type": "agent_left_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 16,
+      "event": {
+        "payload": {
+          "agent_energy": 60.0,
+          "agent_energy_before": 65.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana",
+          "message": "Dick has entered the region nirvana_west\n Migrated from nirvana",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana_west"
+        },
+        "region": "nirvana_west",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020007.0,
+        "type": "agent_entered_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana_west"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 17,
+      "event": {
+        "payload": {
+          "agent_energy": 55.0,
+          "agent_energy_before": 60.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana_west",
+          "message": "Dick has left the region nirvana_west\n Currently en route to warm_springs",
+          "move_energy_cost": 5.0,
+          "to_region": "warm_springs"
+        },
+        "region": "nirvana_west",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020008.0,
+        "type": "agent_left_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana_west"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 18,
+      "event": {
+        "payload": {
+          "agent_energy": 55.0,
+          "agent_energy_before": 60.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "nirvana_west",
+          "message": "Dick has entered the region warm_springs\n Migrated from nirvana_west",
+          "move_energy_cost": 5.0,
+          "to_region": "warm_springs"
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020008.0,
+        "type": "agent_entered_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 19,
+      "event": {
+        "payload": {
+          "agent_energy": 50.0,
+          "agent_energy_before": 55.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "warm_springs",
+          "message": "Dick has left the region warm_springs\n Currently en route to nirvana",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana"
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020009.0,
+        "type": "agent_left_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 20,
+      "event": {
+        "payload": {
+          "agent_energy": 50.0,
+          "agent_energy_before": 55.0,
+          "agent_id": "wanderer_003",
+          "display_only": false,
+          "from_region": "warm_springs",
+          "message": "Dick has entered the region nirvana\n Migrated from warm_springs",
+          "move_energy_cost": 5.0,
+          "to_region": "nirvana"
+        },
+        "region": "nirvana",
+        "scope": "local",
+        "source": "wanderer_003",
+        "target": null,
+        "timestamp": 1800020009.0,
+        "type": "agent_entered_region"
+      },
+      "resolved": {
+        "actor_id": "wanderer_003",
+        "region": "nirvana"
+      },
+      "snapshot_after": null
+    }
+  ],
+  "expectedFinalCursor": 20,
+  "expectedMarkers": [
+    "event:agent_entered_region",
+    "event:agent_left_region",
+    "checkpoint:final"
+  ],
+  "expectedTerminal": {
+    "finalSnapshot": {
+      "agents": [
+        {
+          "died_at": null,
+          "energy": 100.0,
+          "home_id": null,
+          "id": "wanderer_001",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Joe",
+          "offspring_count": 0,
+          "position": "warm_springs",
+          "status": "alive"
+        },
+        {
+          "died_at": null,
+          "energy": 100.0,
+          "home_id": null,
+          "id": "wanderer_002",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Mae",
+          "offspring_count": 0,
+          "position": "warm_springs",
+          "status": "alive"
+        },
+        {
+          "died_at": null,
+          "energy": 50.0,
+          "home_id": null,
+          "id": "wanderer_003",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Dick",
+          "offspring_count": 0,
+          "position": "nirvana",
+          "status": "alive"
+        },
+        {
+          "died_at": null,
+          "energy": 100.0,
+          "home_id": null,
+          "id": "wanderer_004",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Allen",
+          "offspring_count": 0,
+          "position": "nirvana",
+          "status": "alive"
+        }
+      ],
+      "event_cursor": 20,
+      "homes": [],
+      "pending_proposals": [],
+      "region_pressure": [
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 2,
+          "region": "nirvana"
+        },
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 1,
+          "region": "nirvana_east"
+        },
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 1,
+          "region": "nirvana_west"
+        },
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 3,
+          "region": "warm_springs"
+        }
+      ],
+      "regions": [
+        {
+          "connections": [
+            "warm_springs",
+            "nirvana_east",
+            "nirvana_west"
+          ],
+          "current_energy": 60.0,
+          "current_materials": 60.0,
+          "description": "a once-heavenly landscape, now thinning and picked-over",
+          "energy_rate": 0.2,
+          "materials_rate": 0.2,
+          "max_energy": 120.0,
+          "max_materials": 120.0,
+          "name": "nirvana"
+        },
+        {
+          "connections": [
+            "warm_springs",
+            "nirvana"
+          ],
+          "current_energy": 20.0,
+          "current_materials": 15.0,
+          "description": "a struggling, near-barren stretch",
+          "energy_rate": 0.1,
+          "materials_rate": 0.1,
+          "max_energy": 70.0,
+          "max_materials": 70.0,
+          "name": "nirvana_east"
+        },
+        {
+          "connections": [
+            "warm_springs",
+            "nirvana"
+          ],
+          "current_energy": 15.0,
+          "current_materials": 0.0,
+          "description": "a nuclear wasteland, all but dead",
+          "energy_rate": 0.05,
+          "materials_rate": 0.0,
+          "max_energy": 50.0,
+          "max_materials": 10.0,
+          "name": "nirvana_west"
+        },
+        {
+          "connections": [
+            "nirvana_west",
+            "nirvana_east",
+            "nirvana"
+          ],
+          "current_energy": 90.0,
+          "current_materials": 80.0,
+          "description": "hot spring lakes \u2014 the least-poor refuge, but no longer plentiful",
+          "energy_rate": 0.25,
+          "materials_rate": 0.2,
+          "max_energy": 130.0,
+          "max_materials": 130.0,
+          "name": "warm_springs"
+        }
+      ],
+      "ruins": [],
+      "run_id": "mock-c02-v1",
+      "schema": 1,
+      "seed_persona": "You have just awoken into this world \u2014 aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover \u2014 and freely reshape \u2014 the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+      "world_time": 1800020010.0
+    },
+    "fixtureAuthorship": {
+      "handAuthoredEnvelopeCount": 0,
+      "labeled": true,
+      "mechanicEventsFabricated": false,
+      "recordCount": 0
+    },
+    "presentationRecords": [],
+    "producerResults": {},
+    "semanticOracle": {
+      "negative": [
+        "no-nirvana-east-to-nirvana-west-shortcut"
+      ],
+      "positive": [
+        "all-directed-edges",
+        "forbidden-shortcut"
+      ],
+      "terminal": [
+        "final-checkpoint-aligned",
+        "run-identity-preserved"
+      ]
+    },
+    "toolAssertions": []
+  },
+  "id": "C02",
+  "initialSnapshot": {
+    "agents": [
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_001",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Joe",
+        "offspring_count": 0,
+        "position": "warm_springs",
+        "status": "alive"
+      },
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_002",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Mae",
+        "offspring_count": 0,
+        "position": "warm_springs",
+        "status": "alive"
+      },
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_003",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Dick",
+        "offspring_count": 0,
+        "position": "nirvana",
+        "status": "alive"
+      },
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_004",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Allen",
+        "offspring_count": 0,
+        "position": "nirvana",
+        "status": "alive"
+      }
+    ],
+    "event_cursor": 0,
+    "homes": [],
+    "pending_proposals": [],
+    "region_pressure": [
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 2,
+        "region": "nirvana"
+      },
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 0,
+        "region": "nirvana_east"
+      },
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 0,
+        "region": "nirvana_west"
+      },
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 2,
+        "region": "warm_springs"
+      }
+    ],
+    "regions": [
+      {
+        "connections": [
+          "warm_springs",
+          "nirvana_east",
+          "nirvana_west"
+        ],
+        "current_energy": 60.0,
+        "current_materials": 60.0,
+        "description": "a once-heavenly landscape, now thinning and picked-over",
+        "energy_rate": 0.2,
+        "materials_rate": 0.2,
+        "max_energy": 120.0,
+        "max_materials": 120.0,
+        "name": "nirvana"
+      },
+      {
+        "connections": [
+          "warm_springs",
+          "nirvana"
+        ],
+        "current_energy": 20.0,
+        "current_materials": 15.0,
+        "description": "a struggling, near-barren stretch",
+        "energy_rate": 0.1,
+        "materials_rate": 0.1,
+        "max_energy": 70.0,
+        "max_materials": 70.0,
+        "name": "nirvana_east"
+      },
+      {
+        "connections": [
+          "warm_springs",
+          "nirvana"
+        ],
+        "current_energy": 15.0,
+        "current_materials": 0.0,
+        "description": "a nuclear wasteland, all but dead",
+        "energy_rate": 0.05,
+        "materials_rate": 0.0,
+        "max_energy": 50.0,
+        "max_materials": 10.0,
+        "name": "nirvana_west"
+      },
+      {
+        "connections": [
+          "nirvana_west",
+          "nirvana_east",
+          "nirvana"
+        ],
+        "current_energy": 90.0,
+        "current_materials": 80.0,
+        "description": "hot spring lakes \u2014 the least-poor refuge, but no longer plentiful",
+        "energy_rate": 0.25,
+        "materials_rate": 0.2,
+        "max_energy": 130.0,
+        "max_materials": 130.0,
+        "name": "warm_springs"
+      }
+    ],
+    "ruins": [],
+    "run_id": "mock-c02-v1",
+    "schema": 1,
+    "seed_persona": "You have just awoken into this world \u2014 aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover \u2014 and freely reshape \u2014 the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+    "world_time": 1800020000.0
+  },
+  "negativeAssertions": [
+    "no-nirvana-east-to-nirvana-west-shortcut"
+  ],
+  "runId": "mock-c02-v1",
+  "seed": 30002,
+  "slug": "travel-all-regions",
+  "version": 1
+}

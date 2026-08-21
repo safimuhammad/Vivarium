@@ -1,0 +1,1091 @@
+/*
+ * THE CHRONICLE KILLFEED — cards floating over the world, not a panel on top of it.
+ *
+ * Two rules govern everything here:
+ *
+ * 1. THE CONTAINER HAS NO SURFACE. Only cards, chips and controls carry opacity.
+ *    The container is `pointer-events: none` so a click in the gap between two
+ *    cards reaches the region beneath; every interactive descendant turns
+ *    pointer events back on for itself.
+ * 2. PROMINENCE IS SPENT SIDEWAYS. A rupture steps right, tears its left edge,
+ *    warms its field and inverts its medallion — four horizontal or chromatic
+ *    moves, none of which costs a pixel of height.
+ *
+ * Legibility is the risk a solid panel used to hide: these cards sit over four
+ * regions that look nothing like each other. Every card therefore carries a dark
+ * scrim, a hairline of its own, and a drop shadow, so it separates from a pale
+ * playa and an ember rift alike. The one light card (a birth) inverts that: dark
+ * hairline, light field.
+ */
+
+/*
+ * BAND GEOMETRY, DECLARED ONCE — and consumed by everything that must yield.
+ *
+ * The feed is an overlay, so anything it covers is a control the viewer can no
+ * longer reach. Its footprint was previously described twice, in two places,
+ * with two hand-tuned numbers: the band sat at `52px + 20rem` (23.25rem) while
+ * the narrative NOW card reserved `right: 23rem`. The card therefore overlapped
+ * the band by 4px and its "View moment" button survived only on the card's own
+ * padding. One set of numbers, one reserve, and a real gap.
+ */
+.vivarium-2d-app:has(.chronicle-killfeed),
+.chronicle-killfeed.observer-drawer {
+  --killfeed-rail: 52px;
+  --killfeed-band: min(20rem, 26vw);
+  --killfeed-gap: 14px;
+  --killfeed-reserve: calc(var(--killfeed-rail) + var(--killfeed-band) + var(--killfeed-gap));
+}
+
+.chronicle-killfeed.observer-drawer {
+  --killfeed-ink: #f3e8c9;
+  --killfeed-muted: #bdb397;
+  --killfeed-scrim: rgb(10 14 9 / 88%);
+  --killfeed-scrim-strong: rgb(8 11 7 / 92%);
+  --killfeed-hair: rgb(236 226 204 / 14%);
+  --killfeed-gold: #e4bd5c;
+  --killfeed-rust: #d66a48;
+  --killfeed-vellum: #f0e7cd;
+  /* The 1px ring is what separates a card from a PALE ground (the Warm Springs
+     sinter terraces and the Nirvana East playa); the blur does the work over a
+     dark one (the Nirvana West ember rift). Both, always, because the camera
+     moves between them. */
+  --killfeed-shadow: 0 3px 10px rgb(0 0 0 / 50%), 0 0 0 1px rgb(0 0 0 / 38%);
+
+  /* Minimal real estate: the region is the main course. */
+  --observer-drawer-width: var(--killfeed-band);
+
+  position: absolute;
+  z-index: 20;
+  /* Clear of the vertical tab rail on the right edge: the cards are transparent,
+     so overlapping the rail would read as a broken overlay rather than a panel
+     covering it. */
+  inset: max(10px, env(safe-area-inset-top)) calc(var(--killfeed-rail) + env(safe-area-inset-right))
+    max(10px, env(safe-area-inset-bottom)) auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 6px;
+  width: var(--observer-drawer-width);
+  max-width: calc(100vw - 20px);
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  pointer-events: none;
+  color: var(--killfeed-ink);
+  font-size: 0.72rem;
+}
+
+/*
+ * Two zones: the standing strip is pinned to the top, and the flow, its lens and
+ * the transport cluster hug the bottom -- so a new card enters right beside the
+ * controls and travels upward, which is the killfeed's whole shape.
+ */
+.chronicle-killfeed.observer-drawer > .chronicle-killfeed__top,
+.chronicle-killfeed.observer-drawer > .chronicle-killfeed__bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+
+.chronicle-killfeed.observer-drawer > .chronicle-killfeed__bottom { justify-content: flex-end; }
+
+/*
+ * The container never takes a click; its opaque parts each opt back in.
+ *
+ * The extra `.observer-drawer` in the selector is load-bearing: the shell's own
+ * `.observer-primary-surface > .observer-drawer { pointer-events: auto }` has the
+ * same specificity and is injected later, so without it the transparent band
+ * swallowed every click that should have reached the region beneath. Verified by
+ * hit-testing `document.elementFromPoint` inside the band, not by inspection.
+ */
+.observer-primary-surface > .chronicle-killfeed.observer-drawer { pointer-events: none; }
+.chronicle-killfeed.observer-drawer > * { pointer-events: none; }
+
+/*
+ * TAP TARGETS, deliberately re-scoped for a dense overlay.
+ *
+ * The observer chrome puts a blanket 44x44 minimum on every control, which is
+ * right for a drawer of a dozen buttons and wrong for a feed of forty cards: it
+ * inflated a card from ~44px to ~96px, i.e. it more than halved how much of the
+ * world's life is on screen. The rule is honoured where it matters instead of
+ * uniformly:
+ *
+ * - the PRIMARY action of a card is "replay from here", and its target is the
+ *   whole card, which keeps a 44px minimum height;
+ * - the two SECONDARY actions (follow a being, open the detail) are small ink
+ *   with an invisible ~40px hit box expanded around them, which is the standard
+ *   technique and is what a pointer or a thumb actually lands on;
+ * - every control in the transport cluster, the head and the behind-live banner
+ *   keeps a comfortable 30px, since none of them is repeated per event.
+ */
+.chronicle-killfeed.observer-drawer :where(button, select) {
+  min-width: 0;
+  min-height: 0;
+  /*
+   * The observer chrome gives every drawer control a 2px frame, a panel-deep
+   * fill and a 700 weight. On forty cards that reads as forty boxed pills --
+   * a being's name came out as a dark pill with dark ink on the one light
+   * card. Reset here, then each cluster re-applies exactly the chrome it wants.
+   */
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 400;
+}
+
+.chronicle-killfeed.observer-drawer :where(.chronicle-killfeed__transport,
+.chronicle-killfeed .chronicle-killfeed__head,
+.chronicle-killfeed .chronicle-killfeed__behind,
+.chronicle-killfeed .chronicle-killfeed__detail) :where(button,
+select) {
+  min-height: 30px;
+}
+
+.chronicle-killfeed__being,
+.chronicle-killfeed__more { position: relative; }
+
+.chronicle-killfeed__being::after,
+.chronicle-killfeed .chronicle-killfeed__more::after {
+  content: "";
+  position: absolute;
+  inset: -12px -6px;
+}
+
+.chronicle-killfeed :is(button, select, .chronicle-killfeed__card,
+.chronicle-killfeed__detail, .chronicle-killfeed__behind,
+.chronicle-killfeed__transport, .chronicle-killfeed__lens) { pointer-events: auto; }
+
+/*
+ * The narrative slot yields the width the feed occupies.
+ *
+ * The old drawer was opaque and simply covered the dialogue caption; a
+ * transparent overlay cannot, so the caption has to end before the band starts
+ * or the two read as one smeared block. Only applies while the feed is open.
+ */
+.vivarium-2d-app:has(.chronicle-killfeed) :is(.dialogue-now, .story-now) {
+  right: calc(var(--killfeed-reserve) + env(safe-area-inset-right));
+  width: min(38rem, calc(100vw - var(--killfeed-reserve) - 3rem));
+}
+
+@media (max-width: 760px) {
+  .vivarium-2d-app:has(.chronicle-killfeed) :is(.dialogue-now, .story-now) {
+    right: max(8px, env(safe-area-inset-right));
+    width: auto;
+  }
+}
+
+/* --- head: a caption, not a title bar --- */
+
+.chronicle-killfeed .chronicle-killfeed__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chronicle-killfeed .chronicle-killfeed__head h2 {
+  margin: 0;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: var(--killfeed-scrim);
+  box-shadow: var(--killfeed-shadow);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--killfeed-muted);
+}
+
+.chronicle-killfeed .chronicle-killfeed__head button {
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--killfeed-hair);
+  border-radius: 3px;
+  background: var(--killfeed-scrim);
+  box-shadow: var(--killfeed-shadow);
+  color: var(--killfeed-muted);
+  font: inherit;
+  font-size: 0.62rem;
+  cursor: pointer;
+}
+
+.chronicle-killfeed__head button:hover { color: var(--killfeed-ink); }
+
+/*
+ * THE STANDING STRIP — the only non-decaying truth on the surface.
+ *
+ * Events decay; states persist. A killfeed that drops `agent_paralyzed`,
+ * `home_breached` and `home_started_hoarding` off the top has forgotten half the
+ * world, because those are transitions INTO a condition that outlives any
+ * annunciation. It costs one row, once, and grows with the number of conditions
+ * (small and self-limiting) rather than with the number of events.
+ */
+.chronicle-killfeed .chronicle-killfeed__standing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chronicle-killfeed .chronicle-killfeed__condition {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1px 6px;
+  border: 1px solid var(--killfeed-hair);
+  border-radius: 2px;
+  background: var(--killfeed-scrim);
+  box-shadow: var(--killfeed-shadow);
+  color: var(--killfeed-muted);
+  font: inherit;
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.chronicle-killfeed .chronicle-killfeed__condition b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  opacity: 0.6;
+}
+
+.chronicle-killfeed .chronicle-killfeed__condition.is-grave {
+  border-color: rgb(214 106 72 / 65%);
+  color: #f0b49d;
+}
+
+.chronicle-killfeed__condition.is-notable { border-color: rgb(228 189 92 / 50%); color: #e6c887; }
+.chronicle-killfeed__condition:hover { border-color: var(--killfeed-gold); }
+
+/* --- behind live: unmistakable, and never quiet about it --- */
+
+.chronicle-killfeed .chronicle-killfeed__behind {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border: 1px solid rgb(214 106 72 / 70%);
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgb(120 44 28 / 94%), rgb(70 27 18 / 92%));
+  box-shadow: var(--killfeed-shadow);
+  font-size: 0.62rem;
+  color: #ffd9c6;
+}
+
+.chronicle-killfeed .chronicle-killfeed__behind b {
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-size: 0.58rem;
+}
+
+.chronicle-killfeed__behind span:last-of-type { color: #f0c3ad; }
+
+.chronicle-killfeed .chronicle-killfeed__behind-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--killfeed-rust);
+  box-shadow: 0 0 0 3px rgb(214 106 72 / 25%);
+  flex: none;
+}
+
+.chronicle-killfeed .chronicle-killfeed__behind button {
+  margin-left: auto;
+  padding: 1px 7px;
+  border: 1px solid rgb(255 217 198 / 60%);
+  border-radius: 2px;
+  background: rgb(214 106 72 / 35%);
+  color: #ffe7dc;
+  font: inherit;
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+/*
+ * THE FLOW — bottom-in, pushed up, clipped off the top.
+ *
+ * Bottom-anchored so a new card enters at the bottom and shoulders its elders
+ * upward; `overflow: hidden` plus the mask means a card's journey ends by fading
+ * out through the top edge rather than by vanishing. This is the killfeed idiom
+ * from Overwatch/CoD/Dota, and it inverts the pilot's downward-growing stack.
+ */
+.chronicle-killfeed .chronicle-killfeed__flow {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3px;
+  min-height: 0;
+  /*
+   * A DEFINITE height, not a cap.
+   *
+   * The band measures how many whole cards fit inside this box. With only a
+   * `max-height` the box is as tall as its own content, so the measurement
+   * measures what is already shown rather than the room available — and one
+   * tall card (a thought with a four-line quote) can pin the band to a single
+   * card and keep it there. The allowance is the same 42vh it always drew; it
+   * is simply now the allowance rather than the outcome. The container is
+   * transparent and `pointer-events: none`, so unfilled band costs nothing.
+   */
+  height: 42vh;
+  max-height: 42vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  list-style: none;
+  /*
+   * A short softening of the top edge, and nothing more.
+   *
+   * This gradient used to BE the exit: a card was pushed into it and parked
+   * there, half-erased, until enough events arrived to push it out. A dark
+   * scrim at 30% over a lit region is invisible while cream text at 30% is
+   * still legible, so what a viewer saw was fieldless ghost text hanging over
+   * the world — read at native size, a broken card rather than a fading one.
+   * The exit is now a bounded animation (`is-leaving`) on a band that holds
+   * only cards that fit; this ramp merely keeps the clip from being a hard
+   * line while that animation plays.
+   */
+  mask-image: linear-gradient(to bottom, transparent 0, #000 7%, #000 100%);
+}
+
+/*
+ * NOTHING IN THE FLOW SHRINKS.
+ *
+ * The flow is a `max-height` flex column, and flex children shrink by default.
+ * Every card was therefore squeezed below its own content height -- measured at
+ * a 52px box around 85px of content -- and its meta line was painted outside its
+ * own scrim, over the card beneath. That is what read as a card garbling as it
+ * left the top of the band. A card is worth exactly its content; the surplus
+ * leaves through the top, which is the whole idiom.
+ */
+.chronicle-killfeed .chronicle-killfeed__flow > * { flex: none; }
+
+.chronicle-killfeed__horizon,
+.chronicle-killfeed__quiet,
+.chronicle-killfeed .chronicle-killfeed__burst {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: var(--killfeed-scrim);
+  font-size: 0.56rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgb(236 226 204 / 40%);
+}
+
+.chronicle-killfeed .chronicle-killfeed__burst {
+  border: 1px solid rgb(228 189 92 / 30%);
+  color: var(--killfeed-gold);
+}
+
+.chronicle-killfeed .chronicle-killfeed__burst b {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chronicle-killfeed__burst span:last-child { color: rgb(236 226 204 / 35%); }
+
+/* --- THE CARD --- */
+
+.chronicle-killfeed .chronicle-killfeed__card {
+  position: relative;
+  cursor: pointer;
+  min-height: 44px;
+  /* A card never paints outside its own scrim. Belt and braces beside
+     `flex: none`: whatever else changes, ink stays on its card. */
+  overflow: hidden;
+  padding: 3px 5px 3px 6px;
+  border: 1px solid var(--killfeed-hair);
+  border-left: 2px solid var(--accent);
+  border-radius: 3px;
+  background: var(--killfeed-scrim);
+  box-shadow: var(--killfeed-shadow);
+  pointer-events: auto;
+  animation: chronicle-killfeed-arrive 220ms ease-out;
+}
+
+.chronicle-killfeed__card:hover { border-color: rgb(236 226 204 / 32%); }
+
+.chronicle-killfeed .chronicle-killfeed__card.is-open {
+  border-color: var(--killfeed-gold);
+  box-shadow: 0 0 0 1px rgb(228 189 92 / 45%), var(--killfeed-shadow);
+}
+
+.chronicle-killfeed__card.is-murmur { opacity: 0.86; }
+
+.chronicle-killfeed .chronicle-killfeed__card.is-notable {
+  border-color: rgb(236 226 204 / 26%);
+  border-left-width: 3px;
+  background: var(--killfeed-scrim-strong);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 52%);
+}
+
+/*
+ * RUPTURE — the column breaks, and it breaks SIDEWAYS: step right, tear the left
+ * edge, warm the field, invert the medallion. Zero pixels of height, and a
+ * failure is readable from across the room without reading a word.
+ */
+/*
+ * The tear used to hang 7px OUTSIDE the card, which a card that clips its own
+ * content cannot allow. The card's left edge moves 7px left and its text 7px
+ * right by the same amount, so the tear, the field and the sentence all land
+ * exactly where they did — only now the tear is part of the card it tears.
+ */
+.chronicle-killfeed .chronicle-killfeed__card.is-rupture {
+  margin-left: 5px;
+  padding-left: 13px;
+  border-left: 0;
+  border-radius: 0 3px 3px 0;
+  border-color: rgb(156 59 38 / 45%);
+  background: linear-gradient(180deg, rgb(58 30 22 / 92%), rgb(30 19 14 / 92%));
+}
+
+.chronicle-killfeed .chronicle-killfeed__tear {
+  position: absolute;
+  inset: -1px auto -1px 0;
+  width: 8px;
+  background: var(--accent);
+  clip-path: polygon(
+    100% 0%, 40% 6%, 100% 12%, 40% 18%, 100% 24%, 40% 30%, 100% 36%, 40% 42%,
+    100% 48%, 40% 54%, 100% 60%, 40% 66%, 100% 72%, 40% 78%, 100% 84%, 40% 90%,
+    100% 96%, 55% 100%, 100% 100%
+  );
+}
+
+/* ARRIVAL — the one card that goes to light. A birth. */
+.chronicle-killfeed .chronicle-killfeed__card.is-arrival {
+  border-color: rgb(0 0 0 / 45%);
+  border-left-width: 4px;
+  background: var(--killfeed-vellum);
+  color: #1b2114;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 55%);
+}
+
+.chronicle-killfeed__card.is-arrival .chronicle-killfeed__figures,
+.chronicle-killfeed__card.is-arrival .chronicle-killfeed__being { color: rgb(27 33 20 / 78%); }
+.chronicle-killfeed__card.is-arrival .chronicle-killfeed__medallion { background: #12180f; }
+
+.chronicle-killfeed .chronicle-killfeed__replay {
+  display: flex;
+  min-height: 0;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chronicle-killfeed .chronicle-killfeed__medallion {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: #f7f0dc;
+  flex: none;
+  margin-top: 1px;
+}
+
+.chronicle-killfeed .chronicle-killfeed__card.is-rupture .chronicle-killfeed__medallion {
+  background: #110c0a;
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.chronicle-killfeed .chronicle-killfeed__line {
+  min-width: 0;
+  font-size: 0.74rem;
+  line-height: 1.3;
+  text-wrap: pretty;
+}
+
+.chronicle-killfeed__card.is-notable .chronicle-killfeed__line { font-size: 0.78rem; }
+.chronicle-killfeed__card.is-knell .chronicle-killfeed__line { font-weight: 700; }
+
+.chronicle-killfeed .chronicle-killfeed__quote {
+  display: block;
+  margin: 2px 0 0 22px;
+  padding-left: 6px;
+  border-left: 2px solid rgb(236 226 204 / 22%);
+  font-size: 0.7rem;
+  line-height: 1.3;
+  color: rgb(243 235 206 / 72%);
+}
+
+.chronicle-killfeed__quote.is-thought { border-left-style: dashed; }
+
+.chronicle-killfeed .chronicle-killfeed__meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 5px;
+  margin: 1px 0 0 22px;
+  font-size: 0.58rem;
+  color: rgb(236 226 204 / 42%);
+}
+
+.chronicle-killfeed .chronicle-killfeed__figures {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.chronicle-killfeed .chronicle-killfeed__being {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 10rem;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  color: rgb(236 226 204 / 78%);
+  font: inherit;
+  font-size: 0.62rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.chronicle-killfeed .chronicle-killfeed__being:hover:not(:disabled) {
+  color: var(--killfeed-ink);
+  border-bottom-color: rgb(243 235 206 / 55%);
+}
+
+.chronicle-killfeed__being.is-following { color: var(--killfeed-gold); border-bottom-color: var(--killfeed-gold); }
+.chronicle-killfeed__being.is-gone { opacity: 0.45; font-style: italic; cursor: not-allowed; }
+
+.chronicle-killfeed .chronicle-killfeed__being i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.chronicle-killfeed__arrow { color: rgb(236 226 204 / 34%); }
+.chronicle-killfeed__arrow.is-cut { color: var(--accent); }
+
+.chronicle-killfeed .chronicle-killfeed__more {
+  margin-left: auto;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: rgb(236 226 204 / 22%);
+  font: inherit;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chronicle-killfeed__card:hover .chronicle-killfeed__more { color: rgb(236 226 204 / 58%); }
+.chronicle-killfeed__more[aria-expanded="true"] { color: var(--killfeed-gold); }
+
+@keyframes chronicle-killfeed-arrive {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/*
+ * THE EXIT — bounded, and it takes the whole card with it.
+ *
+ * A card leaves the band the moment it no longer fits, and it leaves in 280ms:
+ * it dims, drifts up, and collapses its own height so the stack closes over it
+ * instead of jumping. It is inert while it goes, so a click can never land on
+ * something halfway out of the world.
+ */
+.chronicle-killfeed .chronicle-killfeed__flow > .is-leaving {
+  pointer-events: none;
+  animation: chronicle-killfeed-leave 280ms ease-in forwards;
+}
+
+@keyframes chronicle-killfeed-leave {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(-14px) scaleY(0.86); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chronicle-killfeed .chronicle-killfeed__card { animation: none; }
+  .chronicle-killfeed .chronicle-killfeed__flow > .is-leaving {
+    animation: chronicle-killfeed-leave-still 280ms linear forwards;
+  }
+}
+
+@keyframes chronicle-killfeed-leave-still {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* --- lens, quiet marker, gaps --- */
+
+.chronicle-killfeed__still,
+.chronicle-killfeed__lens,
+.chronicle-killfeed .chronicle-killfeed__gap {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--killfeed-hair);
+  border-radius: 3px;
+  background: var(--killfeed-scrim);
+  box-shadow: var(--killfeed-shadow);
+  font-size: 0.62rem;
+  color: var(--killfeed-muted);
+}
+
+.chronicle-killfeed .chronicle-killfeed__still {
+  align-self: flex-start;
+  border: 0;
+  box-shadow: none;
+  background: none;
+  font-size: 0.56rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgb(236 226 204 / 30%);
+}
+
+.chronicle-killfeed__lens { border-color: rgb(228 189 92 / 40%); color: var(--killfeed-ink); }
+.chronicle-killfeed__lens.is-gone { border-color: rgb(214 106 72 / 55%); color: #eab5a1; }
+
+.chronicle-killfeed .chronicle-killfeed__lens > span:first-child {
+  font-size: 0.54rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--killfeed-gold);
+  flex: none;
+}
+
+.chronicle-killfeed__lens button,
+.chronicle-killfeed .chronicle-killfeed__gap button {
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid var(--killfeed-hair);
+  border-radius: 2px;
+  background: none;
+  color: var(--killfeed-muted);
+  font: inherit;
+  font-size: 0.56rem;
+  cursor: pointer;
+}
+
+/* --- the detail panel: progressive disclosure, opened only on request --- */
+
+.chronicle-killfeed .chronicle-killfeed__detail {
+  border: 1px solid rgb(236 226 204 / 18%);
+  border-left: 2px solid var(--accent);
+  border-radius: 3px;
+  background: var(--killfeed-scrim-strong);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 55%);
+  max-height: 30vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.chronicle-killfeed .chronicle-killfeed__detail > header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 7px;
+  border-bottom: 1px solid rgb(236 226 204 / 10%);
+  font-size: 0.54rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgb(236 226 204 / 34%);
+}
+
+.chronicle-killfeed__detail-type { color: var(--accent); }
+
+.chronicle-killfeed .chronicle-killfeed__detail > header button {
+  margin-left: auto;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chronicle-killfeed .chronicle-killfeed__detail-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding: 5px 7px 7px;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+}
+
+.chronicle-killfeed .chronicle-killfeed__said {
+  margin: 0 0 6px;
+  padding: 4px 7px;
+  border-left: 2px solid rgb(236 226 204 / 22%);
+  background: rgb(236 226 204 / 5%);
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: rgb(243 235 206 / 88%);
+}
+
+.chronicle-killfeed .chronicle-killfeed__said span {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 0.52rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgb(236 226 204 / 28%);
+}
+
+.chronicle-killfeed .chronicle-killfeed__detail h3 {
+  margin: 5px 0 2px;
+  font-size: 0.52rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgb(236 226 204 / 26%);
+}
+
+.chronicle-killfeed__detail dl { margin: 0; }
+
+.chronicle-killfeed .chronicle-killfeed__detail dl > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 1px 0;
+  border-bottom: 1px solid rgb(236 226 204 / 5%);
+}
+
+.chronicle-killfeed .chronicle-killfeed__detail dl > div.is-weighty {
+  margin: 0 -4px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgb(228 189 92 / 12%);
+}
+
+.chronicle-killfeed__detail dt { font-size: 0.62rem; color: rgb(236 226 204 / 46%); }
+
+.chronicle-killfeed .chronicle-killfeed__detail dd {
+  margin: 0;
+  font-size: 0.62rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: rgb(236 226 204 / 88%);
+}
+
+.chronicle-killfeed .chronicle-killfeed__detail dd button {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px dotted rgb(228 189 92 / 55%);
+  background: none;
+  color: var(--killfeed-gold);
+  font: inherit;
+  cursor: pointer;
+}
+
+.chronicle-killfeed .chronicle-killfeed__detail dd i {
+  margin-left: 5px;
+  font-style: normal;
+  font-size: 0.48rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgb(236 226 204 / 28%);
+}
+
+.chronicle-killfeed__chain ul { margin: 0; padding: 0; list-style: none; }
+
+.chronicle-killfeed .chronicle-killfeed__chain li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.62rem;
+  color: rgb(236 226 204 / 55%);
+}
+
+.chronicle-killfeed__chain svg { color: var(--accent); align-self: center; }
+.chronicle-killfeed__chain b { font-size: 0.56rem; color: rgb(236 226 204 / 32%); }
+
+.chronicle-killfeed .chronicle-killfeed__chain p {
+  margin: 4px 0 0;
+  font-size: 0.52rem;
+  font-style: italic;
+  color: rgb(236 226 204 / 26%);
+}
+
+/* --- the transport cluster: what the old bottom bar used to stretch across --- */
+
+.chronicle-killfeed .chronicle-killfeed__transport {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--killfeed-hair);
+  border-radius: 3px;
+  background: var(--killfeed-scrim);
+  box-shadow: var(--killfeed-shadow);
+  pointer-events: auto;
+}
+
+.chronicle-killfeed__transport button,
+.chronicle-killfeed .chronicle-killfeed__transport select {
+  min-height: 22px;
+  padding: 1px 7px;
+  border: 1px solid var(--killfeed-hair);
+  border-radius: 2px;
+  background: rgb(38 53 43 / 80%);
+  color: var(--killfeed-ink);
+  font: inherit;
+  font-size: 0.6rem;
+  cursor: pointer;
+}
+
+.chronicle-killfeed .chronicle-killfeed__transport label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.54rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgb(236 226 204 / 34%);
+}
+
+.chronicle-killfeed .chronicle-killfeed__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgb(236 226 204 / 38%) !important;
+}
+
+.chronicle-killfeed .chronicle-killfeed__live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(236 226 204 / 25%);
+}
+
+.chronicle-killfeed .chronicle-killfeed__live.is-on {
+  border-color: rgb(214 106 72 / 75%) !important;
+  color: #ffd9c6 !important;
+}
+
+.chronicle-killfeed .chronicle-killfeed__live.is-on i {
+  background: #e0563a;
+  box-shadow: 0 0 0 3px rgb(224 86 58 / 25%);
+}
+
+.chronicle-killfeed .chronicle-killfeed__contract {
+  flex-basis: 100%;
+  font-size: 0.54rem;
+  font-variant-numeric: tabular-nums;
+  color: rgb(236 226 204 / 32%);
+}
+
+/*
+ * The QA route folds its chronicle picker and review controls in here, so the
+ * old full-width bottom bar has nowhere left to stretch across the screen.
+ */
+.chronicle-killfeed .chronicle-killfeed__transport .chronicle-validation-bar {
+  position: static;
+  flex-basis: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+/* Overflow chip when more conditions stand than the strip should ever show. */
+.chronicle-killfeed .chronicle-killfeed__condition.is-more {
+  border-style: dashed;
+  cursor: default;
+}
+
+/* --- the collapsed peek: something is happening, and you can ignore it --- */
+
+.observer-edge-triggers button#observer-chronicle-trigger { position: relative; }
+
+.chronicle-peek {
+  position: absolute;
+  z-index: 13;
+  top: 50%;
+  right: 52px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--observer-line);
+  border-radius: 3px;
+  background: rgb(10 14 9 / 84%);
+  box-shadow: 3px 3px 0 var(--observer-shadow);
+  transform: translateY(calc(-50% - 76px));
+  color: #bdb397;
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.chronicle-peek:hover { border-color: var(--observer-accent); color: #f3e8c9; }
+.chronicle-peek b { font-variant-numeric: tabular-nums; color: var(--observer-accent); }
+
+.chronicle-peek__glyph {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  background: var(--accent, #76826b);
+  color: #f7f0dc;
+}
+
+.chronicle-peek__pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--observer-accent);
+  animation: chronicle-peek-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes chronicle-peek-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+
+@media (max-width: 760px) {
+  .chronicle-killfeed.observer-drawer {
+    --observer-drawer-width: auto;
+
+    inset: auto max(8px, env(safe-area-inset-right)) 56px
+      max(8px, env(safe-area-inset-left));
+    width: auto;
+  }
+
+  .chronicle-killfeed__flow { height: 34vh; max-height: 34vh; }
+  .chronicle-peek { right: auto; left: 8px; top: auto; bottom: 8px; transform: none; }
+}
+
+@media (forced-colors: active) {
+  .chronicle-killfeed__card,
+  .chronicle-killfeed__transport,
+  .chronicle-killfeed__detail,
+  .chronicle-killfeed__behind,
+  .chronicle-peek {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+    forced-color-adjust: auto;
+  }
+
+  .chronicle-killfeed__flow { mask-image: none; }
+  .chronicle-killfeed__card.is-arrival { background: Canvas; color: CanvasText; }
+}
+
+/*
+ * The transport pill now reports the WORLD's liveness, not just the playhead's
+ * position. Quiet is the normal case in this world (beings think for minutes),
+ * so it reads as calm rather than as a warning; behind is amber; disconnected
+ * and ended are the two a watcher must not mistake for a working live view.
+ */
+.chronicle-killfeed .chronicle-killfeed__live.is-quiet {
+  color: rgb(198 214 226 / 78%) !important;
+  border-color: rgb(150 178 196 / 50%) !important;
+}
+
+.chronicle-killfeed .chronicle-killfeed__live.is-quiet i {
+  background: rgb(168 196 214 / 85%);
+  box-shadow: 0 0 0 3px rgb(168 196 214 / 18%);
+  animation: chronicle-killfeed-breath 3.2s ease-in-out infinite;
+}
+
+.chronicle-killfeed .chronicle-killfeed__live.is-behind {
+  color: #f5d9a4 !important;
+  border-color: rgb(226 176 92 / 62%) !important;
+}
+
+.chronicle-killfeed .chronicle-killfeed__live.is-behind i {
+  background: #e2b05c;
+  box-shadow: 0 0 0 3px rgb(226 176 92 / 22%);
+}
+
+.chronicle-killfeed .chronicle-killfeed__live.is-disconnected {
+  color: #f2b4a4 !important;
+  border-color: rgb(206 108 84 / 68%) !important;
+}
+
+.chronicle-killfeed .chronicle-killfeed__live.is-disconnected i {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px #ce6c54;
+  animation: chronicle-killfeed-breath 1.1s ease-in-out infinite;
+}
+
+.chronicle-killfeed .chronicle-killfeed__live.is-ended {
+  color: rgb(236 226 204 / 62%) !important;
+  border-color: rgb(236 226 204 / 30%) !important;
+}
+
+.chronicle-killfeed .chronicle-killfeed__live.is-ended i {
+  border-radius: 1px;
+  background: rgb(236 226 204 / 55%);
+}
+
+@keyframes chronicle-killfeed-breath {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chronicle-killfeed .chronicle-killfeed__live i {
+    animation: none !important;
+  }
+}
+
+.chronicle-killfeed .chronicle-killfeed__notices {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.chronicle-killfeed .chronicle-killfeed__notices li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 5px 9px;
+  border: 1px solid rgb(206 108 84 / 55%);
+  border-radius: 4px;
+  background: rgb(38 20 16 / 82%);
+  color: #f2c8ba;
+  font-size: 0.62rem;
+}
+
+.chronicle-killfeed .chronicle-killfeed__notices b {
+  font-weight: 600;
+}
+
+.chronicle-killfeed .chronicle-killfeed__notices span {
+  font-variant-numeric: tabular-nums;
+  color: rgb(242 200 186 / 62%);
+}

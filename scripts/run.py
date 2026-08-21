@@ -35,7 +35,7 @@ from typing import Any
 from dotenv import load_dotenv
 from rich.console import Console
 
-from agents.decider import Decider, SerializingDecider, make_default_decider
+from agents.decider import AsyncCloseable, Decider, SerializingDecider, make_default_decider
 from agents.runtime import Agent
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
@@ -45,7 +45,10 @@ from memory.embedding import default_embedding_function
 from memory.store import FileMemoryStore
 from memory.vector_store import ChromaVectorStore, VectorStore
 from observability.activity_feed import render_world_table, run_activity_feed
-from observability.event_log import CompositeEventLog, FeedEventLog, JsonlEventLog
+from observability.checkpoints import JsonlSnapshotCheckpointLog, SnapshotCheckpointEventLog
+from observability.event_log import CompositeEventLog, FeedEventLog
+from observability.replay_archive import ReplayArchive
+from observability.run_context import RunContext, build_run_context
 from observability.usage import JsonlUsageLog
 from tools.builtin import register_builtins
 from tools.registry import ToolRegistry
@@ -97,6 +100,9 @@ class Simulation:
         agents: The breathing agents (already subscribed to ``bus`` at construction).
         decider: The shared, serialized decider (one agent thinks at a time).
         feed_log: The bounded ring-buffer sink the live activity feed polls.
+        run_context: Metadata and artifact paths for this run.
+        snapshot_log: Durable world-snapshot checkpoint writer for exact replay.
+        replay_archive: Lossless segmented durable storage shared by events and checkpoints.
         spawn_agent: Factory that builds a breathing :class:`~agents.runtime.Agent` for an
             :class:`~world.agents.AgentState` (same registry / decider / per-agent memory
             wiring as the initial agents). Used by the spawn-watcher to start offspring
@@ -109,6 +115,9 @@ class Simulation:
     agents: list[Agent]
     decider: Decider
     feed_log: FeedEventLog
+    run_context: RunContext
+    snapshot_log: JsonlSnapshotCheckpointLog
+    replay_archive: ReplayArchive
     spawn_agent: Callable[[AgentState], Agent]
 
 
@@ -121,8 +130,10 @@ def build_simulation(
     run_dir: str | Path,
     provider: str = "ollama",
     context_window: int | None = None,
+    feed_maxlen: int = 512,
     decider: Decider | None = None,
     vector_store_factory: Callable[[str], VectorStore] | None = None,
+    world: WorldState | None = None,
 ) -> Simulation:
     """Assemble a :class:`Simulation` from a world config (no tasks started).
 
@@ -140,8 +151,8 @@ def build_simulation(
 
     Args:
         config_path: Path to the ``world.yaml`` describing regions and agents.
-        seed: RNG seed threaded into the world (reproducible run) and used to name
-            the JSONL replay file (``run_<seed>.jsonl``).
+        seed: RNG seed threaded into the world for a reproducible run. Artifacts are
+            isolated beneath the generated run id rather than named by seed alone.
         model: Model name for the default decider; ignored when ``decider`` is
             supplied. Interpreted per ``provider`` (an Ollama model for ``"ollama"``,
             a hosted model for ``"gemini"``).
@@ -151,6 +162,7 @@ def build_simulation(
         provider: Decider backend to build when ``decider`` is ``None`` -- ``"ollama"``
             (local, the default, serialized one-at-a-time) or ``"gemini"`` (hosted,
             left UNserialized so agents breathe concurrently).
+        feed_maxlen: Number of recent events retained by the live feed ring buffer.
         decider: Optional pre-built decider (tests inject a mock); when ``None`` a
             production :func:`~agents.decider.make_default_decider` is built for
             ``model``. Either way it is serialized (unless already a
@@ -158,21 +170,56 @@ def build_simulation(
         vector_store_factory: Optional ``agent_id -> VectorStore`` factory (tests
             inject a fast in-memory fake); when ``None`` a persistent
             :class:`~memory.vector_store.ChromaVectorStore` is created per agent.
+        world: Optional pre-built world. The run-lifecycle API assembles its own
+            (the config file's locked regions, scaled by the run's abundance, plus
+            the beings the viewer configured and the run's derived
+            :class:`~core.run_settings.RunSettings`) and passes it here. When
+            ``None`` -- every path that existed before -- the world is loaded from
+            ``config_path`` exactly as before. ``config_path`` is still read for the
+            run's config hash either way.
 
     Returns:
         The assembled :class:`Simulation` (agents constructed and bus-subscribed,
         but no asyncio tasks started yet).
     """
-    world = load_config(config_path, seed=seed)
+    if world is None:
+        world = load_config(config_path, seed=seed)
 
-    feed = FeedEventLog()
-    jsonl = JsonlEventLog(Path(run_dir) / f"run_{seed}.jsonl")
-    bus = EventBus(world, event_log=CompositeEventLog(jsonl, feed))
+    # Effective context window: an explicit override wins; else the hosted Gemini path
+    # gets its large window (compaction near ~500K) while the local path keeps the
+    # module default (``None`` -> the Agent uses ``MODEL_CONTEXT_TOKENS``).
+    resolved_window: int | None = context_window
+    if resolved_window is None and provider == "gemini":
+        resolved_window = DEFAULT_GEMINI_CONTEXT_TOKENS
+
+    run_context = build_run_context(
+        config_path=config_path,
+        seed=seed,
+        model=model,
+        provider=provider,
+        memory_root=memory_root,
+        run_dir=run_dir,
+        context_window=resolved_window,
+    )
+
+    feed = FeedEventLog(maxlen=feed_maxlen)
+    replay_archive = ReplayArchive(run_context.run_dir, run_context.run_id)
+    snapshot_log = JsonlSnapshotCheckpointLog(
+        run_context.snapshot_log_path,
+        archive=replay_archive,
+    )
+    snapshot_events = SnapshotCheckpointEventLog(
+        snapshot_log,
+        world=world,
+        run_context=run_context,
+        event_cursor=lambda: feed.current_cursor,
+    )
+    bus = EventBus(world, event_log=CompositeEventLog(replay_archive, feed, snapshot_events))
 
     # Token-usage sink, a sibling of the replay log: per-decision input/output tokens
     # for cost accounting (read post-hoc by the chronicle). Operator metric, NOT routed
     # through the bus -- agents never perceive it.
-    usage_log = JsonlUsageLog(Path(run_dir) / f"usage_{seed}.jsonl")
+    usage_log = JsonlUsageLog(run_context.usage_log_path)
 
     registry = ToolRegistry(world, bus)
     register_builtins(registry)
@@ -190,22 +237,18 @@ def build_simulation(
         else SerializingDecider(inner)
     )
 
+    shared_embedder = default_embedding_function() if vector_store_factory is None else None
+
     def _real_vector_store(agent_id: str) -> VectorStore:  # pragma: no cover - prod path
         """Build a persistent per-agent Chroma vector store (production default)."""
+        assert shared_embedder is not None
         return ChromaVectorStore(
             agent_id,
-            default_embedding_function(),
+            shared_embedder,
             path=Path(memory_root) / agent_id / "chroma",
         )
 
     make_vector_store = vector_store_factory or _real_vector_store
-
-    # Effective context window: an explicit override wins; else the hosted Gemini path
-    # gets its large window (compaction near ~500K) while the local path keeps the
-    # module default (``None`` -> the Agent uses ``MODEL_CONTEXT_TOKENS``).
-    resolved_window: int | None = context_window
-    if resolved_window is None and provider == "gemini":
-        resolved_window = DEFAULT_GEMINI_CONTEXT_TOKENS
 
     def spawn_agent(state: AgentState) -> Agent:
         """Build one breathing agent (the single place that knows the wiring).
@@ -249,6 +292,9 @@ def build_simulation(
         agents=agents,
         decider=serialized,
         feed_log=feed,
+        run_context=run_context,
+        snapshot_log=snapshot_log,
+        replay_archive=replay_archive,
         spawn_agent=spawn_agent,
     )
 
@@ -468,7 +514,7 @@ def _render_summary(console: Console, world: WorldState, feed: FeedEventLog) -> 
     Side effects:
         Prints the world table to ``console`` and emits one INFO log line.
     """
-    total_events = feed.new_events(0)[1]
+    total_events = feed.current_cursor
     console.print(render_world_table(world))
     logger.info("Run complete: %d events recorded.", total_events)
 
@@ -477,44 +523,64 @@ async def run_simulation(
     sim: Simulation,
     *,
     pace: float,
-    duration: float,
+    duration: float | None,
     world_tick_interval: float,
     refresh_interval: float,
     console: Console | None = None,
+    terminal_ui: bool = True,
+    install_signal_handlers: bool = True,
+    stop_event: asyncio.Event | None = None,
 ) -> None:
     """Run an assembled :class:`Simulation` to completion through one shutdown path.
 
     Publishes a GLOBAL ``simulation_started`` lifecycle event (so the run is
     observable from its first line and the event pipeline is exercised), then starts:
     one ``run()`` task per agent (each unsubscribing its inbox in a ``finally`` when it
-    exits), the world-tick heartbeat, the live activity feed, the collapse watch, and a
-    watcher that signals stop once all agents have died. ``--duration`` bounds the run
-    via :func:`asyncio.timeout`; SIGINT, an all-dead world, and the collapse watch all
-    set the same ``stop`` event. However the run ends, the single ``finally`` cancels
-    every outstanding task, unsubscribes every agent, and renders a final summary.
+    exits), the world-tick heartbeat, optionally the terminal activity feed, the
+    collapse watch, and a watcher that signals stop once all agents have died.
+    ``--duration`` bounds the run via :func:`asyncio.timeout`; SIGINT, an all-dead
+    world, and the collapse watch all set the same ``stop`` event. However the run
+    ends, the single ``finally`` cancels every outstanding task, unsubscribes every
+    agent, and optionally renders a final terminal summary.
 
     Args:
         sim: The assembled simulation bundle.
         pace: Inter-breath sleep (seconds) passed to every agent's ``run``.
-        duration: Wall-clock bound (seconds) on the whole run.
+        duration: Wall-clock bound (seconds) on the whole run, or ``None`` for an
+            unbounded run that ends only on a stop, a dead world, or a collapse
+            (:func:`asyncio.timeout` treats ``None`` as no deadline).
         world_tick_interval: Seconds between world-ticks (regen + proposal sweep).
         refresh_interval: Seconds between activity-feed re-renders.
         console: Optional shared ``rich`` console (so log output and the live view
             share one stderr console); a fresh ``Console(stderr=True)`` is created
-            when ``None``.
+            when ``None`` and ``terminal_ui`` is enabled.
+        terminal_ui: Whether to run the terminal activity feed and final summary.
+            The CLI keeps this enabled; the browser-facing API server disables it.
+        install_signal_handlers: Whether to install SIGINT/SIGTERM handlers. The
+            browser-facing server disables this and lets Uvicorn own signals.
+        stop_event: Optional externally-owned stop event. When supplied, setting it
+            stops this run through the same shutdown path.
 
     Returns:
         None.
 
     Side effects:
         Mutates the world via the agents' tools; publishes events on ``sim.bus``;
-        unsubscribes every agent from the bus at shutdown; renders to ``console``.
+        unsubscribes every agent from the bus at shutdown; optionally renders to
+        ``console``.
     """
-    if console is None:
+    if terminal_ui and console is None:
         console = Console(stderr=True)
     world = sim.world
     bus = sim.bus
-    stop = asyncio.Event()
+    stop = stop_event or asyncio.Event()
+    sim.run_context.set_timing(
+        pace=pace,
+        duration=duration,
+        world_tick_interval=world_tick_interval,
+        refresh_interval=refresh_interval,
+    )
+    sim.run_context.mark_running()
 
     async def run_agent(agent: Agent) -> None:
         """Drive one agent's breathing loop, freeing its inbox when it exits."""
@@ -523,13 +589,27 @@ async def run_simulation(
         finally:
             bus.unsubscribe(agent.agent_id)
 
+    def write_world_tick_checkpoint() -> None:
+        """Write a snapshot checkpoint after one world-tick heartbeat."""
+        sim.snapshot_log.write_snapshot(
+            world,
+            sim.run_context,
+            event_cursor=sim.feed_log.current_cursor,
+            reason="world_tick",
+        )
+
     # Announce the run so it is observable from line one (and the JSONL + feed
     # pipeline is exercised even before any agent acts).
     await bus.publish(
         Event(
             "simulation_started",
             "world",
-            {"message": f"Simulation started: {len(sim.agents)} agents breathing."},
+            {
+                "run_id": sim.run_context.run_id,
+                "agent_count": len(sim.agents),
+                "world_time": world.now(),
+                "message": f"Simulation started: {len(sim.agents)} agents breathing.",
+            },
             scope=ScopeType.GLOBAL,
             timestamp=world.now(),
         )
@@ -544,36 +624,62 @@ async def run_simulation(
     ]
     background_tasks: list[asyncio.Task[None]] = [
         asyncio.create_task(
-            run_world_tick(world, bus, interval=world_tick_interval), name="world-tick"
-        ),
-        asyncio.create_task(
-            run_activity_feed(
-                sim.feed_log,
+            run_world_tick(
                 world,
-                console,
-                refresh_interval=refresh_interval,
-                should_stop=stop.is_set,
+                bus,
+                interval=world_tick_interval,
+                after_tick=write_world_tick_checkpoint,
             ),
-            name="activity-feed",
-        ),
-        asyncio.create_task(
-            _liveness_watch(world, sim.agents, stop, interval=world_tick_interval),
-            name="liveness-watch",
-        ),
-        asyncio.create_task(
-            _spawn_watch(
-                world, sim, run_agent, agent_tasks, known, stop, interval=world_tick_interval
-            ),
-            name="spawn-watch",
+            name="world-tick",
         ),
     ]
+    if terminal_ui:
+        assert console is not None
+        background_tasks.append(
+            asyncio.create_task(
+                run_activity_feed(
+                    sim.feed_log,
+                    world,
+                    console,
+                    refresh_interval=refresh_interval,
+                    should_stop=stop.is_set,
+                ),
+                name="activity-feed",
+            )
+        )
+    background_tasks.extend(
+        [
+            asyncio.create_task(
+                _liveness_watch(world, sim.agents, stop, interval=world_tick_interval),
+                name="liveness-watch",
+            ),
+            asyncio.create_task(
+                _spawn_watch(
+                    world,
+                    sim,
+                    run_agent,
+                    agent_tasks,
+                    known,
+                    stop,
+                    interval=world_tick_interval,
+                ),
+                name="spawn-watch",
+            ),
+        ]
+    )
 
-    remove_signal_handlers = _install_signal_handlers(stop)
+    if install_signal_handlers:
+        remove_signal_handlers = _install_signal_handlers(stop)
+    else:
+
+        def remove_signal_handlers() -> None:
+            return None
+
     try:
         async with asyncio.timeout(duration):
             await stop.wait()
     except TimeoutError:
-        logger.info("Run duration (%.1fs) elapsed; shutting down.", duration)
+        logger.info("Run duration (%.1fs) elapsed; shutting down.", duration or 0.0)
     finally:
         # `stop.set()` (no await before the cancels) is what actually prevents the
         # spawn-watch from creating new tasks during teardown -- its `stop.is_set()`
@@ -587,8 +693,16 @@ async def run_simulation(
         await asyncio.gather(*agent_tasks, *background_tasks, return_exceptions=True)
         for agent in sim.agents:
             bus.unsubscribe(agent.agent_id)
+        if isinstance(sim.decider, AsyncCloseable):
+            try:
+                await sim.decider.aclose()
+            except Exception:
+                logger.exception("Failed to close the shared decider during shutdown.")
+        sim.run_context.mark_stopped()
         remove_signal_handlers()
-        _render_summary(console, world, sim.feed_log)
+        if terminal_ui:
+            assert console is not None
+            _render_summary(console, world, sim.feed_log)
 
 
 def _build_parser() -> argparse.ArgumentParser:

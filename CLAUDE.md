@@ -223,8 +223,17 @@ layer (`rich`), not stray prints.
 
 ## 5. Testing standards (rigorous — non-negotiable)
 
-Testing is a first-class deliverable, not an afterthought. **TDD is the default**
-(use the test-driven-development skill): write a failing test, make it pass, refactor.
+Testing is a first-class deliverable, not an afterthought. **TDD is the default
+for production code and production integration** (use the
+test-driven-development skill): write a failing test, make it pass, refactor.
+
+**Pilot/mock exception (Safi, 2026-07-23):** isolated visual pilots, mockups, and
+throwaway prototypes are speed-first. Build them directly and hand them to Safi
+for visual/interaction validation; do not require TDD, broad test matrices,
+production builds, formal code review, or automated visual evidence unless Safi
+explicitly asks. Lightweight smoke checks are allowed only when needed to make
+the pilot viewable. Once an approved pilot is migrated into production paths,
+the full TDD, typing, integration, and review standards in this section apply.
 
 - **Framework:** `pytest` + `pytest-asyncio` + `pytest-cov`. Configure pytest to
   discover the existing `*_test.py` naming (set `python_files = *_test.py` in

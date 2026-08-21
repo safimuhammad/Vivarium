@@ -10,6 +10,7 @@ dataclasses (validate at the boundary, then trust internally).
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import pytest
@@ -274,3 +275,28 @@ def test_agent_config_rejects_negative_energy() -> None:
     agent["current_energy"] = -10.0
     with pytest.raises(ValidationError):
         AgentConfig.model_validate(agent)
+
+
+def test_region_config_rejects_non_finite_numeric_values() -> None:
+    """Region numeric fields must be finite so snapshots can emit strict JSON."""
+    for field in (
+        "energy_rate",
+        "materials_rate",
+        "current_energy",
+        "current_materials",
+        "max_energy",
+        "max_materials",
+    ):
+        region = valid_region_data()
+        region[field] = math.inf
+        with pytest.raises(ValidationError):
+            RegionConfig.model_validate(region)
+
+
+def test_agent_config_rejects_non_finite_resources() -> None:
+    """Agent resource fields must be finite so snapshots can emit strict JSON."""
+    for field in ("current_energy", "current_materials"):
+        agent = valid_agent_data()
+        agent[field] = math.nan
+        with pytest.raises(ValidationError):
+            AgentConfig.model_validate(agent)

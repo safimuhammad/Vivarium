@@ -35,6 +35,33 @@ from world.regions import ResourceTypes
 RESOURCE_ENUM: list[str] = [resource.value for resource in ResourceTypes]
 """Allowed string values for any resource-type parameter (from ResourceTypes)."""
 
+MATING_TOOL_NAME: str = "initiate_mating"
+"""The one tool whose description embeds a per-run world rule (the offspring cap)."""
+
+
+def initiate_mating_description(max_offspring: int) -> str:
+    """Return the ``initiate_mating`` description for one run's offspring ceiling.
+
+    The cap is enforced silently by the mating tools, so it has to be *stated* to be
+    an incentive at all: a being that cannot see the ceiling cannot tell whether an
+    offer it makes will even be allowed. A run that lowers the ceiling must therefore
+    lower it in the description too, or the number the being reads is a lie.
+
+    Args:
+        max_offspring: The run's per-being offspring ceiling.
+
+    Returns:
+        The tool description text.
+    """
+    return (
+        "Propose mating to another being in your region to bring a new being -- a "
+        "child -- into the world. Commit energy and materials now (at least "
+        f"{MATING_MIN_ENERGY_CONTRIBUTION:.0f} energy and "
+        f"{MATING_MIN_MATERIALS_CONTRIBUTION:.0f} materials); they are returned if "
+        "the proposal is rejected or times out. You may mate again only after a "
+        f"cooldown, and only up to {max_offspring} children in all."
+    )
+
 
 TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "look_around": {
@@ -43,7 +70,8 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "name": "look_around",
             "description": (
                 "Observe your current region: your own energy and materials, the "
-                "region's resource pools and connections, and who else is present."
+                "region's resource pools and connections, and who else is present. "
+                "This is private awareness only; it changes nothing and reaches no one else."
             ),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
@@ -168,14 +196,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "initiate_mating",
-            "description": (
-                "Propose mating to another being in your region to bring a new being -- a "
-                "child -- into the world. Commit energy and materials now (at least "
-                f"{MATING_MIN_ENERGY_CONTRIBUTION:.0f} energy and "
-                f"{MATING_MIN_MATERIALS_CONTRIBUTION:.0f} materials); they are returned if "
-                "the proposal is rejected or times out. You may mate again only after a "
-                f"cooldown, and only up to {MATING_MAX_OFFSPRING} children in all."
-            ),
+            "description": initiate_mating_description(MATING_MAX_OFFSPRING),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -407,18 +428,51 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 """Tool name -> Ollama function schema; its key set mirrors ``BUILTIN_TOOLS``."""
 
 
-def schemas_for(names: Iterable[str]) -> list[dict[str, Any]]:
+def schemas_for(
+    names: Iterable[str],
+    *,
+    max_offspring: int = MATING_MAX_OFFSPRING,
+) -> list[dict[str, Any]]:
     """Return the schemas for the named tools, in iteration order.
+
+    When ``max_offspring`` is the repository default the shared
+    :data:`TOOL_SCHEMAS` objects are returned unchanged, so the bytes an agent sees
+    are identical to every run before this parameter existed. A run that lowered or
+    raised the ceiling gets a *copy* of the ``initiate_mating`` schema carrying its
+    own number (see :func:`initiate_mating_description`); the shared dict is never
+    mutated, so concurrent runs cannot see each other's ceiling.
 
     Args:
         names: Tool names to look up (e.g. the names a registry exposes).
+        max_offspring: This run's per-being offspring ceiling.
 
     Returns:
-        The matching schema objects from :data:`TOOL_SCHEMAS`, in the order of
-        ``names``.
+        The matching schema objects, in the order of ``names``.
 
     Raises:
         KeyError: If any name has no schema (a programming error given the parity
             invariant; surfaced loudly rather than silently dropping a tool).
     """
-    return [TOOL_SCHEMAS[name] for name in names]
+    ordered = list(names)  # ``names`` may be a one-shot iterator; it is read twice.
+    schemas = [TOOL_SCHEMAS[name] for name in ordered]
+    if max_offspring == MATING_MAX_OFFSPRING:
+        return schemas
+    return [
+        _with_offspring_cap(schema, max_offspring) if name == MATING_TOOL_NAME else schema
+        for name, schema in zip(ordered, schemas, strict=True)
+    ]
+
+
+def _with_offspring_cap(schema: dict[str, Any], max_offspring: int) -> dict[str, Any]:
+    """Return a shallow copy of ``schema`` whose description states ``max_offspring``.
+
+    Args:
+        schema: The shared ``initiate_mating`` schema.
+        max_offspring: This run's per-being offspring ceiling.
+
+    Returns:
+        A new schema dict; the shared one is left untouched.
+    """
+    function = dict(schema["function"])
+    function["description"] = initiate_mating_description(max_offspring)
+    return {**schema, "function": function}

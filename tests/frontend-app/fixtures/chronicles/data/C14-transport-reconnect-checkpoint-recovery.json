@@ -1,0 +1,532 @@
+{
+  "checkpoints": [
+    {
+      "checkpoint": {
+        "event_cursor": 0,
+        "reason": "world_tick",
+        "run_id": "mock-c14-v1",
+        "schema": 1,
+        "snapshot": {
+          "agents": [
+            {
+              "died_at": null,
+              "energy": 100.0,
+              "home_id": null,
+              "id": "wanderer_001",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Joe",
+              "offspring_count": 0,
+              "position": "warm_springs",
+              "status": "alive"
+            },
+            {
+              "died_at": null,
+              "energy": 100.0,
+              "home_id": null,
+              "id": "wanderer_002",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Mae",
+              "offspring_count": 0,
+              "position": "warm_springs",
+              "status": "alive"
+            },
+            {
+              "died_at": null,
+              "energy": 100.0,
+              "home_id": null,
+              "id": "wanderer_003",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Dick",
+              "offspring_count": 0,
+              "position": "nirvana",
+              "status": "alive"
+            },
+            {
+              "died_at": null,
+              "energy": 100.0,
+              "home_id": null,
+              "id": "wanderer_004",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Allen",
+              "offspring_count": 0,
+              "position": "nirvana",
+              "status": "alive"
+            }
+          ],
+          "event_cursor": 0,
+          "homes": [],
+          "pending_proposals": [],
+          "region_pressure": [
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 2,
+              "region": "nirvana"
+            },
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 0,
+              "region": "nirvana_east"
+            },
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 0,
+              "region": "nirvana_west"
+            },
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 2,
+              "region": "warm_springs"
+            }
+          ],
+          "regions": [
+            {
+              "connections": [
+                "warm_springs",
+                "nirvana_east",
+                "nirvana_west"
+              ],
+              "current_energy": 60.0,
+              "current_materials": 60.0,
+              "description": "a once-heavenly landscape, now thinning and picked-over",
+              "energy_rate": 0.2,
+              "materials_rate": 0.2,
+              "max_energy": 120.0,
+              "max_materials": 120.0,
+              "name": "nirvana"
+            },
+            {
+              "connections": [
+                "warm_springs",
+                "nirvana"
+              ],
+              "current_energy": 20.0,
+              "current_materials": 15.0,
+              "description": "a struggling, near-barren stretch",
+              "energy_rate": 0.1,
+              "materials_rate": 0.1,
+              "max_energy": 70.0,
+              "max_materials": 70.0,
+              "name": "nirvana_east"
+            },
+            {
+              "connections": [
+                "warm_springs",
+                "nirvana"
+              ],
+              "current_energy": 15.0,
+              "current_materials": 0.0,
+              "description": "a nuclear wasteland, all but dead",
+              "energy_rate": 0.05,
+              "materials_rate": 0.0,
+              "max_energy": 50.0,
+              "max_materials": 10.0,
+              "name": "nirvana_west"
+            },
+            {
+              "connections": [
+                "nirvana_west",
+                "nirvana_east",
+                "nirvana"
+              ],
+              "current_energy": 90.0,
+              "current_materials": 80.0,
+              "description": "hot spring lakes \u2014 the least-poor refuge, but no longer plentiful",
+              "energy_rate": 0.25,
+              "materials_rate": 0.2,
+              "max_energy": 130.0,
+              "max_materials": 130.0,
+              "name": "warm_springs"
+            }
+          ],
+          "ruins": [],
+          "run_id": "mock-c14-v1",
+          "schema": 1,
+          "seed_persona": "You have just awoken into this world \u2014 aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover \u2014 and freely reshape \u2014 the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+          "world_time": 1800140000.0
+        },
+        "type": "world_snapshot_checkpoint",
+        "world_time": 1800140000.0
+      },
+      "line": 1,
+      "safety": "safe-world-tick"
+    }
+  ],
+  "entries": [],
+  "expectedFinalCursor": 0,
+  "expectedMarkers": [
+    "checkpoint:final"
+  ],
+  "expectedTerminal": {
+    "finalSnapshot": {
+      "agents": [
+        {
+          "died_at": null,
+          "energy": 100.0,
+          "home_id": null,
+          "id": "wanderer_001",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Joe",
+          "offspring_count": 0,
+          "position": "warm_springs",
+          "status": "alive"
+        },
+        {
+          "died_at": null,
+          "energy": 100.0,
+          "home_id": null,
+          "id": "wanderer_002",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Mae",
+          "offspring_count": 0,
+          "position": "warm_springs",
+          "status": "alive"
+        },
+        {
+          "died_at": null,
+          "energy": 100.0,
+          "home_id": null,
+          "id": "wanderer_003",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Dick",
+          "offspring_count": 0,
+          "position": "nirvana",
+          "status": "alive"
+        },
+        {
+          "died_at": null,
+          "energy": 100.0,
+          "home_id": null,
+          "id": "wanderer_004",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Allen",
+          "offspring_count": 0,
+          "position": "nirvana",
+          "status": "alive"
+        }
+      ],
+      "event_cursor": 0,
+      "homes": [],
+      "pending_proposals": [],
+      "region_pressure": [
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 2,
+          "region": "nirvana"
+        },
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 0,
+          "region": "nirvana_east"
+        },
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 0,
+          "region": "nirvana_west"
+        },
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 2,
+          "region": "warm_springs"
+        }
+      ],
+      "regions": [
+        {
+          "connections": [
+            "warm_springs",
+            "nirvana_east",
+            "nirvana_west"
+          ],
+          "current_energy": 60.0,
+          "current_materials": 60.0,
+          "description": "a once-heavenly landscape, now thinning and picked-over",
+          "energy_rate": 0.2,
+          "materials_rate": 0.2,
+          "max_energy": 120.0,
+          "max_materials": 120.0,
+          "name": "nirvana"
+        },
+        {
+          "connections": [
+            "warm_springs",
+            "nirvana"
+          ],
+          "current_energy": 20.0,
+          "current_materials": 15.0,
+          "description": "a struggling, near-barren stretch",
+          "energy_rate": 0.1,
+          "materials_rate": 0.1,
+          "max_energy": 70.0,
+          "max_materials": 70.0,
+          "name": "nirvana_east"
+        },
+        {
+          "connections": [
+            "warm_springs",
+            "nirvana"
+          ],
+          "current_energy": 15.0,
+          "current_materials": 0.0,
+          "description": "a nuclear wasteland, all but dead",
+          "energy_rate": 0.05,
+          "materials_rate": 0.0,
+          "max_energy": 50.0,
+          "max_materials": 10.0,
+          "name": "nirvana_west"
+        },
+        {
+          "connections": [
+            "nirvana_west",
+            "nirvana_east",
+            "nirvana"
+          ],
+          "current_energy": 90.0,
+          "current_materials": 80.0,
+          "description": "hot spring lakes \u2014 the least-poor refuge, but no longer plentiful",
+          "energy_rate": 0.25,
+          "materials_rate": 0.2,
+          "max_energy": 130.0,
+          "max_materials": 130.0,
+          "name": "warm_springs"
+        }
+      ],
+      "ruins": [],
+      "run_id": "mock-c14-v1",
+      "schema": 1,
+      "seed_persona": "You have just awoken into this world \u2014 aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover \u2014 and freely reshape \u2014 the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+      "world_time": 1800140000.0
+    },
+    "fixtureAuthorship": {
+      "handAuthoredEnvelopeCount": 0,
+      "labeled": true,
+      "mechanicEventsFabricated": false,
+      "recordCount": 3
+    },
+    "presentationAuthority": {
+      "kind": "transport-recovery",
+      "terminal": {
+        "cursor": 0,
+        "runId": "mock-c14-v1-replacement",
+        "source": "live",
+        "sourceKey": "live:mock-c14-v1-replacement"
+      }
+    },
+    "presentationRecords": [
+      {
+        "kind": "transport-fault",
+        "label": "cursor-gap",
+        "payload": {
+          "firstMissingCursor": 1,
+          "lastMissingCursor": 2
+        },
+        "schema": 1
+      },
+      {
+        "kind": "transport-fault",
+        "label": "oversized-record-413",
+        "payload": {
+          "retryable": false
+        },
+        "schema": 1
+      },
+      {
+        "kind": "transport-fault",
+        "label": "run-replacement",
+        "payload": {
+          "staleRunRejected": true
+        },
+        "schema": 1
+      }
+    ],
+    "producerResults": {},
+    "semanticOracle": {
+      "negative": [
+        "no-fabricated-gap-event",
+        "no-guessed-413-line"
+      ],
+      "positive": [
+        "gap",
+        "reconnect",
+        "snapshot-retry",
+        "413",
+        "replacement",
+        "stale-reject"
+      ],
+      "terminal": [
+        "final-checkpoint-aligned",
+        "run-identity-preserved"
+      ]
+    },
+    "toolAssertions": []
+  },
+  "id": "C14",
+  "initialSnapshot": {
+    "agents": [
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_001",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Joe",
+        "offspring_count": 0,
+        "position": "warm_springs",
+        "status": "alive"
+      },
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_002",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Mae",
+        "offspring_count": 0,
+        "position": "warm_springs",
+        "status": "alive"
+      },
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_003",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Dick",
+        "offspring_count": 0,
+        "position": "nirvana",
+        "status": "alive"
+      },
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_004",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Allen",
+        "offspring_count": 0,
+        "position": "nirvana",
+        "status": "alive"
+      }
+    ],
+    "event_cursor": 0,
+    "homes": [],
+    "pending_proposals": [],
+    "region_pressure": [
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 2,
+        "region": "nirvana"
+      },
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 0,
+        "region": "nirvana_east"
+      },
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 0,
+        "region": "nirvana_west"
+      },
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 2,
+        "region": "warm_springs"
+      }
+    ],
+    "regions": [
+      {
+        "connections": [
+          "warm_springs",
+          "nirvana_east",
+          "nirvana_west"
+        ],
+        "current_energy": 60.0,
+        "current_materials": 60.0,
+        "description": "a once-heavenly landscape, now thinning and picked-over",
+        "energy_rate": 0.2,
+        "materials_rate": 0.2,
+        "max_energy": 120.0,
+        "max_materials": 120.0,
+        "name": "nirvana"
+      },
+      {
+        "connections": [
+          "warm_springs",
+          "nirvana"
+        ],
+        "current_energy": 20.0,
+        "current_materials": 15.0,
+        "description": "a struggling, near-barren stretch",
+        "energy_rate": 0.1,
+        "materials_rate": 0.1,
+        "max_energy": 70.0,
+        "max_materials": 70.0,
+        "name": "nirvana_east"
+      },
+      {
+        "connections": [
+          "warm_springs",
+          "nirvana"
+        ],
+        "current_energy": 15.0,
+        "current_materials": 0.0,
+        "description": "a nuclear wasteland, all but dead",
+        "energy_rate": 0.05,
+        "materials_rate": 0.0,
+        "max_energy": 50.0,
+        "max_materials": 10.0,
+        "name": "nirvana_west"
+      },
+      {
+        "connections": [
+          "nirvana_west",
+          "nirvana_east",
+          "nirvana"
+        ],
+        "current_energy": 90.0,
+        "current_materials": 80.0,
+        "description": "hot spring lakes \u2014 the least-poor refuge, but no longer plentiful",
+        "energy_rate": 0.25,
+        "materials_rate": 0.2,
+        "max_energy": 130.0,
+        "max_materials": 130.0,
+        "name": "warm_springs"
+      }
+    ],
+    "ruins": [],
+    "run_id": "mock-c14-v1",
+    "schema": 1,
+    "seed_persona": "You have just awoken into this world \u2014 aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover \u2014 and freely reshape \u2014 the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+    "world_time": 1800140000.0
+  },
+  "negativeAssertions": [
+    "no-fabricated-gap-event",
+    "no-guessed-413-line"
+  ],
+  "runId": "mock-c14-v1",
+  "seed": 30014,
+  "slug": "transport-reconnect-checkpoint-recovery",
+  "version": 1
+}

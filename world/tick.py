@@ -7,7 +7,8 @@ breathing loops. Each step does five jobs:
    ``max_*``) via :meth:`~world.world.WorldState.regenerate_resources`, so the
    ecology self-heals and the piece can run forever.
 #. **Sweep timed-out mating proposals** -- any proposal whose escrow has sat
-   unanswered longer than :data:`~core.constants.MATING_PROPOSAL_TIMEOUT_SECONDS`
+   unanswered longer than the run's
+   :attr:`~core.run_settings.RunSettings.mating_proposal_timeout_seconds`
    is refunded to its initiator and removed, then a timeout event is published.
 #. **Sweep decayed corpses** -- any slain body older than
    :data:`~core.constants.CORPSE_DECAY_SECONDS` is removed from the world and its
@@ -62,6 +63,7 @@ most once.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
@@ -70,10 +72,10 @@ from core.constants import (
     HOME_DECAY_PER_SECOND,
     HOME_REPAIR_PER_SECOND,
     HOME_UPKEEP_MATERIALS_PER_SECOND,
-    MATING_PROPOSAL_TIMEOUT_SECONDS,
     RUINS_PERSIST_SECONDS,
 )
 from core.logging import get_logger
+from observability.event_payloads import serialize_resource_map
 from world.agents import AgentState, AgentStatus
 from world.homes import HomeStatus, max_integrity
 from world.regions import ResourceTypes
@@ -87,8 +89,9 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
 
     Mutates world state:
         * Regenerates every region's energy/materials (capped at ``max_*``).
-        * For each pending proposal older than
-          :data:`~core.constants.MATING_PROPOSAL_TIMEOUT_SECONDS`, refunds the
+        * For each pending proposal older than the run's
+          :attr:`~core.run_settings.RunSettings.mating_proposal_timeout_seconds`,
+          refunds the
           initiator's escrowed resources and removes the proposal (keeping
           :attr:`~world.world.WorldState.pending_proposals` and
           :attr:`~world.world.WorldState.pending_proposal_targets` in sync).
@@ -169,10 +172,15 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
     # it, so a concurrent reject_mating cannot trigger a double refund.
     for (initiator_id, target_id), proposal in list(world.pending_proposals.items()):
         timestamp = float(proposal["timestamp"])
-        if now - timestamp <= MATING_PROPOSAL_TIMEOUT_SECONDS:
+        if now - timestamp <= world.run_settings.mating_proposal_timeout_seconds:
             continue
 
         resources: dict[ResourceTypes, float] = proposal["resources"]
+        # Pre-mutation snapshot for the renderer (spec §4.2): report both sides of the
+        # refund, not only its size. A vanished initiator (swept corpse) has no balances.
+        initiator = world.get_agent(initiator_id)
+        initiator_energy_before = initiator.current_energy if initiator else None
+        initiator_materials_before = initiator.current_materials if initiator else None
         for resource_type, quantity in resources.items():
             if resource_type is ResourceTypes.ENERGY:
                 world.modify_agent_energy(initiator_id, quantity)
@@ -185,10 +193,18 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
                 type="mating_proposal_timeout",
                 source=initiator_id,
                 payload={
+                    "initiator_id": initiator_id,
+                    "target_id": target_id,
+                    "reason": "timeout",
+                    "resources_refunded": serialize_resource_map(resources),
+                    "initiator_energy_before": initiator_energy_before,
+                    "initiator_energy": initiator.current_energy if initiator else None,
+                    "initiator_materials_before": initiator_materials_before,
+                    "initiator_materials": initiator.current_materials if initiator else None,
                     "message": (
                         f"Your mating proposal to {target_id} timed out; your "
                         f"committed resources have been refunded."
-                    )
+                    ),
                 },
                 scope=ScopeType.TARGETED,
                 target=initiator_id,
@@ -214,7 +230,14 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
             Event(
                 type="agent_decayed",
                 source=agent_id,
-                payload={"message": f"The remains of {name} return to the earth."},
+                payload={
+                    "agent_id": agent_id,
+                    "agent_name": name,
+                    "region": region,
+                    "died_at": agent.died_at,
+                    "decayed_at": now,
+                    "message": f"The remains of {name} return to the earth.",
+                },
                 scope=ScopeType.LOCAL,
                 region=region,
                 timestamp=now,
@@ -270,17 +293,37 @@ async def tick(world: WorldState, event_bus: EventBus) -> None:
                 world.clear_breachers(home.home_id)  # a repelled raid resets (Fork D)
             home.last_upkeep_at = now  # advance only on a covered tick
         else:
+            # Pre-mutation snapshot for the renderer (spec §4.2): a collapse reports the
+            # integrity it fell TO, so capture what it fell FROM before the decay.
+            integrity_before = home.integrity
             # Time-based decay from last_integrity_at (advanced every tick) — cannot accelerate.
             world.modify_home_integrity(home.home_id, -HOME_DECAY_PER_SECOND * elapsed)
             # last_upkeep_at is deliberately NOT advanced here (frozen: back-rent accrues).
             if home.integrity <= 0.0:
                 region = home.region
+                home_id = home.home_id
+                owner_id = home.owner_id
+                stakeholders = sorted(home.stakeholders)
+                vault_materials = home.vault_materials
+                integrity = home.integrity
                 world.make_ruin(home.home_id)  # repurposed: collapse leaves a scavengeable ruin
                 collapse_events.append(
                     Event(
                         type="home_collapsed",
-                        source=home.owner_id,
-                        payload={"message": f"A home in {region} has crumbled to ruin."},
+                        source=owner_id,
+                        payload={
+                            "home_id": home_id,
+                            "target_home": home_id,
+                            "owner_id": owner_id,
+                            "region": region,
+                            "stakeholders": stakeholders,
+                            "integrity_before": integrity_before,
+                            "integrity": integrity,
+                            "vault_materials": vault_materials,
+                            "remnant_materials": home.remnant_materials,
+                            "ruined_at": home.ruined_at,
+                            "message": f"A home in {region} has crumbled to ruin.",
+                        },
                         scope=ScopeType.LOCAL,
                         region=region,
                         timestamp=now,
@@ -326,7 +369,13 @@ async def _tick_once_resilient(world: WorldState, event_bus: EventBus) -> None:
         logger.exception("world-tick failed; skipping this tick to keep the heartbeat alive")
 
 
-async def run_world_tick(world: WorldState, event_bus: EventBus, *, interval: float) -> None:
+async def run_world_tick(
+    world: WorldState,
+    event_bus: EventBus,
+    *,
+    interval: float,
+    after_tick: Callable[[], None] | None = None,
+) -> None:
     """Drive :func:`tick` forever, sleeping ``interval`` seconds between steps.
 
     This is the integration-only free-running driver (the pure, unit-tested entry
@@ -338,10 +387,16 @@ async def run_world_tick(world: WorldState, event_bus: EventBus, *, interval: fl
         world: The live world state.
         event_bus: The bus the tick publishes timeout events to.
         interval: Seconds to sleep between consecutive ticks.
+        after_tick: Optional synchronous hook run after each resilient tick attempt.
 
     Returns:
         None.
     """
     while True:  # pragma: no cover - integration-only driver loop
         await _tick_once_resilient(world, event_bus)
+        if after_tick is not None:
+            try:
+                after_tick()
+            except Exception:
+                logger.exception("world-tick after_tick hook failed; continuing heartbeat")
         await asyncio.sleep(interval)

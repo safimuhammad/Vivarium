@@ -10,14 +10,23 @@ fast, and the run is bounded by a tiny ``duration`` so the whole assembly --
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+import scripts.run as run_module
 from agents.decider import Decision, SerializingDecider, ToolCall
 from agents.runtime import Agent
-from core.constants import COMPACTION_TRIGGER_TOKENS, compaction_budgets
+from core.constants import (
+    COMPACTION_TRIGGER_TOKENS,
+    HOME_UPKEEP_MATERIALS_PER_SECOND,
+    MATING_COOLDOWN_SECONDS,
+    RUINS_PERSIST_SECONDS,
+    compaction_budgets,
+)
 from memory.embedding import FakeEmbeddingFunction
 from memory.vector_store import FakeVectorStore, VectorStore
 from scripts.run import Simulation, _spawn_new_agents, build_simulation, run_simulation
@@ -41,11 +50,52 @@ async def test_runner_smoke_runs_and_shuts_down(tmp_path: Path) -> None:
         decider=MockDecider([Decision(tool_calls=[ToolCall("look_around")])] * 200),
         vector_store_factory=_fake_factory,
     )
+    initial_agent_count = len(sim.agents)
+    initial_world_time = sim.world.now()
     await run_simulation(
         sim, pace=0.0, duration=0.3, world_tick_interval=0.05, refresh_interval=0.05
     )
     assert any(a.breath_count > 0 for a in sim.agents)  # agents breathed
     assert sim.feed_log.new_events(0)[1] > 0  # events recorded
+    records = [
+        json.loads(line)
+        for line in sim.run_context.event_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    snapshots = [
+        json.loads(line)
+        for line in sim.run_context.snapshot_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    started_events = [record for record in records if record["type"] == "simulation_started"]
+    assert len(started_events) == 1
+    started_payload = started_events[0]["payload"]
+    assert started_payload["run_id"] == sim.run_context.run_id
+    assert started_payload["agent_count"] == initial_agent_count
+    assert initial_world_time <= started_payload["world_time"] <= sim.world.now()
+    assert (
+        started_payload["message"] == f"Simulation started: {initial_agent_count} agents breathing."
+    )
+    assert sim.run_context.snapshot_log_path == sim.run_context.run_dir / "snapshots.jsonl"
+    assert snapshots
+    assert snapshots[0]["reason"] == "event:simulation_started"
+    assert snapshots[0]["event_cursor"] == 1
+    assert snapshots[0]["snapshot"]["run_id"] == sim.run_context.run_id
+    assert snapshots[0]["snapshot"]["event_cursor"] == 1
+    assert any(record["reason"] == "world_tick" for record in snapshots)
+    assert sim.feed_log.current_cursor == len(records)
+    assert max(record["event_cursor"] for record in snapshots) <= sim.feed_log.current_cursor
+    assert max(record["event_cursor"] for record in snapshots) <= len(records)
+    assert [json.loads(line) for _, line in sim.replay_archive.iter_lines("events")] == records
+    assert [
+        json.loads(line) for _, line in sim.replay_archive.iter_lines("checkpoints")
+    ] == snapshots
+    json.dumps(snapshots, allow_nan=False)
+    assert sim.run_context.status == "stopped"
+    assert sim.run_context.timing == {
+        "pace": 0.0,
+        "duration": 0.3,
+        "world_tick_interval": 0.05,
+        "refresh_interval": 0.05,
+    }
     for a in sim.agents:  # inboxes freed at shutdown
         assert a.agent_id not in sim.bus.agent_queues
 
@@ -68,6 +118,80 @@ async def test_runner_stops_when_all_dead(tmp_path: Path) -> None:
         sim, pace=0.0, duration=5.0, world_tick_interval=0.05, refresh_interval=0.05
     )
     assert time.perf_counter() - started < 4.0  # returned fast, not at duration
+
+
+async def test_runner_closes_the_shared_decider_after_tasks_settle(tmp_path: Path) -> None:
+    """The runner releases its owned provider facade through the common shutdown path."""
+
+    class _ClosableDecider(MockDecider):
+        def __init__(self) -> None:
+            super().__init__([Decision(tool_calls=[ToolCall("look_around")])] * 20)
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    decider = _ClosableDecider()
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=7,
+        model="mock",
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=decider,
+        vector_store_factory=_fake_factory,
+    )
+
+    await run_simulation(
+        sim,
+        pace=0.0,
+        duration=0.05,
+        world_tick_interval=0.02,
+        refresh_interval=0.02,
+    )
+
+    assert decider.close_calls == 1
+    assert sim.run_context.status == "stopped"
+
+
+def test_build_simulation_shares_one_production_embedder_across_agent_stores(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-agent Chroma collections share one retained immutable MiniLM model."""
+    embedders: list[FakeEmbeddingFunction] = []
+    store_embedders: list[FakeEmbeddingFunction] = []
+
+    def fake_default_embedding() -> FakeEmbeddingFunction:
+        embedding = FakeEmbeddingFunction()
+        embedders.append(embedding)
+        return embedding
+
+    def fake_chroma_store(
+        _agent_id: str,
+        embedding: FakeEmbeddingFunction,
+        *,
+        path: Path,
+    ) -> VectorStore:
+        assert path.parent.name
+        store_embedders.append(embedding)
+        return FakeVectorStore(embedding)
+
+    monkeypatch.setattr(run_module, "default_embedding_function", fake_default_embedding)
+    monkeypatch.setattr(run_module, "ChromaVectorStore", fake_chroma_store)
+
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=7,
+        model="mock",
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=MockDecider([Decision()]),
+    )
+
+    assert len(store_embedders) == len(sim.agents)
+    assert len(embedders) == 1
+    assert all(embedding is embedders[0] for embedding in store_embedders)
 
 
 def test_build_simulation_serializes_the_ollama_provider_by_default(tmp_path: Path) -> None:
@@ -106,6 +230,36 @@ def test_build_simulation_wires_usage_log_and_model(tmp_path: Path) -> None:
         assert agent.model == "mock"
 
 
+def test_build_simulation_exposes_run_context_for_live_api(tmp_path: Path) -> None:
+    """The assembled bundle carries /api/run-ready metadata and artifact paths."""
+    sim = _build(tmp_path, MockDecider([Decision()]))
+    context = sim.run_context
+    assert context.seed == 7
+    assert context.provider == "ollama"
+    assert context.model == "mock"
+    assert context.context_window is None
+    assert context.memory_root == tmp_path / "mem"
+    assert context.run_dir == tmp_path / "runs" / context.run_id
+    assert context.event_log_path == context.run_dir / "events.jsonl"
+    assert context.usage_log_path == context.run_dir / "usage.jsonl"
+    assert context.snapshot_log_path == context.run_dir / "snapshots.jsonl"
+    assert len(context.config_hash) == 64
+    assert context.run_id.startswith("seed-7-")
+    metadata = context.to_metadata(
+        world_time=sim.world.now(),
+        event_cursor=sim.feed_log.current_cursor,
+    )
+    assert metadata["schema"] == 1
+    assert metadata["status"] == "ready"
+    assert metadata["event_cursor"] == 0
+    constants = cast(dict[str, object], metadata["constants"])
+    assert constants["mating_cooldown_seconds"] == MATING_COOLDOWN_SECONDS
+    assert constants["ruins_persist_seconds"] == RUINS_PERSIST_SECONDS
+    assert constants["home_upkeep_materials_per_second"] == HOME_UPKEEP_MATERIALS_PER_SECOND
+    artifacts = cast(dict[str, object], metadata["artifacts"])
+    assert artifacts["snapshots"] == str(context.run_dir / "snapshots.jsonl")
+
+
 def test_build_simulation_gemini_gives_agents_a_large_context_window(tmp_path: Path) -> None:
     """The Gemini path sizes the window so compaction triggers near 500K tokens."""
     sim = build_simulation(
@@ -119,6 +273,7 @@ def test_build_simulation_gemini_gives_agents_a_large_context_window(tmp_path: P
         provider="gemini",
     )
     assert sim.agents
+    assert sim.run_context.context_window == 720_000
     for agent in sim.agents:
         assert 480_000 < agent._compaction_trigger < 520_000
 
@@ -144,6 +299,7 @@ def test_build_simulation_context_tokens_override_wins(tmp_path: Path) -> None:
         context_window=100_000,
     )
     expected_trigger = compaction_budgets(100_000)[1]
+    assert sim.run_context.context_window == 100_000
     for agent in sim.agents:
         assert agent._compaction_trigger == expected_trigger
 

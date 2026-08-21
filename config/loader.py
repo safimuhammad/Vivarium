@@ -29,7 +29,30 @@ from .schema import WorldConfig
 
 logger = get_logger(__name__)
 
-__all__ = ["load_config"]
+__all__ = ["load_config", "load_world_config"]
+
+
+def load_world_config(path: str | Path) -> WorldConfig:
+    """Read and validate a world configuration file without building a world.
+
+    The same read -> parse -> validate pipeline :func:`load_config` runs, stopping
+    one step short. Callers that assemble their own :class:`WorldState` (the
+    run-lifecycle API, which keeps the file's *regions* but replaces its beings and
+    scales its regeneration rates) use this so the config boundary is still the only
+    place YAML is trusted.
+
+    Args:
+        path: Filesystem path to the YAML config (``str`` or :class:`~pathlib.Path`).
+
+    Returns:
+        The validated :class:`~config.schema.WorldConfig`.
+
+    Raises:
+        ConfigError: If the file is missing/unreadable, the YAML is malformed, the
+            document is empty or not a mapping, or it fails schema validation.
+    """
+    config_path = Path(path)
+    return _validate(_parse_yaml(_read_file(config_path), config_path), config_path)
 
 
 def load_config(path: str | Path, *, seed: int | None = None) -> WorldState:
@@ -56,9 +79,7 @@ def load_config(path: str | Path, *, seed: int | None = None) -> WorldState:
     """
     config_path = Path(path)
 
-    raw_text = _read_file(config_path)
-    data = _parse_yaml(raw_text, config_path)
-    config = _validate(data, config_path)
+    config = load_world_config(config_path)
 
     world = WorldState(config.to_regions(), config.to_agents(), rng=make_rng(seed))
     logger.debug(

@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "kit": "spring-terraces",
+  "metadataBytes": 1853,
+  "atlases": [
+    {
+      "id": "spring-terraces-home-components",
+      "path": "homes/hut-spring-terraces/components.png",
+      "group": "home",
+      "regionKit": "spring-terraces",
+      "width": 768,
+      "height": 512,
+      "cellWidth": 128,
+      "cellHeight": 128,
+      "columns": 6,
+      "rows": 4,
+      "compressedBytes": 32041,
+      "decodedBytes": 1572864,
+      "sha256": "23687587900535b1c35f0e08d2236842b41f6d5b251be7ff377a41385a6ac673"
+    },
+    {
+      "id": "spring-terraces-home-details",
+      "path": "homes/hut-spring-terraces/details.png",
+      "group": "home",
+      "regionKit": "spring-terraces",
+      "width": 256,
+      "height": 128,
+      "cellWidth": 32,
+      "cellHeight": 32,
+      "columns": 8,
+      "rows": 4,
+      "compressedBytes": 1222,
+      "decodedBytes": 131072,
+      "sha256": "03ac745420bf56b8def05ce9e155f2661961159a7c60812b5d7a9ac0860602f4"
+    },
+    {
+      "id": "spring-terraces-home-ruins",
+      "path": "homes/hut-spring-terraces/ruins.png",
+      "group": "home",
+      "regionKit": "spring-terraces",
+      "width": 512,
+      "height": 256,
+      "cellWidth": 128,
+      "cellHeight": 128,
+      "columns": 4,
+      "rows": 2,
+      "compressedBytes": 25537,
+      "decodedBytes": 524288,
+      "sha256": "b83a0b2e3b06041e0156729cf76396f8b2fc022917431f06c6cc2cbdf7c99049"
+    },
+    {
+      "id": "spring-terraces-home-yards",
+      "path": "homes/hut-spring-terraces/yards.png",
+      "group": "home",
+      "regionKit": "spring-terraces",
+      "width": 960,
+      "height": 160,
+      "cellWidth": 192,
+      "cellHeight": 160,
+      "columns": 5,
+      "rows": 1,
+      "compressedBytes": 8942,
+      "decodedBytes": 614400,
+      "sha256": "df393d6c9cff482786ecbb4d069eec66a14c591310aa416c7f0327a2682cc520"
+    }
+  ],
+  "yardGeometry": [
+    96,
+    112,
+    80,
+    32
+  ],
+  "yardVariants": [
+    [
+      0,
+      "e8afa94e489fbc1e724816166dce6f151dabcf911e462b22611c40034f28a589"
+    ],
+    [
+      1,
+      "69f31bb4984aee1303ff4ec8bab8679f061d3e03129922db3539ab8c5dd85a4a"
+    ],
+    [
+      2,
+      "98f9d4f327f749a472a0291eeb2a44f39c45cde73951ad189af58f20efa628d4"
+    ],
+    [
+      3,
+      "cae74e681371cf0e63460faf808cbaa1053523767f0aaa201c15661b876ee5bf"
+    ],
+    [
+      4,
+      "8f2568773ec93d2e788d73fc3f6eb6d5bef67a873bab310bb70abab0d3c03483"
+    ]
+  ]
+}

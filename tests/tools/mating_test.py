@@ -27,6 +27,7 @@ from core.constants import (
     MATING_OFFSPRING_MULTIPLIER,
 )
 from core.rng import make_rng
+from core.run_settings import RunSettings
 from tests.conftest import SEED, FakeClock
 from tools.builtin.mating import accept_mating, initiate_mating, reject_mating
 from world.agents import AgentState, AgentStatus
@@ -84,6 +85,11 @@ async def test_initiate_deducts_resources_and_stores_proposal(
     assert inbox[0].scope is ScopeType.TARGETED
     assert inbox[0].target == "wanderer_002"
     assert inbox[0].timestamp == world.now()
+    assert inbox[0].payload["initiator_id"] == "wanderer_001"
+    assert inbox[0].payload["target_id"] == "wanderer_002"
+    assert inbox[0].payload["resources"] == {"energy": 50.0, "materials": 30.0}
+    assert inbox[0].payload["initiator_energy"] == 50.0
+    assert inbox[0].payload["initiator_materials"] == 20.0
     assert result.startswith("Successfully sent the mating request")
 
 
@@ -260,6 +266,10 @@ async def test_reject_refunds_initiator_and_removes_proposal(
     assert inbox[0].type == "mating_rejected"
     assert inbox[0].scope is ScopeType.TARGETED
     assert inbox[0].target == "wanderer_001"
+    assert inbox[0].payload["rejecter_id"] == "wanderer_002"
+    assert inbox[0].payload["initiator_id"] == "wanderer_001"
+    assert inbox[0].payload["target_id"] == "wanderer_002"
+    assert inbox[0].payload["resources_refunded"] == {"energy": 50.0, "materials": 30.0}
     assert result.startswith("Rejection successful")
 
 
@@ -327,8 +337,15 @@ async def test_accept_consumes_both_contributions_and_spawns_offspring(
     assert len(born) == 1
     assert born[0].type == "agent_born"
     assert born[0].scope is ScopeType.LOCAL
+    assert born[0].region == offspring.current_position
     assert born[0].source == offspring.id
     assert born[0].timestamp == world.now()
+    assert born[0].payload["child_id"] == offspring.id
+    assert born[0].payload["parent_ids"] == ["wanderer_001", "wanderer_002"]
+    assert born[0].payload["initiator_id"] == "wanderer_001"
+    assert born[0].payload["acceptor_id"] == "wanderer_002"
+    assert born[0].payload["committed_resources"] == {"energy": 50.0, "materials": 30.0}
+    assert born[0].payload["child_resources"] == {"energy": 80.0, "materials": 48.0}
     assert result.startswith("Successfully accepted mating")
 
 
@@ -628,6 +645,10 @@ async def test_accept_stale_initiator_refunds_escrow_and_drops_proposal(
     assert inbox[0].scope is ScopeType.TARGETED
     assert inbox[0].target == "wanderer_001"
     assert inbox[0].source == "wanderer_001"
+    assert inbox[0].payload["initiator_id"] == "wanderer_001"
+    assert inbox[0].payload["target_id"] == "wanderer_002"
+    assert inbox[0].payload["reason"] == "initiator_ineligible"
+    assert inbox[0].payload["resources_refunded"] == {"energy": 50.0, "materials": 30.0}
 
 
 async def test_accept_stamps_both_parents_cooldown_and_offspring_count(
@@ -740,3 +761,27 @@ async def test_offspring_cap_holds_across_multiple_outstanding_proposals(
     assert (
         world.get_agent_proposals("wanderer_001", "wanderer_003") == {}
     )  # second refunded + dropped
+
+
+async def test_offspring_cap_follows_the_runs_own_ceiling(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    """The population ceiling is a per-run knob; the tools must honour the run's value."""
+    world.run_settings = RunSettings(mating_max_offspring=1)
+    initiator = world.get_agent("wanderer_001")
+    acceptor = world.get_agent("wanderer_002")
+    assert initiator is not None and acceptor is not None
+    initiator.offspring_count = 1
+
+    result = await initiate_mating(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        message="one more?",
+        resources=dict(_VALID_COMMIT),
+    )
+    assert result.startswith("Invalid:")
+    assert not world.pending_proposals
+    # Untouched escrow: a precondition refusal never charges the initiator.
+    assert initiator.current_energy == 100.0

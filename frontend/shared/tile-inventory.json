@@ -1,0 +1,10 @@
+[
+  "ground-a", "ground-b", "ground-c", "ground-d", "ground-e", "ground-f", "ground-g", "ground-h",
+  "path-horizontal", "path-vertical", "path-corner-ne", "path-corner-es", "path-corner-sw", "path-corner-wn", "path-cross", "path-plaza",
+  "water-horizontal", "water-vertical", "water-corner-ne", "water-corner-es", "water-corner-sw", "water-corner-wn", "water-cross", "water-pool",
+  "shore-horizontal", "shore-vertical", "shore-corner-ne", "shore-corner-es", "shore-corner-sw", "shore-corner-wn", "shore-cross", "shore-pool",
+  "soil-a", "soil-b", "soil-c", "soil-d", "flowers-white", "flowers-pink", "rock-small", "rock-large",
+  "shrub-a", "shrub-b", "tree-a", "tree-b", "sapling", "grass-tuft", "fallen-log", "stump",
+  "fence-horizontal", "fence-vertical", "fence-corner-ne", "fence-corner-es", "fence-corner-sw", "fence-corner-wn", "gate", "signpost",
+  "basket", "wood-pile", "stone-pile", "garden-bed", "reeds", "lily", "sparkle", "empty"
+]

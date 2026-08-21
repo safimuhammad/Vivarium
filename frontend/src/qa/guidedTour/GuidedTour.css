@@ -1,0 +1,65 @@
+.guided-tour-overlay {
+  position: fixed;
+  z-index: 100;
+  inset: 12px 12px auto 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 10px 14px;
+  color: #f5f0d8;
+  background: color-mix(in srgb, #17221b 94%, transparent);
+  border: 2px solid #d8bb74;
+  border-radius: 12px;
+  box-shadow: 0 6px 0 #080c09, 0 18px 36px rgb(0 0 0 / 35%);
+  font: 600 13px/1.4 system-ui, sans-serif;
+  pointer-events: none;
+}
+
+.guided-tour-overlay p {
+  margin: 0;
+}
+
+.guided-tour-overlay__progress {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.guided-tour-overlay__watch-line {
+  font-style: italic;
+  color: #f5f0d8;
+  opacity: 0.9;
+}
+
+.guided-tour-overlay__status {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.guided-tour-toggle {
+  position: fixed;
+  z-index: 100;
+  inset: 12px auto auto 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  color: #f5f0d8;
+  background: color-mix(in srgb, #17221b 94%, transparent);
+  border: 2px solid #d8bb74;
+  border-radius: 12px;
+  font: 600 13px/1.2 system-ui, sans-serif;
+}
+
+.guided-tour-toggle input {
+  min-width: 20px;
+  min-height: 20px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guided-tour-overlay,
+  .guided-tour-toggle {
+    transition: none !important;
+  }
+}

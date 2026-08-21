@@ -1,0 +1,825 @@
+{
+  "schema": 1,
+  "tileSize": 32,
+  "source": {
+    "file": "scratchpad/2d-production-art/source/imagegen-concepts/worn-heartland-landmarks-approved.png",
+    "width": 512,
+    "height": 256,
+    "sha256": "e66db44bc88e532189562826b100de7afc389703e7ee9528b47b3f768e444957"
+  },
+  "images": {
+    "terrain": {
+      "file": "terrain.png",
+      "width": 256,
+      "height": 128,
+      "compressedBytes": 4300,
+      "decodedBytes": 131072,
+      "sha256": "4786336646389991d3a2231826337f3747af1ca3d17591a1b8ac2c0a916de165"
+    },
+    "landmarks": {
+      "file": "landmarks.png",
+      "width": 512,
+      "height": 384,
+      "compressedBytes": 20083,
+      "decodedBytes": 786432,
+      "sha256": "f87432cbaf6f0f1cc62dd6975b0b1c6b452eeab48b55e1d82fff63a331c2fbeb"
+    }
+  },
+  "frames": [
+    {
+      "id": "terrain.grass.olive.0",
+      "image": "terrain",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "terrain.grass.olive.1",
+      "image": "terrain",
+      "rect": {
+        "x": 32,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "terrain.grass.olive.2",
+      "image": "terrain",
+      "rect": {
+        "x": 64,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "terrain.grass.olive.3",
+      "image": "terrain",
+      "rect": {
+        "x": 96,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "terrain.grass.worn.0",
+      "image": "terrain",
+      "rect": {
+        "x": 128,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "terrain.grass.worn.1",
+      "image": "terrain",
+      "rect": {
+        "x": 160,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "terrain.garden.floor.0",
+      "image": "terrain",
+      "rect": {
+        "x": 192,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "terrain.garden.floor.1",
+      "image": "terrain",
+      "rect": {
+        "x": 224,
+        "y": 0,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "terrain.road.isolated",
+      "image": "terrain",
+      "rect": {
+        "x": 0,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": []
+    },
+    {
+      "id": "terrain.road.end.n",
+      "image": "terrain",
+      "rect": {
+        "x": 32,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "N"
+      ]
+    },
+    {
+      "id": "terrain.road.end.e",
+      "image": "terrain",
+      "rect": {
+        "x": 64,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "E"
+      ]
+    },
+    {
+      "id": "terrain.road.end.s",
+      "image": "terrain",
+      "rect": {
+        "x": 96,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "S"
+      ]
+    },
+    {
+      "id": "terrain.road.end.w",
+      "image": "terrain",
+      "rect": {
+        "x": 128,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "W"
+      ]
+    },
+    {
+      "id": "terrain.road.straight.ns",
+      "image": "terrain",
+      "rect": {
+        "x": 160,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "N",
+        "S"
+      ]
+    },
+    {
+      "id": "terrain.road.straight.ew",
+      "image": "terrain",
+      "rect": {
+        "x": 192,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "E",
+        "W"
+      ]
+    },
+    {
+      "id": "terrain.road.corner.ne",
+      "image": "terrain",
+      "rect": {
+        "x": 224,
+        "y": 32,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "N",
+        "E"
+      ]
+    },
+    {
+      "id": "terrain.road.corner.se",
+      "image": "terrain",
+      "rect": {
+        "x": 0,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "E",
+        "S"
+      ]
+    },
+    {
+      "id": "terrain.road.corner.sw",
+      "image": "terrain",
+      "rect": {
+        "x": 32,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "S",
+        "W"
+      ]
+    },
+    {
+      "id": "terrain.road.corner.nw",
+      "image": "terrain",
+      "rect": {
+        "x": 64,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "W",
+        "N"
+      ]
+    },
+    {
+      "id": "terrain.road.tee.n",
+      "image": "terrain",
+      "rect": {
+        "x": 96,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "N",
+        "E",
+        "W"
+      ]
+    },
+    {
+      "id": "terrain.road.tee.e",
+      "image": "terrain",
+      "rect": {
+        "x": 128,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "N",
+        "E",
+        "S"
+      ]
+    },
+    {
+      "id": "terrain.road.tee.s",
+      "image": "terrain",
+      "rect": {
+        "x": 160,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "E",
+        "S",
+        "W"
+      ]
+    },
+    {
+      "id": "terrain.road.tee.w",
+      "image": "terrain",
+      "rect": {
+        "x": 192,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "N",
+        "S",
+        "W"
+      ]
+    },
+    {
+      "id": "terrain.road.cross",
+      "image": "terrain",
+      "rect": {
+        "x": 224,
+        "y": 64,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "N",
+        "E",
+        "S",
+        "W"
+      ]
+    },
+    {
+      "id": "terrain.swale.straight.ew",
+      "image": "terrain",
+      "rect": {
+        "x": 0,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "E",
+        "W"
+      ]
+    },
+    {
+      "id": "terrain.swale.straight.ns",
+      "image": "terrain",
+      "rect": {
+        "x": 32,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "N",
+        "S"
+      ]
+    },
+    {
+      "id": "terrain.swale.corner.ne",
+      "image": "terrain",
+      "rect": {
+        "x": 64,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "N",
+        "E"
+      ]
+    },
+    {
+      "id": "terrain.swale.corner.se",
+      "image": "terrain",
+      "rect": {
+        "x": 96,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "E",
+        "S"
+      ]
+    },
+    {
+      "id": "terrain.swale.corner.sw",
+      "image": "terrain",
+      "rect": {
+        "x": 128,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "S",
+        "W"
+      ]
+    },
+    {
+      "id": "terrain.swale.corner.nw",
+      "image": "terrain",
+      "rect": {
+        "x": 160,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "W",
+        "N"
+      ]
+    },
+    {
+      "id": "terrain.ford.ns",
+      "image": "terrain",
+      "rect": {
+        "x": 192,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "N",
+        "S"
+      ]
+    },
+    {
+      "id": "terrain.ford.ew",
+      "image": "terrain",
+      "rect": {
+        "x": 224,
+        "y": 96,
+        "width": 32,
+        "height": 32
+      },
+      "pivot": {
+        "x": 0,
+        "y": 0
+      },
+      "connections": [
+        "E",
+        "W"
+      ]
+    },
+    {
+      "id": "landmark.hero-oak",
+      "image": "landmarks",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 128,
+        "height": 128
+      },
+      "pivot": {
+        "x": 64,
+        "y": 124
+      }
+    },
+    {
+      "id": "landmark.forest-edge.cluster.0",
+      "image": "landmarks",
+      "rect": {
+        "x": 128,
+        "y": 0,
+        "width": 128,
+        "height": 128
+      },
+      "pivot": {
+        "x": 64,
+        "y": 124
+      }
+    },
+    {
+      "id": "landmark.forest-edge.cluster.1",
+      "image": "landmarks",
+      "rect": {
+        "x": 256,
+        "y": 0,
+        "width": 128,
+        "height": 128
+      },
+      "pivot": {
+        "x": 64,
+        "y": 124
+      }
+    },
+    {
+      "id": "landmark.garden.wall",
+      "image": "landmarks",
+      "rect": {
+        "x": 384,
+        "y": 0,
+        "width": 64,
+        "height": 64
+      },
+      "pivot": {
+        "x": 32,
+        "y": 60
+      }
+    },
+    {
+      "id": "landmark.garden.corner",
+      "image": "landmarks",
+      "rect": {
+        "x": 448,
+        "y": 0,
+        "width": 64,
+        "height": 64
+      },
+      "pivot": {
+        "x": 32,
+        "y": 60
+      }
+    },
+    {
+      "id": "landmark.garden.broken-wall",
+      "image": "landmarks",
+      "rect": {
+        "x": 384,
+        "y": 64,
+        "width": 64,
+        "height": 64
+      },
+      "pivot": {
+        "x": 32,
+        "y": 60
+      }
+    },
+    {
+      "id": "landmark.garden.gate",
+      "image": "landmarks",
+      "rect": {
+        "x": 448,
+        "y": 64,
+        "width": 64,
+        "height": 64
+      },
+      "pivot": {
+        "x": 32,
+        "y": 60
+      }
+    },
+    {
+      "id": "landmark.flower-colony",
+      "image": "landmarks",
+      "rect": {
+        "x": 0,
+        "y": 128,
+        "width": 48,
+        "height": 48
+      },
+      "pivot": {
+        "x": 24,
+        "y": 44
+      }
+    },
+    {
+      "id": "landmark.shrub",
+      "image": "landmarks",
+      "rect": {
+        "x": 48,
+        "y": 128,
+        "width": 48,
+        "height": 48
+      },
+      "pivot": {
+        "x": 24,
+        "y": 44
+      }
+    },
+    {
+      "id": "landmark.tall-grass",
+      "image": "landmarks",
+      "rect": {
+        "x": 96,
+        "y": 128,
+        "width": 48,
+        "height": 48
+      },
+      "pivot": {
+        "x": 24,
+        "y": 44
+      }
+    },
+    {
+      "id": "landmark.rocks",
+      "image": "landmarks",
+      "rect": {
+        "x": 144,
+        "y": 128,
+        "width": 48,
+        "height": 48
+      },
+      "pivot": {
+        "x": 24,
+        "y": 44
+      }
+    },
+    {
+      "id": "landmark.log",
+      "image": "landmarks",
+      "rect": {
+        "x": 192,
+        "y": 128,
+        "width": 48,
+        "height": 48
+      },
+      "pivot": {
+        "x": 24,
+        "y": 44
+      }
+    },
+    {
+      "id": "landmark.stump",
+      "image": "landmarks",
+      "rect": {
+        "x": 240,
+        "y": 128,
+        "width": 48,
+        "height": 48
+      },
+      "pivot": {
+        "x": 24,
+        "y": 44
+      }
+    },
+    {
+      "id": "landmark.ruined-garden",
+      "image": "landmarks",
+      "rect": {
+        "x": 320,
+        "y": 128,
+        "width": 128,
+        "height": 128
+      },
+      "pivot": {
+        "x": 64,
+        "y": 124
+      }
+    },
+    {
+      "id": "landmark.meadow-edge.north",
+      "image": "landmarks",
+      "rect": {
+        "x": 0,
+        "y": 256,
+        "width": 128,
+        "height": 64
+      },
+      "pivot": {
+        "x": 64,
+        "y": 60
+      }
+    },
+    {
+      "id": "landmark.meadow-edge.south",
+      "image": "landmarks",
+      "rect": {
+        "x": 128,
+        "y": 256,
+        "width": 128,
+        "height": 64
+      },
+      "pivot": {
+        "x": 64,
+        "y": 60
+      }
+    },
+    {
+      "id": "landmark.meadow-edge.west",
+      "image": "landmarks",
+      "rect": {
+        "x": 256,
+        "y": 256,
+        "width": 64,
+        "height": 128
+      },
+      "pivot": {
+        "x": 32,
+        "y": 124
+      }
+    },
+    {
+      "id": "landmark.meadow-edge.east",
+      "image": "landmarks",
+      "rect": {
+        "x": 320,
+        "y": 256,
+        "width": 64,
+        "height": 128
+      },
+      "pivot": {
+        "x": 32,
+        "y": 124
+      }
+    }
+  ]
+}

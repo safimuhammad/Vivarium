@@ -67,6 +67,9 @@ async def move(world: WorldState, event_bus: EventBus, agent_id: str, destinatio
             f"it is not reachable from {current_pos}."
         )
 
+    # Pre-mutation snapshot for the renderer (spec §4.2): both events report the
+    # mover's energy after the move cost, so the "before" side is read here.
+    agent_energy_before = agent_state.current_energy
     world.modify_agent_energy(agent_id, -MOVE_ENERGY_COST)
 
     left_event = Event(
@@ -74,10 +77,16 @@ async def move(world: WorldState, event_bus: EventBus, agent_id: str, destinatio
         source=agent_state.id,
         region=current_pos,
         payload={
+            "agent_id": agent_state.id,
+            "from_region": current_pos,
+            "to_region": destination_region.name,
+            "move_energy_cost": MOVE_ENERGY_COST,
+            "agent_energy_before": agent_energy_before,
+            "agent_energy": agent_state.current_energy,
             "message": (
                 f"{agent_state.name} has left the region {current_pos}\n"
                 f" Currently en route to {destination_region.name}"
-            )
+            ),
         },
         scope=ScopeType.LOCAL,
         timestamp=world.now(),
@@ -88,10 +97,16 @@ async def move(world: WorldState, event_bus: EventBus, agent_id: str, destinatio
         source=agent_state.id,
         region=destination_region.name,
         payload={
+            "agent_id": agent_state.id,
+            "from_region": current_pos,
+            "to_region": destination_region.name,
+            "move_energy_cost": MOVE_ENERGY_COST,
+            "agent_energy_before": agent_energy_before,
+            "agent_energy": agent_state.current_energy,
             "message": (
                 f"{agent_state.name} has entered the region {destination_region.name}\n"
                 f" Migrated from {current_pos}"
-            )
+            ),
         },
         scope=ScopeType.LOCAL,
         timestamp=world.now(),

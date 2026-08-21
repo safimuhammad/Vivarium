@@ -175,7 +175,19 @@ pip install -r requirements.txt
 
 ### Run
 
-> 🚧 **Project in progress** — entry point coming in Layer 1.
+**One command brings the whole piece up:**
+
+```bash
+npm run live
+```
+
+It starts the live API with **no run** (it reports `status: "ready"`) and the frontend
+together, then prints the URL. Everything after that happens in the browser: the landing
+page, the configuration screen, and **"Let's go live"**, which starts the first world from
+the settings you chose. There is no separate backend step.
+
+*(`npm run dev:observatory` is the same launcher with the old behaviour — the API starts a
+run of its own from CLI flags. `python -m server.app --idle` is the bare idle server.)*
 
 ### Configure the world
 

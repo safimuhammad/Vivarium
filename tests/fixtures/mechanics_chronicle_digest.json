@@ -1,0 +1,167 @@
+{
+  "breath_count": 3,
+  "events": [
+    {
+      "payload": {
+        "agent_energy": 110.0,
+        "agent_energy_before": 100.0,
+        "agent_id": "wanderer_001",
+        "agent_materials": 50.0,
+        "agent_materials_before": 50.0,
+        "agent_name": "Ada",
+        "amount": 10.0,
+        "display_only": false,
+        "message": "Agent ID:wanderer_001\n Agent Name: Ada Successfully Harvested 10.0 of energy from Region alpha",
+        "region": "alpha",
+        "region_energy": 90.0,
+        "region_energy_before": 100.0,
+        "region_materials": 100.0,
+        "region_materials_before": 100.0,
+        "resource_type": "energy"
+      },
+      "region": "alpha",
+      "scope": "local",
+      "source": "wanderer_001",
+      "target": null,
+      "timestamp": 1000000.0,
+      "type": "resource_changed"
+    },
+    {
+      "payload": {
+        "display_only": true,
+        "message": "The meadow is awake.",
+        "region": "alpha",
+        "speak_energy_cost": 0.5,
+        "speaker_energy": 109.5,
+        "speaker_energy_before": 110.0,
+        "speaker_id": "wanderer_001",
+        "speaker_name": "Ada",
+        "target_id": null
+      },
+      "region": "alpha",
+      "scope": "local",
+      "source": "wanderer_001",
+      "target": null,
+      "timestamp": 1000000.0,
+      "type": "speak"
+    },
+    {
+      "payload": {
+        "agent_energy": 104.5,
+        "agent_energy_before": 109.5,
+        "agent_id": "wanderer_001",
+        "display_only": false,
+        "from_region": "alpha",
+        "message": "Ada has left the region alpha\n Currently en route to beta",
+        "move_energy_cost": 5.0,
+        "to_region": "beta"
+      },
+      "region": "alpha",
+      "scope": "local",
+      "source": "wanderer_001",
+      "target": null,
+      "timestamp": 1000000.0,
+      "type": "agent_left_region"
+    },
+    {
+      "payload": {
+        "agent_energy": 104.5,
+        "agent_energy_before": 109.5,
+        "agent_id": "wanderer_001",
+        "display_only": false,
+        "from_region": "alpha",
+        "message": "Ada has entered the region beta\n Migrated from alpha",
+        "move_energy_cost": 5.0,
+        "to_region": "beta"
+      },
+      "region": "beta",
+      "scope": "local",
+      "source": "wanderer_001",
+      "target": null,
+      "timestamp": 1000000.0,
+      "type": "agent_entered_region"
+    }
+  ],
+  "schema": 1,
+  "sha256": "18a6ccbacd7b43c7f1f116c4d9d0611107cd2d9b0656cb93a2dd16dbd42459d4",
+  "snapshot": {
+    "agents": [
+      {
+        "died_at": null,
+        "energy": 104.5,
+        "home_id": null,
+        "id": "wanderer_001",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 50.0,
+        "name": "Ada",
+        "offspring_count": 0,
+        "persona": "Curious and careful.",
+        "position": "beta",
+        "status": "alive"
+      },
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_002",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 50.0,
+        "name": "Boris",
+        "offspring_count": 0,
+        "persona": "Bold and brash.",
+        "position": "alpha",
+        "status": "alive"
+      }
+    ],
+    "event_cursor": 4,
+    "homes": [],
+    "pending_proposals": [],
+    "region_pressure": [
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 2,
+        "region": "alpha"
+      },
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 1,
+        "region": "beta"
+      }
+    ],
+    "regions": [
+      {
+        "connections": [
+          "beta"
+        ],
+        "current_energy": 91.0,
+        "current_materials": 101.0,
+        "description": "A modest meadow.",
+        "energy_rate": 1.0,
+        "materials_rate": 1.0,
+        "max_energy": 500.0,
+        "max_materials": 500.0,
+        "name": "alpha"
+      },
+      {
+        "connections": [
+          "alpha"
+        ],
+        "current_energy": 202.0,
+        "current_materials": 50.5,
+        "description": "A quiet hollow.",
+        "energy_rate": 2.0,
+        "materials_rate": 0.5,
+        "max_energy": 500.0,
+        "max_materials": 500.0,
+        "name": "beta"
+      }
+    ],
+    "ruins": [],
+    "run_id": "<run>",
+    "schema": 1,
+    "seed_persona": "You have just awoken into this world \u2014 aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover \u2014 and freely reshape \u2014 the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+    "world_time": 1000005.0
+  }
+}

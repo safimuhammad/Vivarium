@@ -76,6 +76,12 @@ async def test_build_home_creates_home_deducts_materials_and_emits_event(
     assert built[0].region == "alpha"
     assert built[0].source == "wanderer_001"
     assert built[0].timestamp == world.now()
+    assert built[0].payload["home_id"] == home.home_id
+    assert built[0].payload["target_home"] == home.home_id
+    assert built[0].payload["builder_id"] == "wanderer_001"
+    assert built[0].payload["owner_id"] == "wanderer_001"
+    assert built[0].payload["materials_cost"] == HOME_BUILD_MATERIALS_COST
+    assert built[0].payload["integrity"] == HOME_MAX_INTEGRITY
     assert result.startswith("You raise a home here.")
 
 
@@ -184,6 +190,12 @@ async def test_use_hearth_converts_materials_to_energy_at_own_home(
     assert used[0].scope is ScopeType.LOCAL
     assert used[0].region == "alpha"
     assert used[0].timestamp == world.now()
+    assert used[0].payload["agent_id"] == "wanderer_001"
+    assert used[0].payload["home_id"] == "home_ada"
+    assert used[0].payload["materials_burned"] == burned
+    assert used[0].payload["energy_gained"] == burned * HEARTH_ENERGY_PER_MATERIAL
+    assert used[0].payload["agent_energy"] == ada.current_energy
+    assert used[0].payload["agent_materials"] == ada.current_materials
     # Neither threshold reached (energy 60 < 500, materials 30 < 300): no announce.
     assert [e for e in events if e.type == "agent_started_hoarding"] == []
     assert result.startswith("You rest at your hearth")
@@ -331,6 +343,10 @@ async def test_pledge_home_joins_as_stakeholder_and_emits_event(
     assert joined[0].region == "alpha"
     assert joined[0].source == "wanderer_002"
     assert joined[0].timestamp == world.now()
+    assert joined[0].payload["agent_id"] == "wanderer_002"
+    assert joined[0].payload["home_id"] == "h1"
+    assert joined[0].payload["owner_id"] == "wanderer_001"
+    assert joined[0].payload["stakeholders"] == ["wanderer_001", "wanderer_002"]
     assert result.startswith("You pledge yourself to this home")
 
 
@@ -471,6 +487,10 @@ async def test_leave_home_departs_prunes_and_emits_event(
     left = [e for e in event_bus.get_events("wanderer_002") if e.type == "home_left"]
     assert len(left) == 1
     assert left[0].scope is ScopeType.LOCAL and left[0].region == "alpha"
+    assert left[0].payload["agent_id"] == "wanderer_002"
+    assert left[0].payload["home_id"] == "h1"
+    assert left[0].payload["previous_stakeholders"] == ["wanderer_001", "wanderer_002"]
+    assert left[0].payload["stakeholders"] == ["wanderer_001"]
     assert result.startswith("You give up your place")
 
 
@@ -636,6 +656,10 @@ async def test_deposit_to_home_crossing_threshold_announces_once(
     assert started[0].scope is ScopeType.LOCAL
     assert started[0].region == "alpha"
     assert started[0].timestamp == world.now()
+    assert started[0].payload["home_id"] == "home_ada"
+    assert started[0].payload["target_home"] == "home_ada"
+    assert started[0].payload["agent_id"] == "wanderer_001"
+    assert started[0].payload["vault_materials"] == HOARDING_MATERIALS_THRESHOLD + 10.0
 
     # Deposit again while already hoarding -> no second announcement.
     await deposit_to_home(world, event_bus, "wanderer_001", 20.0)
@@ -1045,6 +1069,14 @@ async def test_break_in_breaches_at_zero_and_announces(
     breached = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_breached"]
     assert len(breached) == 1
     assert breached[0].scope is ScopeType.LOCAL and breached[0].region == "alpha"
+    assert breached[0].payload["home_id"] == "h1"
+    assert breached[0].payload["target_home"] == "h1"
+    assert breached[0].payload["breacher_id"] == "wanderer_002"
+    assert breached[0].payload["intent"] == "thieve"
+    assert breached[0].payload["breachers"] == ["wanderer_002"]
+    assert breached[0].payload["energy_cost"] == BREAKIN_ENERGY_COST
+    assert breached[0].payload["materials_cost"] == BREAKIN_MATERIALS_COST
+    assert breached[0].payload["integrity_damage"] == BREAKIN_INTEGRITY_DAMAGE
     assert "break" in result.lower()
 
 
@@ -1197,6 +1229,13 @@ async def test_break_in_thieve_splits_vault_conserved_and_leaves_standing_at_zer
     thieved = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_thieved"]
     assert len(thieved) == 1
     assert thieved[0].scope is ScopeType.LOCAL and thieved[0].region == "alpha"
+    assert thieved[0].payload["home_id"] == "h1"
+    assert thieved[0].payload["target_home"] == "h1"
+    assert thieved[0].payload["breacher_id"] == "wanderer_002"
+    assert thieved[0].payload["intent"] == "thieve"
+    assert thieved[0].payload["recipients"] == ["wanderer_002", "raider_a"]
+    assert thieved[0].payload["loot"] == {"materials": 90.0}
+    assert thieved[0].payload["loot_shares"] == {"wanderer_002": 45.0, "raider_a": 45.0}
     assert "strip" in result.lower()
 
 
@@ -1334,6 +1373,15 @@ async def test_break_in_colonize_seizes_owner_and_homeless_breachers(
     assert home.breachers == set()
     colonized = [e for e in event_bus.get_events("wanderer_001") if e.type == "home_colonized"]
     assert len(colonized) == 1
+    assert colonized[0].payload["home_id"] == "h1"
+    assert colonized[0].payload["target_home"] == "h1"
+    assert colonized[0].payload["breacher_id"] == "wanderer_002"
+    assert colonized[0].payload["intent"] == "colonize"
+    assert colonized[0].payload["previous_owner_id"] == "wanderer_001"
+    assert colonized[0].payload["previous_stakeholders"] == ["wanderer_001"]
+    assert colonized[0].payload["new_owner_id"] == "wanderer_002"
+    assert colonized[0].payload["new_stakeholders"] == ["raider_a", "wanderer_002"]
+    assert colonized[0].payload["vault_materials"] == 30.0
     assert "seiz" in result.lower() or "take it" in result.lower()
 
 
@@ -1450,6 +1498,13 @@ async def test_scavenge_ruins_moves_remnant_to_personal_conserving(
     assert boris.current_materials == pytest.approx(15.0)  # moved, not minted
     scav = [e for e in event_bus.get_events("wanderer_002") if e.type == "ruins_scavenged"]
     assert len(scav) == 1 and scav[0].scope is ScopeType.LOCAL and scav[0].region == "alpha"
+    assert scav[0].payload["agent_id"] == "wanderer_002"
+    assert scav[0].payload["home_id"] == "h1"
+    assert scav[0].payload["target_home"] == "h1"
+    assert scav[0].payload["resource_type"] == "materials"
+    assert scav[0].payload["amount"] == 15.0
+    assert scav[0].payload["remnant_materials"] == pytest.approx(remnant - 15.0)
+    assert scav[0].payload["agent_materials"] == 15.0
     assert result.startswith("You pick")
 
 

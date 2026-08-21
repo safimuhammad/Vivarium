@@ -38,8 +38,15 @@ async def test_move_relocates_agent_and_emits_both_region_events(
     assert left_inbox[0].region == "alpha"
     assert left_inbox[0].scope is ScopeType.LOCAL
     assert left_inbox[0].timestamp == world.now()
+    assert left_inbox[0].payload["agent_id"] == "wanderer_001"
+    assert left_inbox[0].payload["from_region"] == "alpha"
+    assert left_inbox[0].payload["to_region"] == "beta"
+    assert left_inbox[0].payload["move_energy_cost"] == MOVE_ENERGY_COST
+    assert left_inbox[0].payload["agent_energy"] == mover.current_energy
     assert len(enter_inbox) == 1 and enter_inbox[0].type == "agent_entered_region"
     assert enter_inbox[0].region == "beta"
+    assert enter_inbox[0].payload["from_region"] == "alpha"
+    assert enter_inbox[0].payload["to_region"] == "beta"
 
     assert result == "Agent Moved from alpha to beta Successfully"
 

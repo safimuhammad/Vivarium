@@ -16,6 +16,7 @@ Two jobs:
 from __future__ import annotations
 
 import random
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -23,7 +24,7 @@ from core.constants import HOME_BUILD_MATERIALS_COST, HOME_MAX_INTEGRITY, RUINS_
 from core.rng import make_rng
 from tests.conftest import FakeClock
 from world.agents import AgentState, AgentStatus
-from world.homes import HomeStatus
+from world.homes import Home, HomeStatus
 from world.regions import Region, ResourceTypes
 from world.world import WorldState
 
@@ -64,6 +65,121 @@ def test_positional_construction_backward_compatible(
     world = WorldState(regions, agents)
     assert {r.name for r in world.get_all_regions()} == {"alpha", "beta"}
     assert {a.id for a in world.get_all_agents()} == {"wanderer_001", "wanderer_002"}
+
+
+def test_region_pressure_initializes_from_non_dead_agents_and_all_structures(
+    regions: list[Region],
+    agents: list[AgentState],
+) -> None:
+    """Construction records current occupied capacity for exact known region names."""
+    agents.append(make_agent("dead_alpha"))
+    agents[-1].status = AgentStatus.DEAD
+    agents.append(make_agent("unknown_agent", position="Alpha"))
+    homes = [
+        Home("home_alpha", "wanderer_001", "alpha", 100.0, 1.0, 1.0),
+        Home(
+            "ruin_beta",
+            "wanderer_002",
+            "beta",
+            0.0,
+            1.0,
+            1.0,
+            status=HomeStatus.RUIN,
+        ),
+        Home("unknown_home", "wanderer_001", "Alpha", 100.0, 1.0, 1.0),
+    ]
+
+    state = WorldState(regions, agents, homes=homes)
+
+    assert [
+        (
+            pressure.region,
+            pressure.population_high_water,
+            pressure.built_footprint_high_water,
+        )
+        for pressure in state.get_region_pressure()
+    ] == [
+        ("alpha", 2, 1),
+        ("beta", 0, 1),
+    ]
+
+
+def test_region_pressure_is_detached_frozen_sorted_and_monotonic(world: WorldState) -> None:
+    """Successful occupancy mutations raise pressure while departures never lower it."""
+    initial = world.get_region_pressure()
+    assert [pressure.region for pressure in initial] == ["alpha", "beta"]
+    assert initial[0].population_high_water == 2
+    with pytest.raises(FrozenInstanceError):
+        initial[0].population_high_water = 99  # type: ignore[misc]
+    initial.clear()
+    assert world.get_region_pressure()[0].population_high_water == 2
+
+    newborn = make_agent("wanderer_003")
+    assert world.add_agent(newborn) is True
+    assert world.add_agent(newborn) is False
+    assert world.remove_agent(newborn) is True
+    assert world.get_region_pressure()[0].population_high_water == 3
+
+    dead = make_agent("dead_beta", position="beta")
+    dead.status = AgentStatus.DEAD
+    assert world.add_agent(dead) is True
+    assert world.get_region_pressure()[1].population_high_water == 0
+
+    assert world.move_agent("wanderer_001", "beta") is True
+    assert world.move_agent("wanderer_001", "missing") is False
+    assert world.move_agent("wanderer_001", "alpha") is True
+    world.add_region(
+        Region(
+            name="gamma",
+            description="A non-adjacent reach.",
+            connections=[],
+            energy_rate=1.0,
+            materials_rate=1.0,
+            current_energy=10.0,
+            current_materials=10.0,
+            max_energy=100.0,
+            max_materials=100.0,
+        )
+    )
+    before_non_adjacent_move = world.get_region_pressure()
+    assert world.move_agent("wanderer_001", "gamma") is False
+    assert world.get_region_pressure() == before_non_adjacent_move
+    pressure = {item.region: item for item in world.get_region_pressure()}
+    assert pressure["alpha"].population_high_water == 3
+    assert pressure["beta"].population_high_water == 1
+    assert world.kill_agent("wanderer_002")
+    assert {
+        item.region: item.population_high_water for item in world.get_region_pressure()
+    }["alpha"] == 3
+
+    assert world.build_home(
+        "home_pressure",
+        "wanderer_001",
+        "alpha",
+        built_at=world.now(),
+        integrity=HOME_MAX_INTEGRITY,
+    )
+    assert not world.build_home(
+        "home_pressure",
+        "wanderer_001",
+        "alpha",
+        built_at=world.now(),
+        integrity=HOME_MAX_INTEGRITY,
+    )
+    assert world.make_ruin("home_pressure")
+    assert world.scavenge_ruin("home_pressure", HOME_BUILD_MATERIALS_COST) > 0.0
+    assert world.remove_home("home_pressure")
+    assert world.build_home(
+        "unknown_region_home",
+        "wanderer_001",
+        "Alpha",
+        built_at=world.now(),
+        integrity=HOME_MAX_INTEGRITY,
+    )
+    pressure = {item.region: item for item in world.get_region_pressure()}
+    assert pressure["alpha"].built_footprint_high_water == 1
+    assert pressure["beta"].built_footprint_high_water == 0
+    assert "Alpha" not in pressure
 
 
 def test_world_exposes_injected_rng() -> None:

@@ -40,7 +40,14 @@ async def test_harvest_energy_moves_region_stock_to_agent(
     assert len(inbox) == 1
     assert inbox[0].type == "resource_changed"
     assert inbox[0].scope is ScopeType.LOCAL
+    assert inbox[0].region == "alpha"
     assert inbox[0].timestamp == world.now()
+    assert inbox[0].payload["agent_id"] == "wanderer_001"
+    assert inbox[0].payload["region"] == "alpha"
+    assert inbox[0].payload["resource_type"] == "energy"
+    assert inbox[0].payload["amount"] == 30.0
+    assert inbox[0].payload["agent_energy"] == 130.0
+    assert inbox[0].payload["region_energy"] == 70.0
     assert result.startswith("Successfully harvested")
 
 
@@ -119,6 +126,8 @@ async def test_harvest_crossing_into_hoarding_announces_it(
     assert len(started) == 1
     assert started[0].scope is ScopeType.LOCAL and started[0].region == "alpha"
     assert started[0].source == "wanderer_001" and "message" in started[0].payload
+    assert started[0].payload["agent_id"] == "wanderer_001"
+    assert started[0].payload["materials"] == 350.0
 
 
 async def test_harvest_when_already_hoarding_does_not_reannounce(
@@ -166,8 +175,16 @@ async def test_transfer_energy_moves_between_co_located_agents(
     assert len(inbox) == 1
     assert inbox[0].type == "resource_transferred"
     assert inbox[0].scope is ScopeType.LOCAL
+    assert inbox[0].region == "alpha"
     assert inbox[0].target == "wanderer_002"
     assert inbox[0].timestamp == world.now()
+    assert inbox[0].payload["sender_id"] == "wanderer_001"
+    assert inbox[0].payload["receiver_id"] == "wanderer_002"
+    assert inbox[0].payload["region"] == "alpha"
+    assert inbox[0].payload["resource_type"] == "energy"
+    assert inbox[0].payload["amount"] == 20.0
+    assert inbox[0].payload["sender_energy"] == 80.0
+    assert inbox[0].payload["receiver_energy"] == 120.0
     assert result.startswith("Successfully transferred")
 
 
@@ -495,6 +512,11 @@ async def test_transfer_energy_revives_emits_agent_recovered(
     recovered = [e for e in event_bus.get_events("wanderer_002") if e.type == "agent_recovered"]
     assert recovered and recovered[0].scope is ScopeType.LOCAL
     assert recovered[0].source == "wanderer_001" and recovered[0].target == "wanderer_002"
+    assert recovered[0].payload["giver_id"] == "wanderer_001"
+    assert recovered[0].payload["revived_id"] == "wanderer_002"
+    assert recovered[0].payload["resource_type"] == "energy"
+    assert recovered[0].payload["amount"] == 10.0
+    assert recovered[0].payload["revived_energy"] == 14.0
 
 
 async def test_transfer_not_enough_to_revive_no_event(

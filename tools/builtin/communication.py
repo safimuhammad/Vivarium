@@ -67,15 +67,30 @@ async def speak(
     if target is not None and world.get_agent(target) is None:
         return f"Error: Cannot whisper — agent {target!r} does not exist."
 
+    # Pre-mutation snapshot for the renderer (spec §4.2): the payload reports the
+    # speaker's energy after the utterance is paid for, so the "before" side is read
+    # here. Deducting before building the payload is invisible to everything else --
+    # there is no await between the two.
+    speaker_energy_before = agent_state.current_energy
+    world.modify_agent_energy(agent_id, -SPEAK_ENERGY_COST)
     event = Event(
         type="speak",
         source=agent_state.id,
-        payload={"message": message},
+        payload={
+            "message": message,
+            "speaker_id": agent_state.id,
+            "speaker_name": agent_state.name,
+            "target_id": target,
+            "region": agent_state.current_position,
+            "speak_energy_cost": SPEAK_ENERGY_COST,
+            "speaker_energy_before": speaker_energy_before,
+            "speaker_energy": agent_state.current_energy,
+        },
         scope=ScopeType.TARGETED if target else ScopeType.LOCAL,
+        region=agent_state.current_position,
         target=target,
         timestamp=world.now(),
     )
-    world.modify_agent_energy(agent_id, -SPEAK_ENERGY_COST)
     await event_bus.publish(event)
     destination = target if target else f"Region|{agent_state.current_position}"
     return f"Your message was sent to {destination}"

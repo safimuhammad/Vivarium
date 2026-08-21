@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='5' fill='%23f3ebce' stroke='%23111712' stroke-width='3'/%3E%3Cpath d='M10 21h12M12 15h2m4 0h2' stroke='%23a6ad63' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Vivarium character pilot — Claude (Approach A)</title>
+<style>
+  :root { --ink:#111712; --cream:#f3ebce; --moss:#a6ad63; --moss-dk:#7c854a; --paper:#efe6c8; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--cream); color:var(--ink); font:14px/1.45 ui-monospace,'SF Mono',Menlo,monospace; height:100vh; display:flex; overflow:hidden; }
+  #stage-wrap { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; min-width:0; }
+  canvas#stage { image-rendering:pixelated; border:3px solid var(--ink); border-radius:6px; background:var(--moss); max-width:calc(100% - 32px); }
+  #caption { max-width:calc(100% - 32px); font-size:12.5px; text-align:center; min-height:34px; }
+  #caption b { font-size:13.5px; }
+  #caption .ev { opacity:.65; font-size:11.5px; display:block; }
+  aside { width:330px; flex:0 0 330px; border-left:3px solid var(--ink); background:var(--paper); padding:18px 16px; overflow-y:auto; }
+  h1 { font-size:15px; margin-bottom:2px; }
+  .sub { font-size:11.5px; opacity:.72; margin-bottom:14px; }
+  fieldset { border:2px solid var(--ink); border-radius:6px; padding:10px 12px 12px; margin-bottom:14px; }
+  legend { font-weight:700; font-size:12px; padding:0 6px; }
+  select { width:100%; font:inherit; font-size:12.5px; padding:4px 6px; border:2px solid var(--ink); border-radius:4px; background:var(--cream); margin-bottom:8px; }
+  .row { display:flex; gap:8px; }
+  button { flex:1; font:inherit; font-size:12.5px; font-weight:700; padding:5px 0; border:2px solid var(--ink); border-bottom-width:4px; border-radius:5px; background:var(--cream); cursor:pointer; }
+  button:active { border-bottom-width:2px; transform:translateY(2px); }
+  label { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; margin:7px 0 2px; }
+  label output { font-weight:700; }
+  input[type=range] { width:100%; accent-color:var(--moss-dk); }
+  .toggle { display:flex; align-items:center; gap:8px; font-size:12.5px; margin-top:8px; cursor:pointer; }
+  #state { font-size:12px; white-space:pre; line-height:1.6; }
+  .gallery-dir { margin:8px 0 2px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; }
+  .gallery img { image-rendering:pixelated; display:block; background:var(--cream); border:2px solid var(--ink); border-radius:4px; padding:4px; }
+  .hint { font-size:11px; opacity:.7; margin-top:10px; }
+  kbd { border:1.5px solid var(--ink); border-bottom-width:3px; border-radius:3px; padding:0 4px; font-size:10.5px; background:var(--cream); }
+</style>
+</head>
+<body>
+<div id="stage-wrap">
+  <canvas id="stage" width="720" height="480"></canvas>
+  <div id="caption"></div>
+</div>
+<aside>
+  <h1>Character pilot — Approach A</h1>
+  <div class="sub">reference-anchored sheets · pose grammar · distance-driven playback</div>
+
+  <fieldset>
+    <legend>Performance</legend>
+    <select id="perf-select"></select>
+    <div class="row">
+      <button id="prev">◀ prev</button>
+      <button id="replay">↻ replay</button>
+      <button id="next">next ▶</button>
+    </div>
+    <label class="toggle"><input type="checkbox" id="showcase" checked /> showcase — auto-cycle everything</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Feel</legend>
+    <label>walk speed <output id="speed-out"></output></label>
+    <input type="range" id="speed" min="30" max="160" step="5" value="70" />
+    <label>stride (px / step) <output id="stride-out"></output></label>
+    <input type="range" id="stride" min="4" max="18" step="1" value="9" />
+    <label>zoom <output id="zoom-out"></output></label>
+    <input type="range" id="zoom" min="2" max="6" step="1" value="3" />
+  </fieldset>
+
+  <fieldset>
+    <legend>State</legend>
+    <div id="state"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>The sheets (as shipped)</legend>
+    <div id="gallery"></div>
+  </fieldset>
+
+  <div class="hint">Pick <b>free roam</b> to drive with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>. URL: <b>?perf=fall</b> jumps straight to one performance.</div>
+</aside>
+
+<script>
+"use strict";
+/* ================= sprite data (injected by build_pilot.py) ================= */
+const SPRITES = /*__SPRITES__*/;
+
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(20260723);
+
+/* ================= stage + backdrop ================= */
+const W = 240, H = 160;
+const stage = document.getElementById("stage");
+const sctx = stage.getContext("2d");
+const field = document.createElement("canvas");
+field.width = W; field.height = H;
+{
+  const f = field.getContext("2d");
+  f.fillStyle = "#a6ad63"; f.fillRect(0, 0, W, H);
+  const speck = mulberry32(7);
+  for (let i = 0; i < 340; i++) {
+    f.fillStyle = ["#9aa159", "#b2b96f", "#8f9651"][(speck() * 3) | 0];
+    f.fillRect((speck() * W) | 0, (speck() * H) | 0, 1 + ((speck() * 2) | 0), 1);
+  }
+  for (let i = 0; i < 26; i++) {
+    const x = (speck() * W) | 0, y = (speck() * H) | 0;
+    f.fillStyle = "#7c854a";
+    f.fillRect(x, y, 1, 2); f.fillRect(x + 2, y - 1, 1, 3); f.fillRect(x + 4, y, 1, 2);
+  }
+}
+
+/* ================= image loading + partner recolor ================= */
+const { fw, fh, anchorY } = SPRITES;
+const IMAGES = { A: { sheets: {}, poses: {} }, B: { sheets: {}, poses: {} } };
+const RECOLOR = [   // shirt cream -> slate, olive pants -> violet-grey (per-being variation)
+  [[248, 225, 182], [154, 166, 192]],
+  [[96, 84, 31], [110, 98, 128]],
+  [[52, 39, 16], [72, 62, 88]],
+  [[83, 66, 26], [92, 82, 108]],
+];
+function recolor(img) {
+  const c = document.createElement("canvas");
+  c.width = img.width; c.height = img.height;
+  const x = c.getContext("2d");
+  x.drawImage(img, 0, 0);
+  const d = x.getImageData(0, 0, c.width, c.height);
+  for (let i = 0; i < d.data.length; i += 4) {
+    for (const [from, to] of RECOLOR) {
+      if (d.data[i] === from[0] && d.data[i + 1] === from[1] && d.data[i + 2] === from[2]) {
+        d.data[i] = to[0]; d.data[i + 1] = to[1]; d.data[i + 2] = to[2];
+        break;
+      }
+    }
+  }
+  x.putImageData(d, 0, 0);
+  return c;
+}
+
+/* ================= actor ================= */
+const scratch = document.createElement("canvas");
+scratch.width = fw; scratch.height = fh;
+const scx = scratch.getContext("2d");
+
+class Actor {
+  constructor(images) {
+    this.img = images;
+    this.reset();
+  }
+  reset() {
+    this.x = W / 2; this.y = H / 2;
+    this.facing = "down"; this.pose = null; this.poseMirror = false;
+    this.rot = 0; this.scaleF = 1; this.alpha = 1;
+    this.tint = null;            // e.g. "rgba(200,40,30,.45)"
+    this.visible = true;
+    this.distAcc = 0; this.moving = false;
+    this.dx = 0; this.dy = 0;
+  }
+  frameSource() {
+    if (this.pose) return { img: this.img.poses[this.pose], sx: 0, mirror: this.poseMirror || false };
+    const dir = this.facing;
+    const sheet = this.img.sheets[dir === "left" || dir === "right" ? "side" : dir];
+    const stride = +controls.stride.value;
+    const fi = this.moving ? Math.floor(this.distAcc / stride) % 4 : 1;
+    return { img: sheet, sx: fi * fw, mirror: dir === "left" };
+  }
+  draw() {
+    if (!this.visible) return;
+    const s = stage.width / W;
+    const px = Math.round(this.x), py = Math.round(this.y);
+    const lie = Math.abs(Math.sin(this.rot));
+    sctx.fillStyle = "rgba(17,23,18,0.18)";
+    sctx.beginPath();
+    sctx.ellipse(px * s, (py + 1) * s, (fw * 0.32 + lie * fh * 0.22) * this.scaleF * s,
+                 2.2 * s, 0, 0, Math.PI * 2);
+    sctx.fill();
+    const { img, sx, mirror } = this.frameSource();
+    let src = img, srcX = sx;
+    if (this.tint) {
+      scx.clearRect(0, 0, fw, fh);
+      scx.drawImage(img, sx, 0, fw, fh, 0, 0, fw, fh);
+      scx.globalCompositeOperation = "source-atop";
+      scx.fillStyle = this.tint;
+      scx.fillRect(0, 0, fw, fh);
+      scx.globalCompositeOperation = "source-over";
+      src = scratch; srcX = 0;
+    }
+    sctx.save();
+    sctx.globalAlpha = this.alpha;
+    sctx.translate(px * s, py * s);
+    sctx.rotate(this.rot);
+    sctx.scale((mirror ? -1 : 1) * this.scaleF * s, this.scaleF * s);
+    sctx.drawImage(src, srcX, 0, fw, fh, -fw / 2, -anchorY, fw, fh);
+    sctx.restore();
+  }
+  walkToward(tx, ty, dt) {
+    const speed = +controls.speed.value;
+    const dx = tx - this.x, dy = ty - this.y, d = Math.hypot(dx, dy);
+    if (d < 1.5) { this.moving = false; this.distAcc = 0; return true; }
+    const step = Math.min(d, speed * dt);
+    this.x += (dx / d) * step; this.y += (dy / d) * step;
+    this.distAcc += step; this.moving = true;
+    this.facing = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? "left" : "right") : (dy < 0 ? "up" : "down");
+    return false;
+  }
+}
+
+/* ================= effects ================= */
+const parts = [];
+function mote(x, y, vx, vy, life, color, g = 0) {
+  parts.push({ x, y, vx, vy, g, life, age: 0, color });
+}
+function motesBurst(x, y, n, color = "#e0b23e") {
+  for (let i = 0; i < n; i++)
+    mote(x, y, (rng() - 0.5) * 30, -12 - rng() * 22, 0.7 + rng() * 0.5, color, 40);
+}
+function moteArc(x1, y1, x2, y2) {
+  const t = 0.75;
+  mote(x1, y1, (x2 - x1) / t, (y2 - y1) / t - 22, t, "#e0b23e", 60);
+}
+function drawParts() {
+  const s = stage.width / W;
+  for (const p of parts) {
+    sctx.globalAlpha = Math.max(0, 1 - p.age / p.life);
+    sctx.fillStyle = p.color;
+    sctx.fillRect(Math.round(p.x) * s, Math.round(p.y) * s, 1.6 * s, 1.6 * s);
+  }
+  sctx.globalAlpha = 1;
+}
+function stepParts(dt) {
+  for (const p of parts) {
+    p.age += dt; p.vy += p.g * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+  }
+  for (let i = parts.length - 1; i >= 0; i--) if (parts[i].age > parts[i].life) parts.splice(i, 1);
+}
+function drawBubble(x, topY, t) {
+  const s = stage.width / W;
+  sctx.fillStyle = "#f3ebce"; sctx.strokeStyle = "#111712"; sctx.lineWidth = s * 0.7;
+  for (const [dx, dy, r] of [[3, -2, 1.1], [5, -6, 1.8]]) {
+    sctx.beginPath(); sctx.arc((x + dx) * s, (topY + dy) * s, r * s, 0, 7); sctx.fill(); sctx.stroke();
+  }
+  const bx = (x + 6) * s, by = (topY - 16) * s, bw = 20 * s, bh = 10 * s;
+  sctx.beginPath(); sctx.roundRect(bx, by, bw, bh, 4 * s); sctx.fill(); sctx.stroke();
+  sctx.fillStyle = "#111712";
+  for (let i = 0; i < 3; i++) {
+    const on = Math.floor(t * 2.5) % 4 > i - 1;
+    sctx.globalAlpha = on ? 1 : 0.25;
+    sctx.beginPath(); sctx.arc(bx + (5 + i * 5) * s, by + bh / 2, 1.1 * s, 0, 7); sctx.fill();
+  }
+  sctx.globalAlpha = 1;
+}
+function drawSpeech(x, y, t) {
+  const s = stage.width / W;
+  sctx.strokeStyle = "#f3ebce"; sctx.lineWidth = s * 0.9; sctx.lineCap = "round";
+  const k = Math.floor(t * 6) % 3;
+  for (let i = 0; i <= k; i++) {
+    sctx.beginPath();
+    sctx.arc(x * s, y * s, (2.5 + i * 2.6) * s, -0.6, 0.6);
+    sctx.stroke();
+  }
+}
+function drawToken(x, y, t, alpha) {
+  const s = stage.width / W;
+  const bob = Math.sin(t * 3) * 1.5;
+  sctx.globalAlpha = alpha;
+  sctx.fillStyle = "#e0b23e"; sctx.strokeStyle = "#111712"; sctx.lineWidth = s * 0.6;
+  sctx.beginPath();
+  const cx = x * s, cy = (y + bob) * s, r = 3.4 * s;
+  sctx.moveTo(cx, cy - r); sctx.lineTo(cx + r * 0.72, cy); sctx.lineTo(cx, cy + r); sctx.lineTo(cx - r * 0.72, cy);
+  sctx.closePath(); sctx.fill(); sctx.stroke();
+  sctx.globalAlpha = 1;
+}
+function drawGlow(x, y, radius, t) {
+  const s = stage.width / W;
+  const r = (radius + Math.sin(t * 2.4) * 2) * s;
+  const g = sctx.createRadialGradient(x * s, y * s, 0, x * s, y * s, r);
+  g.addColorStop(0, "rgba(238,166,64,0.4)");
+  g.addColorStop(1, "rgba(238,166,64,0)");
+  sctx.fillStyle = g;
+  sctx.fillRect(x * s - r, y * s - r, r * 2, r * 2);
+}
+function drawCrate(x, y) {
+  const s = stage.width / W;
+  sctx.fillStyle = "#8a5a2b"; sctx.strokeStyle = "#3f2a12"; sctx.lineWidth = s * 0.7;
+  sctx.fillRect((x - 4) * s, (y - 3) * s, 8 * s, 6 * s);
+  sctx.strokeRect((x - 4) * s, (y - 3) * s, 8 * s, 6 * s);
+  sctx.beginPath(); sctx.moveTo((x - 4) * s, y * s); sctx.lineTo((x + 4) * s, y * s); sctx.stroke();
+}
+function drawBush(x, y) {
+  const s = stage.width / W;
+  sctx.fillStyle = "#6d7a45";
+  for (const [dx, dy, r] of [[-3, 0, 4], [3, 0, 4], [0, -3, 4.5]]) {
+    sctx.beginPath(); sctx.arc((x + dx) * s, (y + dy) * s, r * s, 0, 7); sctx.fill();
+  }
+  sctx.fillStyle = "#e0b23e";
+  for (const [dx, dy] of [[-3, -2], [2, -4], [4, 0]])
+    sctx.fillRect((x + dx) * s, (y + dy) * s, 1.4 * s, 1.4 * s);
+}
+function drawHearth(x, y, t) {
+  const s = stage.width / W;
+  sctx.fillStyle = "#8d8676";
+  for (const [dx, r] of [[-4, 1.7], [0, 2], [4, 1.7]]) {
+    sctx.beginPath(); sctx.arc((x + dx) * s, y * s, r * s, 0, 7); sctx.fill();
+  }
+  const fl = 3 + Math.sin(t * 9) * 0.8;
+  sctx.fillStyle = "#e8a13e";
+  sctx.beginPath();
+  sctx.moveTo((x - 2) * s, y * s); sctx.quadraticCurveTo(x * s, (y - fl * 2) * s, (x + 2) * s, y * s);
+  sctx.fill();
+}
+function drawFrameHouse(x, y, progress) {
+  const s = stage.width / W;
+  sctx.globalAlpha = 0.25 + progress * 0.75;
+  sctx.strokeStyle = "#6b4a26"; sctx.lineWidth = s * 1.1;
+  sctx.strokeRect((x - 10) * s, (y - 14) * s, 20 * s, 14 * s);
+  sctx.beginPath();
+  sctx.moveTo((x - 11) * s, (y - 14) * s); sctx.lineTo(x * s, (y - 21) * s); sctx.lineTo((x + 11) * s, (y - 14) * s);
+  sctx.stroke();
+  sctx.globalAlpha = 1;
+}
+
+/* ================= performance definitions ================= */
+const A = new Actor(IMAGES.A);
+const B = new Actor(IMAGES.B);
+const C = new Actor(IMAGES.A);          // the child
+let sceneT = 0;
+
+function resetScene() {
+  parts.length = 0;
+  for (const a of [A, B, C]) a.reset();
+  B.visible = false; C.visible = false;
+  A.x = W / 2; A.y = H / 2 + 10;
+  sceneT = 0;
+}
+function pair(gap = 26) {
+  B.visible = true;
+  A.x = W / 2 - gap / 2; B.x = W / 2 + gap / 2;
+  A.y = B.y = H / 2 + 10;
+  A.facing = "right"; B.facing = "left";
+}
+const st = (dur, opts = {}) => ({ dur, ...opts });
+
+const PERFS = {
+  roam: {
+    label: "free roam (wander / WASD)", events: "the original walking pilot",
+    steps: [st(1e9, { tick: (u, t, dt) => roamTick(dt) })],
+  },
+  idle: {
+    label: "1 · idle / breathe", events: "between actions — breathing, blinking, weight shifts",
+    steps: [st(4.8, {
+      tick: (u, t) => {
+        A.pose = (t % 2.7) < 0.16 ? "blink" : null;
+        A.scaleF = 1 + Math.sin(t * 2.2) * 0.012;
+        A.x = W / 2 + (Math.floor(t / 2.4) % 2 ? 0.7 : 0);
+      },
+    })],
+  },
+  turn: {
+    label: "2 · turn / orient", events: "orienting in four directions",
+    steps: ["down", "right", "up", "left", "down"].map((d) =>
+      st(0.55, { enter: () => { A.facing = d; A.pose = null; } })),
+  },
+  walk: {
+    label: "3 · walk / start / stop", events: "agent_moved",
+    steps: [
+      st(9, {
+        tick: (u) => {
+          const path = [[60, 90], [180, 90], [180, 120], [60, 120]];
+          const target = path[Math.floor(u * 8) % 4];
+          A.walkToward(target[0], target[1], lastDt);
+        },
+      }),
+      st(0.8, { enter: () => { A.moving = false; A.facing = "down"; } }),
+    ],
+  },
+  look: {
+    label: "4 · look around / inspect", events: "look_around",
+    steps: [
+      st(0.9, { enter: () => (A.facing = "right") }),
+      st(0.9, { enter: () => (A.facing = "left") }),
+      st(0.6, { enter: () => (A.facing = "up") }),
+      st(1.1, { enter: () => (A.facing = "down"), tick: (u, t) => (A.pose = t < 0.15 ? "blink" : null) }),
+    ],
+  },
+  talk: {
+    label: "5 · talk / listen", events: "speak — face listener, gesture; listener idles",
+    steps: [st(5, {
+      enter: () => { pair(22); A.facing = "down"; B.facing = "down"; },
+      tick: (u, t) => {
+        A.pose = Math.floor(t * 5) % 2 ? "talk" : null;
+        B.pose = (t % 3.1) < 0.15 ? "blink" : null;
+        drawSpeech(A.x + 7, A.y - anchorY + 14, t);
+      },
+    })],
+  },
+  think: {
+    label: "6 · think privately", events: "self_talk — thought bubble, quiet posture",
+    steps: [st(4.5, {
+      tick: (u, t) => {
+        A.facing = "down";
+        A.pose = (t % 2.9) < 0.14 ? "blink" : null;
+        drawBubble(A.x + 4, A.y - anchorY + 2, t);
+      },
+    })],
+  },
+  give: {
+    label: "7 · reach / offer / give", events: "resource_transferred — giver reaches, resource arcs across",
+    steps: [
+      st(0.7, { enter: () => pair(30) }),
+      st(2.6, {
+        enter: () => (A.pose = "reach"),
+        tick: (u, t) => {
+          if (Math.floor(t * 2.4) !== Math.floor((t - lastDt) * 2.4))
+            moteArc(A.x + 8, A.y - 22, B.x - 4, B.y - 20);
+        },
+      }),
+      st(0.9, { enter: () => { A.pose = null; B.scaleF = 1.03; }, tick: (u) => (B.scaleF = 1.03 - u * 0.03) }),
+    ],
+  },
+  gather: {
+    label: "8 · gather / rummage", events: "resource gathered · ruins_scavenged — crouch, motes stream in",
+    steps: [
+      st(1.4, { enter: () => { A.x = W / 2 - 26; A.y = H / 2 + 10; }, tick: () => A.walkToward(W / 2 - 12, H / 2 + 10, lastDt) }),
+      st(3.2, {
+        enter: () => { A.facing = "right"; A.pose = "crouch"; },
+        tick: (u, t) => {
+          if (Math.floor(t * 3) !== Math.floor((t - lastDt) * 3))
+            moteArc(W / 2 + 4, H / 2 + 8, A.x + 2, A.y - 14);
+        },
+      }),
+      st(0.8, { enter: () => (A.pose = null) }),
+    ],
+    props: (t) => drawBush(W / 2 + 6, H / 2 + 8),
+  },
+  build: {
+    label: "9 · work / build", events: "home_built — strike the frame, structure solidifies",
+    steps: [st(5.5, {
+      enter: () => { A.x = W / 2 - 18; A.y = H / 2 + 14; A.facing = "right"; },
+      tick: (u, t) => {
+        A.pose = Math.floor(t * 3) % 2 ? "reach" : "crouch";
+        if (Math.floor(t * 3) % 2 && Math.floor(t * 3) !== Math.floor((t - lastDt) * 3))
+          motesBurst(W / 2 + 2, H / 2 - 2, 3, "#c9b18a");
+        buildProgress = u;
+      },
+    }), st(0.8, { enter: () => (A.pose = null) })],
+    props: () => drawFrameHouse(W / 2 + 10, H / 2 + 12, buildProgress),
+  },
+  carry: {
+    label: "10 · carry / deposit / withdraw", events: "store/withdraw (silent today) — haul, set down",
+    steps: [
+      st(2.6, { enter: () => { A.x = 60; A.y = H / 2 + 10; carryOn = true; }, tick: () => A.walkToward(150, H / 2 + 10, lastDt) }),
+      st(0.9, { enter: () => { A.facing = "right"; A.pose = "crouch"; } }),
+      st(0.4, { enter: () => { carryOn = false; crateDown = [158, H / 2 + 12]; A.pose = null; } }),
+      st(1.6, { tick: () => A.walkToward(80, H / 2 + 10, lastDt) }),
+      st(0.6, { enter: () => { A.moving = false; A.facing = "down"; } }),
+    ],
+    props: () => { if (crateDown) drawCrate(crateDown[0], crateDown[1]); },
+  },
+  tend: {
+    label: "11 · kneel / tend / warm", events: "hearth_used — kneel at the fire, take warmth",
+    steps: [st(5, {
+      enter: () => { A.x = W / 2 - 14; A.y = H / 2 + 12; A.facing = "right"; A.pose = "kneel"; },
+      tick: (u, t) => {
+        drawGlow(W / 2 + 2, H / 2 + 8, 22, t);
+        if (Math.floor(t * 2) !== Math.floor((t - lastDt) * 2))
+          mote(W / 2 + 2, H / 2 + 4, (rng() - 0.5) * 6, -14, 0.9, "#e8a13e");
+      },
+    }), st(0.7, { enter: () => (A.pose = null) })],
+    props: (t) => drawHearth(W / 2 + 2, H / 2 + 8, t),
+  },
+  refuse: {
+    label: "12 · refuse / turn away", events: "mating_rejected · mating_proposal_timeout — token fades",
+    steps: [
+      st(1, { enter: () => pair(30) }),
+      st(1.6, { enter: () => (B.pose = "reach", B.poseMirror = true), tick: (u, t) => drawToken(W / 2, H / 2 - 18, t, 1) }),
+      st(1.4, {
+        enter: () => (A.facing = "up"),
+        tick: (u, t) => { A.x -= lastDt * 6; drawToken(W / 2, H / 2 - 18, t, 1 - u); },
+      }),
+      st(1, { enter: () => { B.pose = null; B.poseMirror = false; B.facing = "down"; } }),
+    ],
+  },
+  attack: {
+    label: "13 · attack / strike", events: "attack · home_breached — lunge; victim recoils",
+    steps: [
+      st(0.8, { enter: () => pair(34) }),
+      st(0.4, { enter: () => (A.rot = -0.15) }),
+      st(0.18, { enter: () => { A.rot = 0.26; A.pose = "reach"; A.x += 5; } }),
+      st(0.7, {
+        enter: () => { B.tint = "rgba(196,44,28,0.5)"; B.rot = 0.18; B.x += 3; },
+        tick: (u) => { B.tint = `rgba(196,44,28,${0.5 * (1 - u)})`; B.rot = 0.18 * (1 - u); },
+      }),
+      st(0.8, { enter: () => { A.rot = 0; A.pose = null; A.x -= 5; B.tint = null; B.rot = 0; } }),
+    ],
+  },
+  hurt: {
+    label: "14 · hurt / stagger", events: "attacked — flash, recoil, recover",
+    steps: [
+      st(0.5, { enter: () => { A.tint = "rgba(196,44,28,0.5)"; A.x += 3; }, tick: (u) => (A.tint = `rgba(196,44,28,${0.5 * (1 - u)})`) }),
+      st(1.2, { tick: (u, t) => (A.rot = Math.sin(t * 14) * 0.09 * (1 - u)) }),
+      st(0.8, { enter: () => { A.tint = null; A.rot = 0; A.x -= 3; } }),
+    ],
+  },
+  fall: {
+    label: "15 · fall", events: "agent_paralyzed — collapse",
+    steps: [
+      st(0.5, { enter: () => (A.facing = "right") }),
+      st(0.55, { tick: (u) => (A.rot = u * u * (Math.PI / 2)) }),
+      st(0.25, { tick: (u) => (A.rot = Math.PI / 2 - Math.sin(u * Math.PI) * 0.08) }),
+      st(1.4, { enter: () => (A.rot = Math.PI / 2) }),
+    ],
+  },
+  prone: {
+    label: "16 · prone / paralyzed", events: "PARALYZED — dimmed, breathing shallow, awaiting a gift",
+    steps: [st(4.5, {
+      enter: () => { A.facing = "right"; A.rot = Math.PI / 2; A.tint = "rgba(60,60,80,0.35)"; },
+      tick: (u, t) => (A.alpha = 0.88 + Math.sin(t * 1.8) * 0.1),
+    })],
+  },
+  rescue: {
+    label: "17 · rescue / recover / rise", events: "resource_transferred + agent_recovered — gift re-lights, rise",
+    steps: [
+      st(0.6, { enter: () => { pair(30); A.rot = Math.PI / 2; A.tint = "rgba(60,60,80,0.35)"; A.facing = "right"; } }),
+      st(1.6, {
+        enter: () => { B.pose = "kneel"; B.poseMirror = true; },
+        tick: (u, t) => {
+          if (Math.floor(t * 3) !== Math.floor((t - lastDt) * 3))
+            moteArc(B.x - 6, B.y - 14, A.x + 8, A.y - 4);
+        },
+      }),
+      st(0.7, { enter: () => (A.tint = null), tick: (u) => (A.rot = Math.PI / 2 - u * (Math.PI / 4)) }),
+      st(0.5, { enter: () => (B.pose = null), tick: (u) => (A.rot = Math.PI / 4 - u * (Math.PI / 4)) }),
+      st(1, { enter: () => { A.rot = 0; A.facing = "down"; B.facing = "down"; motesBurst(A.x, A.y - 20, 6); } }),
+    ],
+  },
+  dead: {
+    label: "18 · dead + return to earth", events: "agent_died · agent_decayed — dissolve into motes",
+    steps: [
+      st(0.4, { enter: () => (A.facing = "right") }),
+      st(0.5, { tick: (u) => (A.rot = u * u * (Math.PI / 2)) }),
+      st(1.2, { enter: () => { A.rot = Math.PI / 2; A.tint = "rgba(30,25,20,0.55)"; } }),
+      st(1.8, {
+        tick: (u, t) => {
+          A.alpha = 1 - u;
+          if (Math.floor(t * 8) !== Math.floor((t - lastDt) * 8))
+            mote(A.x + rng() * 20, A.y - 2 - rng() * 4, (rng() - 0.5) * 4, -16 - rng() * 10, 1.1, "#e0b23e");
+        },
+      }),
+      st(1, { enter: () => (A.visible = false) }),
+    ],
+  },
+  birth: {
+    label: "19 · birth + child", events: "agent_born — a child appears beside the parent",
+    steps: [
+      st(1, { enter: () => { A.x = W / 2 - 8; A.facing = "down"; } }),
+      st(0.9, { enter: () => (A.pose = "reach"), tick: (u, t) => drawGlow(A.x + 16, A.y - 6, 12, t) }),
+      st(0.5, { enter: () => { A.pose = null; motesBurst(A.x + 16, A.y - 8, 12); } }),
+      st(3, {
+        enter: () => { C.visible = true; C.x = A.x + 16; C.y = A.y; C.scaleF = 0.62; C.facing = "down"; },
+        tick: (u, t) => {
+          C.pose = (t % 2.2) < 0.14 ? "blink" : null;
+          C.scaleF = 0.62 * (1 + Math.sin(t * 2.6) * 0.02);
+        },
+      }),
+    ],
+  },
+};
+let buildProgress = 0, carryOn = false, crateDown = null;
+
+/* ================= sequencer ================= */
+const ORDER = Object.keys(PERFS);
+let current = "idle", stepI = 0, stepT = 0, lastDt = 0.016;
+
+function play(name) {
+  current = name;
+  resetScene();
+  buildProgress = 0; carryOn = false; crateDown = null;
+  stepI = -1; stepT = 0;
+  nextStep();
+  document.getElementById("perf-select").value = name;
+  const p = PERFS[name];
+  document.getElementById("caption").innerHTML =
+    `<b>${p.label}</b><span class="ev">${p.events}</span>`;
+}
+function nextStep() {
+  const steps = PERFS[current].steps;
+  stepI++;
+  if (stepI >= steps.length) {
+    if (controls.showcase.checked && current !== "roam") {
+      const i = ORDER.indexOf(current) + 1;
+      play(i >= ORDER.length ? ORDER[1] : ORDER[i]);   // wrap past the end, skip roam at 0
+      return;
+    }
+    stepI = 0;  // loop this performance
+    resetScene();
+  }
+  stepT = 0;
+  PERFS[current].steps[stepI].enter?.();
+}
+function stepScene(dt) {
+  lastDt = dt; sceneT += dt;
+  const step = PERFS[current].steps[stepI];
+  stepT += dt;
+  step.tick?.(Math.min(1, stepT / step.dur), sceneT, dt);
+  if (stepT >= step.dur) nextStep();
+}
+
+/* ================= roam mode (the original pilot) ================= */
+const keys = new Set();
+addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) { keys.add(k); e.preventDefault(); }
+});
+addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+let roamTarget = null, roamPause = 0;
+function roamTick(dt) {
+  let dx = 0, dy = 0;
+  if (keys.has("a") || keys.has("arrowleft")) dx -= 1;
+  if (keys.has("d") || keys.has("arrowright")) dx += 1;
+  if (keys.has("w") || keys.has("arrowup")) dy -= 1;
+  if (keys.has("s") || keys.has("arrowdown")) dy += 1;
+  if (dx || dy) {
+    roamTarget = null;
+    const n = Math.hypot(dx, dy);
+    const speed = +controls.speed.value;
+    A.x = Math.min(W - 8, Math.max(8, A.x + (dx / n) * speed * dt));
+    A.y = Math.min(H - 6, Math.max(14, A.y + (dy / n) * speed * dt));
+    A.distAcc += speed * dt; A.moving = true;
+    A.facing = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? "left" : "right") : (dy < 0 ? "up" : "down");
+  } else if (sceneT > roamPause) {
+    if (!roamTarget) roamTarget = [14 + rng() * (W - 28), 20 + rng() * (H - 30)];
+    if (A.walkToward(roamTarget[0], roamTarget[1], dt)) {
+      roamTarget = null; roamPause = sceneT + 0.8 + rng() * 2.2;
+    }
+  } else { A.moving = false; A.distAcc = 0; }
+}
+
+/* ================= UI + main loop ================= */
+const $ = (id) => document.getElementById(id);
+const controls = { speed: $("speed"), stride: $("stride"), zoom: $("zoom"), showcase: $("showcase") };
+function syncOutputs() {
+  $("speed-out").textContent = controls.speed.value + " px/s";
+  $("stride-out").textContent = controls.stride.value;
+  $("zoom-out").textContent = controls.zoom.value + "×";
+}
+["input", "change"].forEach((ev) => [controls.speed, controls.stride, controls.zoom]
+  .forEach((c) => c.addEventListener(ev, syncOutputs)));
+syncOutputs();
+function fitStage() {
+  const z = +controls.zoom.value;
+  stage.width = W * z; stage.height = H * z;
+  sctx.imageSmoothingEnabled = false;
+}
+controls.zoom.addEventListener("input", fitStage);
+
+{
+  const sel = $("perf-select");
+  for (const name of ORDER) {
+    const o = document.createElement("option");
+    o.value = name; o.textContent = PERFS[name].label;
+    sel.append(o);
+  }
+  sel.addEventListener("change", () => { controls.showcase.checked = false; play(sel.value); });
+  $("replay").addEventListener("click", () => play(current));
+  $("prev").addEventListener("click", () => {
+    controls.showcase.checked = false;
+    play(ORDER[(ORDER.indexOf(current) - 1 + ORDER.length) % ORDER.length]);
+  });
+  $("next").addEventListener("click", () => {
+    controls.showcase.checked = false;
+    play(ORDER[(ORDER.indexOf(current) + 1) % ORDER.length]);
+  });
+}
+
+let last = performance.now(), fps = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  fps = fps * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
+  const s = stage.width / W;
+  sctx.clearRect(0, 0, stage.width, stage.height);
+  sctx.drawImage(field, 0, 0, W, H, 0, 0, stage.width, stage.height);
+  PERFS[current].props?.(sceneT);
+  stepScene(dt);
+  stepParts(dt);
+  for (const actor of [B, A, C]) actor.draw();
+  if (carryOn) drawCrate(A.x + (A.facing === "right" ? 7 : A.facing === "left" ? -7 : 0), A.y - 16);
+  drawParts();
+  $("state").textContent =
+    `performance  ${current}\n` +
+    `step         ${stepI + 1}/${PERFS[current].steps.length}\n` +
+    `fps          ${fps.toFixed(0)}`;
+  requestAnimationFrame(loop);
+}
+
+function buildGallery() {
+  const g = $("gallery");
+  for (const dir of ["down", "up", "side"]) {
+    const label = document.createElement("div");
+    label.className = "gallery-dir"; label.textContent = dir + " · 4 frames";
+    const img = document.createElement("img");
+    img.src = SPRITES.sheets[dir];
+    img.width = fw * 4 * 3; img.height = fh * 3;
+    g.append(label, img);
+  }
+  const label = document.createElement("div");
+  label.className = "gallery-dir"; label.textContent = "poses · " + Object.keys(SPRITES.poses).join(" · ");
+  g.append(label);
+  for (const uri of Object.values(SPRITES.poses)) {
+    const img = document.createElement("img");
+    img.src = uri; img.width = fw * 3; img.height = fh * 3;
+    img.style.display = "inline-block";
+    g.append(img);
+  }
+}
+
+/* load: build plain + recolored image sets, then start */
+{
+  const entries = [];
+  for (const [key, uri] of Object.entries(SPRITES.sheets)) entries.push(["sheets", key, uri]);
+  for (const [key, uri] of Object.entries(SPRITES.poses)) entries.push(["poses", key, uri]);
+  let loaded = 0;
+  for (const [kind, key, uri] of entries) {
+    const img = new Image();
+    img.onload = () => {
+      IMAGES.A[kind][key] = img;
+      IMAGES.B[kind][key] = recolor(img);
+      if (++loaded === entries.length) {
+        fitStage(); buildGallery();
+        const want = new URLSearchParams(location.search).get("perf");
+        if (want && PERFS[want]) { controls.showcase.checked = false; play(want); }
+        else play("idle");
+        requestAnimationFrame(loop);
+      }
+    };
+    img.src = uri;
+  }
+}
+</script>
+</body>
+</html>

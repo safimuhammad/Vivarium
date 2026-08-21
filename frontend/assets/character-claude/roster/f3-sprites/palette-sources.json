@@ -1,0 +1,30 @@
+{
+  "characterId": "f3",
+  "description": "Exact RGBs in F3's final 16-color quantized palette eligible for palette-variant remapping. Only the top and trousers families are listed — skin (light, freckled) and hair (auburn ponytail) are never remapped, matching the roster-integration structural decision (#2) and beingPalette.ts's existing remap-table shape (garment-only exact-RGB swap).",
+  "sourcePalette": {
+    "top": [
+      { "role": "top-main", "rgb": [138, 138, 84], "hex": "#8a8a54", "note": "Dominant sage fill, verified clean via a strap-free back-view torso patch and cross-checked against hair, boot, and strap/bag samples." },
+      { "role": "top-shade", "rgb": [116, 109, 62], "hex": "#746d3e", "note": "Fold/sleeve shading, same clean back-view patch." }
+    ],
+    "trousers": [
+      { "role": "trousers-main", "rgb": [234, 204, 159], "hex": "#eacc9f", "note": "Dominant cream fill, verified on both legs (front rows 35-37) with zero contamination." },
+      { "role": "trousers-shade", "rgb": [198, 156, 103], "hex": "#c69c67", "note": "Leg-fold shading, same clean rows. Note: (129,72,32), the crotch-seam shadow one row below this patch, was excluded — it doubles as the boot's main color (confirmed by a dedicated boot-only sample), not a trousers tone." }
+    ]
+  },
+  "excludedFromRemap": {
+    "skin": [[246, 192, 131], [246, 186, 126], [201, 100, 46]],
+    "hair": [[174, 66, 24], [151, 53, 20], [120, 45, 17], [83, 38, 16], [71, 24, 8], [55, 17, 6], [180, 66, 24]],
+    "bootsAndStrap": [[129, 72, 32], [138, 50, 18]],
+    "note": "Verified by direct sampling: (138,50,18) reads as the dominant tone in a dedicated hip-bag sample AND independently appears in a pure back-view hair-mass sample (7 of 40 px) — a multi-role hair/strap color, excluded. (129,72,32) is the boot's main color (5/7 in a boot-only sample) but also fills the trousers' crotch-seam shadow one row below the clean trousers patch — excluded despite sitting inside the leg silhouette. (201,100,46) is the rare, dedicated lip/mouth tone (49 px total, appears nowhere else) — a facial-feature color, not garment."
+  },
+  "suggestedVariant": {
+    "name": "violet-grey",
+    "note": "One example remap into the world's muted garment families (BEING_PALETTE_VARIANTS in beingPalette.ts: slate-blue / violet-grey / moss / ochre / bone) — F1 used slate-blue, F2 used moss, so this proposes violet-grey for variety. Values preserve F3's own top/trousers luminance spacing. Re-validate visually against the actual atlas render before locking in for R3.",
+    "remap": [
+      { "from": [138, 138, 84], "to": [138, 130, 156], "role": "top-main" },
+      { "from": [116, 109, 62], "to": [112, 104, 128], "role": "top-shade" },
+      { "from": [234, 204, 159], "to": [206, 198, 214], "role": "trousers-main" },
+      { "from": [198, 156, 103], "to": [168, 158, 178], "role": "trousers-shade" }
+    ]
+  }
+}

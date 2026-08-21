@@ -1,0 +1,30 @@
+{
+  "characterId": "m2",
+  "description": "Exact RGBs in M2's final 14-color quantized palette eligible for palette-variant remapping. Only the tunic (top) and trousers families are listed — skin and hair are never remapped, matching the roster-integration structural decision (#2) and beingPalette.ts's existing remap-table shape (garment-only exact-RGB swap).",
+  "sourcePalette": {
+    "tunic": [
+      { "role": "tunic-main", "rgb": [54, 66, 90], "hex": "#36425a", "note": "Dominant slate-blue tunic fill (verified via a strap-clear sample rectangle)." },
+      { "role": "tunic-shade", "rgb": [38, 48, 64], "hex": "#263040", "note": "Fold/shadow tone under the arms and strap." },
+      { "role": "tunic-light", "rgb": [54, 72, 96], "hex": "#364860", "note": "Highlight tone on the shoulders/sleeve." }
+    ],
+    "trousers": [
+      { "role": "trousers-main", "rgb": [96, 54, 30], "hex": "#60361e", "note": "Dominant trousers fill (verified via a boot-clear sample rectangle)." },
+      { "role": "trousers-shade", "rgb": [75, 46, 34], "hex": "#4b2e22", "note": "Pleat/fold shading." }
+    ]
+  },
+  "excludedFromRemap": {
+    "skin": [[181, 96, 36], [187, 105, 46]],
+    "hair": [[24, 24, 30], [12, 12, 18], [6, 6, 10], [17, 19, 26]],
+    "bootsAndStrap": [[112, 57, 25], [54, 30, 18], [36, 16, 5]],
+    "note": "M2's 14-color palette has NO cross-role color sharing between the tunic/trousers families and skin/hair/boots-and-strap (verified by a whole-file color-frequency audit across front/back/side/walk/pose frames, not just the ASCII legend — every RGB value maps to exactly one role). This is simpler than F1's case where several tones doubled up across roles. (36,16,5), the eyebrow/pupil-dark tone, is reused by touchup_m2.py as a hand-authored smile-crease on the FACE only — that is a touch-up decision, not a palette-source one, and does not put it in the tunic/trousers families."
+  },
+  "suggestedVariant": {
+    "name": "moss",
+    "note": "One example remap into the world's muted garment families (BEING_PALETTE_VARIANTS in beingPalette.ts: slate-blue / violet-grey / moss / ochre / bone). M2 ships in slate-blue already, so 'moss' is proposed as a visually distinct first-pass alternative for variant testing — re-validate visually against the actual atlas render before locking in for R3.",
+    "remap": [
+      { "from": [54, 66, 90], "to": [82, 96, 62], "role": "tunic-main" },
+      { "from": [38, 48, 64], "to": [58, 70, 44], "role": "tunic-shade" },
+      { "from": [54, 72, 96], "to": [96, 112, 74], "role": "tunic-light" }
+    ]
+  }
+}

@@ -15,6 +15,7 @@ import math
 
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
+from observability.event_payloads import resource_type_value
 from world.agents import AgentState, AgentStatus, is_hoarding
 from world.regions import Region, ResourceTypes
 from world.world import WorldState
@@ -108,6 +109,8 @@ async def _announce_if_started_hoarding(
     agent: AgentState,
     *,
     was_hoarding: bool,
+    energy_before: float,
+    materials_before: float,
     region: str,
     timestamp: float,
 ) -> None:
@@ -122,6 +125,9 @@ async def _announce_if_started_hoarding(
         event_bus: The bus the event is published to.
         agent: The credited agent (its ``current_*`` already reflect the credit).
         was_hoarding: Whether the agent was hoarding *before* the credit.
+        energy_before: The agent's energy before the credit (payload pre-state, so a
+            renderer can animate the crossing rather than repaint its far side).
+        materials_before: The agent's materials before the credit.
         region: Region to scope the LOCAL announcement to.
         timestamp: World-clock stamp for the event.
 
@@ -135,10 +141,16 @@ async def _announce_if_started_hoarding(
             "agent_started_hoarding",
             agent.id,
             {
+                "agent_id": agent.id,
+                "region": region,
+                "energy_before": energy_before,
+                "energy": agent.current_energy,
+                "materials_before": materials_before,
+                "materials": agent.current_materials,
                 "message": (
                     f"{agent.name} (ID:{agent.id}) is now sitting on a hoard "
                     f"(energy {agent.current_energy}, materials {agent.current_materials})."
-                )
+                ),
             },
             scope=ScopeType.LOCAL,
             region=region,
@@ -210,6 +222,12 @@ async def harvest_resources(
     # hoarding (and announce it once), mirroring the was_paralyzed revival pattern in
     # transfer_resource.
     was_hoarding = is_hoarding(agent_state)
+    # Pre-mutation snapshot for the renderer (spec §4.2): all four balances below are
+    # reported post-harvest, so the "before" side is read here, before any modify_*.
+    agent_energy_before = agent_state.current_energy
+    agent_materials_before = agent_state.current_materials
+    region_energy_before = curr_region.current_energy
+    region_materials_before = curr_region.current_materials
 
     if req_resource == ResourceTypes.ENERGY:
         world.modify_region_energy(curr_region.name, -quantity)
@@ -219,16 +237,31 @@ async def harvest_resources(
         world.modify_agent_materials(agent_id, quantity)
 
     payload = {
+        "agent_id": agent_state.id,
+        "agent_name": agent_state.name,
+        "region": curr_region.name,
+        "resource_type": resource_type_value(req_resource),
+        "amount": quantity,
+        "agent_energy_before": agent_energy_before,
+        "agent_energy": agent_state.current_energy,
+        "agent_materials_before": agent_materials_before,
+        "agent_materials": agent_state.current_materials,
+        "region_energy_before": region_energy_before,
+        "region_energy": curr_region.current_energy,
+        "region_materials_before": region_materials_before,
+        "region_materials": curr_region.current_materials,
         "message": (
             f"Agent ID:{agent_state.id}\n Agent Name: {agent_state.name} "
-            f"Successfully Harvested {quantity} of {req_resource} from Region {curr_region.name}"
-        )
+            f"Successfully Harvested {quantity} of {resource_type_value(req_resource)} "
+            f"from Region {curr_region.name}"
+        ),
     }
     event_message = Event(
         "resource_changed",
         agent_id,
         payload,
         scope=ScopeType.LOCAL,
+        region=curr_region.name,
         timestamp=world.now(),
     )
     await event_bus.publish(event_message)
@@ -240,6 +273,8 @@ async def harvest_resources(
         event_bus,
         agent_state,
         was_hoarding=was_hoarding,
+        energy_before=agent_energy_before,
+        materials_before=agent_materials_before,
         region=curr_region.name,
         timestamp=world.now(),
     )
@@ -337,6 +372,12 @@ async def transfer_resource(
     # Snapshot the receiver's hoarding state before the credit so we can announce a
     # crossing once (covers both the energy and materials branches below).
     receiver_was_hoarding = is_hoarding(receiver_agent)
+    # Pre-mutation snapshot for the renderer (spec §4.2): both parties' balances are
+    # reported post-transfer, so the "before" side is read here, before any modify_*.
+    sender_energy_before = sender_agent.current_energy
+    sender_materials_before = sender_agent.current_materials
+    receiver_energy_before = receiver_agent.current_energy
+    receiver_materials_before = receiver_agent.current_materials
 
     if req_resource == ResourceTypes.ENERGY:
         was_paralyzed = receiver_agent.status is AgentStatus.PARALYZED
@@ -344,9 +385,19 @@ async def transfer_resource(
         world.modify_agent_energy(receiver_agent.id, quantity)
         if was_paralyzed and receiver_agent.status is AgentStatus.ALIVE:
             recover_payload = {
+                "giver_id": sender_agent.id,
+                "recipient_id": receiver_agent.id,
+                "revived_id": receiver_agent.id,
+                "region": receiver_agent.current_position,
+                "resource_type": resource_type_value(req_resource),
+                "amount": quantity,
+                "giver_energy_before": sender_energy_before,
+                "giver_energy": sender_agent.current_energy,
+                "revived_energy_before": receiver_energy_before,
+                "revived_energy": receiver_agent.current_energy,
                 "message": (
                     f"{sender_agent.name} revived {receiver_agent.name} (ID:{receiver_agent.id})."
-                )
+                ),
             }
             await event_bus.publish(
                 Event(
@@ -363,17 +414,33 @@ async def transfer_resource(
         world.modify_agent_materials(receiver_agent.id, quantity)
 
     payload = {
+        "sender_id": sender_agent.id,
+        "receiver_id": receiver_agent.id,
+        "region": sender_agent.current_position,
+        "resource_type": resource_type_value(req_resource),
+        "amount": quantity,
+        "sender_name": sender_agent.name,
+        "receiver_name": receiver_agent.name,
+        "sender_energy_before": sender_energy_before,
+        "sender_energy": sender_agent.current_energy,
+        "sender_materials_before": sender_materials_before,
+        "sender_materials": sender_agent.current_materials,
+        "receiver_energy_before": receiver_energy_before,
+        "receiver_energy": receiver_agent.current_energy,
+        "receiver_materials_before": receiver_materials_before,
+        "receiver_materials": receiver_agent.current_materials,
         "message": (
             f"Agent ID:{sender_agent.id}|Agent Name: {sender_agent.name} "
-            f"Successfully Sent {quantity} of {req_resource} to "
+            f"Successfully Sent {quantity} of {resource_type_value(req_resource)} to "
             f"Agent ID:{receiver_agent.id}|Agent Name:{receiver_agent.name} "
-        )
+        ),
     }
     event_message = Event(
         "resource_transferred",
         sender_agent.id,
         payload,
         scope=ScopeType.LOCAL,
+        region=sender_agent.current_position,
         target=receiver_agent.id,
         timestamp=world.now(),
     )
@@ -385,6 +452,8 @@ async def transfer_resource(
         event_bus,
         receiver_agent,
         was_hoarding=receiver_was_hoarding,
+        energy_before=receiver_energy_before,
+        materials_before=receiver_materials_before,
         region=receiver_agent.current_position,
         timestamp=world.now(),
     )

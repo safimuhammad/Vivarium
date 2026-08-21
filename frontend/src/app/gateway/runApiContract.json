@@ -1,0 +1,568 @@
+{
+  "schema": 1,
+  "captured_by": "tests/server/frontend_contract_test.py",
+  "how_to_recapture": "Re-capture with `VIVARIUM_UPDATE_RUN_API_CONTRACT=1 pytest tests/server/frontend_contract_test.py`, then run `npx vitest run src/app/gateway/runApiContract` in `frontend/` -- that half is what says whether the frontend can still read the new bytes.",
+  "redacted_string": "<redacted-per-run>",
+  "redacted_number": 0.0,
+  "redacted_paths": [
+    "run_config.derived.memory_root",
+    "run_config.run_id",
+    "run_metadata.artifacts.events",
+    "run_metadata.artifacts.memory_root",
+    "run_metadata.artifacts.snapshots",
+    "run_metadata.artifacts.usage",
+    "run_metadata.config_hash",
+    "run_metadata.event_cursor",
+    "run_metadata.run_id",
+    "run_metadata.started_at",
+    "run_metadata.world_time",
+    "run_start_accepted.run_id",
+    "run_start_with_warnings.run_id",
+    "run_stop.run_id"
+  ],
+  "lifecycle_statuses": [
+    "ready",
+    "starting",
+    "running",
+    "stopping",
+    "stopped",
+    "failed"
+  ],
+  "interactions": {
+    "run_defaults": {
+      "note": "Every bound, label, choice and marker the configuration screen renders.",
+      "method": "GET",
+      "path": "/api/run/defaults",
+      "status": 200,
+      "body": {
+        "schema": 1,
+        "defaults": {
+          "beings": [
+            {
+              "name": "Joe",
+              "start_region": "warm_springs",
+              "energy": 100.0,
+              "materials": 45.0,
+              "persona": null
+            },
+            {
+              "name": "Mae",
+              "start_region": "warm_springs",
+              "energy": 100.0,
+              "materials": 45.0,
+              "persona": null
+            },
+            {
+              "name": "Dick",
+              "start_region": "nirvana",
+              "energy": 100.0,
+              "materials": 45.0,
+              "persona": null
+            },
+            {
+              "name": "Allen",
+              "start_region": "nirvana",
+              "energy": 100.0,
+              "materials": 45.0,
+              "persona": null
+            }
+          ],
+          "abundance": 1.0,
+          "seed": 7,
+          "duration_seconds": 1800.0,
+          "provider": "gemini",
+          "reflect_every_n_breaths": 12,
+          "max_offspring": 5
+        },
+        "knobs": {
+          "beings": {
+            "label": "The beings",
+            "help": "The biggest lever on cost, on how often anything happens, and on whether anything social happens at all.",
+            "min_count": 1,
+            "max_count": 12,
+            "default_count": 4,
+            "estimated_cost_per_being_hour_usd": 3.0,
+            "cost_estimate_note": "Indicative, not a quote. The per-token prices behind this are not confirmed against the provider's current published rates, and a being's prompt grows as its life lengthens -- measured at about 4,500 tokens on its first breath and about 43,000 by its eightieth -- so a long run costs more per hour at the end than at the start. Read it as an order of magnitude, not a bill.",
+            "fields": {
+              "name": {
+                "label": "Name",
+                "help": "A label, not a character. It does not shape who a being becomes.",
+                "max_length": 40,
+                "defaults": [
+                  "Joe",
+                  "Mae",
+                  "Dick",
+                  "Allen"
+                ]
+              },
+              "start_region": {
+                "label": "Where it begins",
+                "help": "Beings that begin alone in separate regions may never meet. The default is two co-located pairs."
+              },
+              "energy": {
+                "label": "Starting energy",
+                "min": 50.0,
+                "max": 200.0,
+                "default": 100.0,
+                "help": "Below 5 a being is frozen the moment it loses anything; at 500 or more it is born flagged as a hoarder."
+              },
+              "materials": {
+                "label": "Starting materials",
+                "min": 0.0,
+                "max": 100.0,
+                "default": 45.0,
+                "help": "Mating needs 30; a home costs 80. That gap is the nest-versus-child tension.",
+                "markers": [
+                  {
+                    "at": 30.0,
+                    "label": "a child"
+                  },
+                  {
+                    "at": 80.0,
+                    "label": "a home"
+                  }
+                ]
+              },
+              "persona": {
+                "label": "Who it is born as",
+                "help": "Your words stay. What the being adds to them is its own. The text you write is this being's birth nature and remains at the top of its mind for the entire run, unchanged. From its 11th breath onward, and every 12 breaths after, the being pauses and may write a second passage about who it has become -- appended beneath your words. Over a long run that self-written passage is what drives its behaviour. It can contradict you. It cannot delete you.",
+                "max_length": 4000,
+                "default": "You have just awoken into this world — aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover — and freely reshape — the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+                "optional": true
+              }
+            }
+          },
+          "abundance": {
+            "label": "World abundance",
+            "help": "One slider on every region's regeneration at once. The authored gradient between the four regions is preserved.",
+            "min": 0.25,
+            "max": 3.0,
+            "default": 1.0,
+            "step": 0.05,
+            "min_label": "the land is dying",
+            "max_label": "the land provides"
+          },
+          "seed": {
+            "label": "The shape of the land",
+            "help": "The seed shapes the land itself -- where the paths run, where the water gathers, where things grow. The same seed always draws the same world. What the beings then choose to do in it is never the same twice.",
+            "min": 0,
+            "max": 2147483647,
+            "default": 7
+          },
+          "duration_seconds": {
+            "label": "How long it runs",
+            "help": "You can stop it at any time whatever you choose here.",
+            "min": 60.0,
+            "max": 86400.0,
+            "default": 1800.0,
+            "nullable": true,
+            "choices": [
+              {
+                "value": 900.0,
+                "label": "15 minutes",
+                "help": "Long enough to meet, not to build."
+              },
+              {
+                "value": 3600.0,
+                "label": "1 hour",
+                "help": "Long enough for homes and for a first child."
+              },
+              {
+                "value": 14400.0,
+                "label": "4 hours",
+                "help": "Long enough for a second generation."
+              },
+              {
+                "value": null,
+                "label": "Unbounded",
+                "help": "It runs until you stop it. This is the piece as intended."
+              }
+            ]
+          },
+          "provider": {
+            "label": "Where the minds run",
+            "help": "This changes cost, cadence, and how long a proposal is allowed to stand.",
+            "default": "gemini",
+            "choices": [
+              {
+                "value": "gemini",
+                "label": "The cloud",
+                "help": "Every being thinks at once, so the world moves at the pace it was tuned for. This is the only place that costs money.",
+                "cost_per_being_hour_usd": 3.0,
+                "cadence": "a breath every second or two"
+              },
+              {
+                "value": "ollama",
+                "label": "This machine",
+                "help": "One shared model thinks for one being at a time, so each being waits its turn. Free, and it does not get faster with a bigger roster -- it gets slower.",
+                "cost_per_being_hour_usd": 0.0,
+                "cadence": "minutes between breaths, one being at a time"
+              }
+            ]
+          },
+          "reflect_every_n_breaths": {
+            "label": "How often a being reflects",
+            "help": "How fast a being's own words appear beneath the ones you wrote. It cannot delete yours.",
+            "min": 2,
+            "max": 48,
+            "default": 12,
+            "choices": [
+              {
+                "value": 6,
+                "label": "Often -- every 6 breaths",
+                "help": "A being's self-narrative moves fastest here."
+              },
+              {
+                "value": 12,
+                "label": "Balanced -- every 12 breaths",
+                "help": "The measured default."
+              },
+              {
+                "value": 24,
+                "label": "Rarely -- every 24 breaths",
+                "help": "Beings stay closer to the words you wrote."
+              }
+            ]
+          },
+          "max_offspring": {
+            "label": "Children per being",
+            "help": "The population ceiling. Every being is told the number you choose.",
+            "min": 0,
+            "max": 10,
+            "default": 5,
+            "advanced": true
+          }
+        },
+        "regions": [
+          {
+            "name": "nirvana",
+            "description": "a once-heavenly landscape, now thinning and picked-over",
+            "connections": [
+              "warm_springs",
+              "nirvana_east",
+              "nirvana_west"
+            ],
+            "energy_rate": 0.2,
+            "materials_rate": 0.2,
+            "effective_energy_per_second": 0.04,
+            "effective_materials_per_second": 0.04,
+            "max_energy": 120.0,
+            "max_materials": 120.0
+          },
+          {
+            "name": "nirvana_east",
+            "description": "a struggling, near-barren stretch",
+            "connections": [
+              "warm_springs",
+              "nirvana"
+            ],
+            "energy_rate": 0.1,
+            "materials_rate": 0.1,
+            "effective_energy_per_second": 0.02,
+            "effective_materials_per_second": 0.02,
+            "max_energy": 70.0,
+            "max_materials": 70.0
+          },
+          {
+            "name": "warm_springs",
+            "description": "hot spring lakes — the least-poor refuge, but no longer plentiful",
+            "connections": [
+              "nirvana_west",
+              "nirvana_east",
+              "nirvana"
+            ],
+            "energy_rate": 0.25,
+            "materials_rate": 0.2,
+            "effective_energy_per_second": 0.05,
+            "effective_materials_per_second": 0.04,
+            "max_energy": 130.0,
+            "max_materials": 130.0
+          },
+          {
+            "name": "nirvana_west",
+            "description": "a nuclear wasteland, all but dead",
+            "connections": [
+              "warm_springs",
+              "nirvana"
+            ],
+            "energy_rate": 0.05,
+            "materials_rate": 0.0,
+            "effective_energy_per_second": 0.01,
+            "effective_materials_per_second": 0.0,
+            "max_energy": 50.0,
+            "max_materials": 10.0
+          }
+        ],
+        "locked": {
+          "regions": [
+            "nirvana",
+            "nirvana_east",
+            "warm_springs",
+            "nirvana_west"
+          ],
+          "world_tick_interval_seconds": 5.0
+        },
+        "derived": {
+          "mating_proposal_timeout_seconds": {
+            "gemini": 45.0,
+            "ollama": 600.0
+          },
+          "memory_root": "a fresh directory per run"
+        }
+      }
+    },
+    "run_start_accepted": {
+      "note": "The server's own defaults, submitted back unchanged, and accepted.",
+      "method": "POST",
+      "path": "/api/run/start",
+      "status": 202,
+      "request": {
+        "beings": [
+          {
+            "name": "Joe",
+            "start_region": "warm_springs",
+            "energy": 100.0,
+            "materials": 45.0,
+            "persona": null
+          },
+          {
+            "name": "Mae",
+            "start_region": "warm_springs",
+            "energy": 100.0,
+            "materials": 45.0,
+            "persona": null
+          },
+          {
+            "name": "Dick",
+            "start_region": "nirvana",
+            "energy": 100.0,
+            "materials": 45.0,
+            "persona": null
+          },
+          {
+            "name": "Allen",
+            "start_region": "nirvana",
+            "energy": 100.0,
+            "materials": 45.0,
+            "persona": null
+          }
+        ],
+        "abundance": 1.0,
+        "seed": 7,
+        "duration_seconds": 1800.0,
+        "provider": "gemini",
+        "reflect_every_n_breaths": 12,
+        "max_offspring": 5
+      },
+      "body": {
+        "run_id": "<redacted-per-run>",
+        "status": "starting",
+        "warnings": [
+          "The land regenerates about 0.12 energy a second against roughly 0.80 a second of drain from 4 beings. Expect scarcity to bite early."
+        ]
+      }
+    },
+    "run_start_with_warnings": {
+      "note": "Bleak but legal: accepted, with the cautions a viewer is entitled to.",
+      "method": "POST",
+      "path": "/api/run/start",
+      "status": 202,
+      "request": {
+        "beings": [
+          {
+            "name": "A",
+            "start_region": "nirvana",
+            "energy": 100.0,
+            "materials": 0.0
+          },
+          {
+            "name": "B",
+            "start_region": "nirvana_east",
+            "energy": 100.0,
+            "materials": 0.0
+          },
+          {
+            "name": "C",
+            "start_region": "warm_springs",
+            "energy": 100.0,
+            "materials": 0.0
+          },
+          {
+            "name": "D",
+            "start_region": "nirvana_west",
+            "energy": 100.0,
+            "materials": 0.0
+          }
+        ],
+        "abundance": 0.25,
+        "seed": 7,
+        "duration_seconds": 1800.0,
+        "provider": "gemini",
+        "reflect_every_n_breaths": 12,
+        "max_offspring": 5
+      },
+      "body": {
+        "run_id": "<redacted-per-run>",
+        "status": "starting",
+        "warnings": [
+          "Every being begins alone in a different region. They may never meet, and nothing social can happen.",
+          "The land regenerates about 0.03 energy a second against roughly 0.80 a second of drain from 4 beings. Expect scarcity to bite early.",
+          "No being starts with the 30 materials a mating proposal costs; every child must be earned from the land first."
+        ]
+      }
+    },
+    "run_start_rejected": {
+      "note": "Three bad fields reported in one pass. This body was unreadable once.",
+      "method": "POST",
+      "path": "/api/run/start",
+      "status": 422,
+      "request": {
+        "beings": [
+          {
+            "name": "",
+            "start_region": "nirvana",
+            "energy": 100.0,
+            "materials": 45.0
+          },
+          {
+            "name": "Mae",
+            "start_region": "atlantis",
+            "energy": 9000.0,
+            "materials": 45.0
+          }
+        ],
+        "abundance": 1.0,
+        "seed": 7,
+        "duration_seconds": 1800.0,
+        "provider": "gemini",
+        "reflect_every_n_breaths": 12,
+        "max_offspring": 5
+      },
+      "body": {
+        "detail": {
+          "errors": [
+            {
+              "field": "beings.0.name",
+              "message": "Every being needs a name."
+            },
+            {
+              "field": "beings.1.start_region",
+              "message": "There is no region called 'atlantis'. The four regions are locked: nirvana, nirvana_east, nirvana_west, warm_springs."
+            },
+            {
+              "field": "beings.1.energy",
+              "message": "Starting energy must be between 50 and 200. Below 5 a being is frozen the first time it loses anything; at 500 or more it is born flagged as a hoarder."
+            }
+          ]
+        }
+      }
+    },
+    "run_metadata": {
+      "note": "The observer's own join payload; its status vocabulary is the contract.",
+      "method": "GET",
+      "path": "/api/run",
+      "status": 200,
+      "body": {
+        "schema": 1,
+        "run_id": "<redacted-per-run>",
+        "seed": 7,
+        "started_at": 0.0,
+        "status": "running",
+        "event_cursor": 0.0,
+        "world_time": 0.0,
+        "config_hash": "<redacted-per-run>",
+        "constants": {
+          "paralysis_energy_threshold": 5.0,
+          "home_build_materials_cost": 80.0,
+          "home_upkeep_materials_per_second": 0.1,
+          "hoarding_energy_threshold": 500.0,
+          "hoarding_materials_threshold": 300.0,
+          "mating_cooldown_seconds": 300.0,
+          "ruins_persist_seconds": 120.0
+        },
+        "seed_persona": "You have just awoken into this world — aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover — and freely reshape — the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+        "provider": "gemini",
+        "model": "gemini-3.1-flash-lite",
+        "context_window": 720000,
+        "timing": {
+          "pace": 0.0,
+          "duration": 1800.0,
+          "world_tick_interval": 60.0,
+          "refresh_interval": 0.05
+        },
+        "artifacts": {
+          "events": "<redacted-per-run>",
+          "usage": "<redacted-per-run>",
+          "snapshots": "<redacted-per-run>",
+          "memory_root": "<redacted-per-run>"
+        }
+      }
+    },
+    "run_config": {
+      "note": "The config the live run started with, wrapped in run metadata.",
+      "method": "GET",
+      "path": "/api/run/config",
+      "status": 200,
+      "body": {
+        "schema": 1,
+        "run_id": "<redacted-per-run>",
+        "status": "running",
+        "config": {
+          "beings": [
+            {
+              "name": "Joe",
+              "start_region": "warm_springs",
+              "energy": 100.0,
+              "materials": 45.0,
+              "persona": null
+            },
+            {
+              "name": "Mae",
+              "start_region": "warm_springs",
+              "energy": 100.0,
+              "materials": 45.0,
+              "persona": null
+            },
+            {
+              "name": "Dick",
+              "start_region": "nirvana",
+              "energy": 100.0,
+              "materials": 45.0,
+              "persona": null
+            },
+            {
+              "name": "Allen",
+              "start_region": "nirvana",
+              "energy": 100.0,
+              "materials": 45.0,
+              "persona": null
+            }
+          ],
+          "abundance": 1.0,
+          "seed": 7,
+          "duration_seconds": 1800.0,
+          "provider": "gemini",
+          "reflect_every_n_breaths": 12,
+          "max_offspring": 5
+        },
+        "derived": {
+          "mating_proposal_timeout_seconds": 45.0,
+          "memory_root": "<redacted-per-run>"
+        },
+        "warnings": [
+          "The land regenerates about 0.12 energy a second against roughly 0.80 a second of drain from 4 beings. Expect scarcity to bite early."
+        ]
+      }
+    },
+    "run_stop": {
+      "note": "A stop is acknowledged before it finishes; the status says so.",
+      "method": "POST",
+      "path": "/api/run/stop",
+      "status": 202,
+      "body": {
+        "run_id": "<redacted-per-run>",
+        "status": "stopping"
+      }
+    }
+  }
+}

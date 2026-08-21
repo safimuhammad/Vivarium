@@ -31,6 +31,7 @@ from core.constants import (
     RUINS_PERSIST_SECONDS,
 )
 from core.rng import make_rng
+from core.run_settings import RunSettings
 from tests.conftest import SEED, FakeClock
 from tools.builtin.mating import initiate_mating, reject_mating
 from world.agents import AgentState, AgentStatus
@@ -159,6 +160,10 @@ async def test_tick_refunds_stale_proposal_and_keeps_fresh(
     assert inbox[0].type == "mating_proposal_timeout"
     assert inbox[0].target == "wanderer_001"
     assert inbox[0].timestamp == world.now()
+    assert inbox[0].payload["initiator_id"] == "wanderer_001"
+    assert inbox[0].payload["target_id"] == "wanderer_002"
+    assert inbox[0].payload["reason"] == "timeout"
+    assert inbox[0].payload["resources_refunded"] == {"energy": 50.0, "materials": 30.0}
 
 
 async def test_tick_leaves_recent_proposal_intact(
@@ -223,6 +228,9 @@ async def test_tick_decays_corpse_past_window_and_announces_it(
     assert here[0].scope is ScopeType.LOCAL
     assert here[0].region == "alpha"
     assert here[0].source == "wanderer_002"
+    assert here[0].payload["agent_id"] == "wanderer_002"
+    assert here[0].payload["region"] == "alpha"
+    assert here[0].payload["decayed_at"] == world.now()
     assert "message" in here[0].payload
     # A being in another region perceives nothing of it.
     assert [e for e in event_bus.get_events("wanderer_009") if e.type == "agent_decayed"] == []
@@ -406,6 +414,12 @@ async def test_tick_dead_owner_cannot_pay_decays_and_collapses(
     assert collapsed[0].region == "alpha"
     assert collapsed[0].source == "wanderer_002"
     assert collapsed[0].timestamp == world.now()
+    assert collapsed[0].payload["home_id"] == "home_boris"
+    assert collapsed[0].payload["target_home"] == "home_boris"
+    assert collapsed[0].payload["owner_id"] == "wanderer_002"
+    assert collapsed[0].payload["region"] == "alpha"
+    assert collapsed[0].payload["stakeholders"] == []
+    assert collapsed[0].payload["remnant_materials"] == ruin.remnant_materials
 
 
 async def test_tick_swept_owner_missing_decays_and_collapses(
@@ -772,3 +786,33 @@ async def test_tick_sweeps_a_ruin_after_the_persist_window(
     fake_clock.advance(2.0)  # now past the window
     await tick(world, event_bus)
     assert world.get_home("home_boris") is None  # swept
+
+
+async def test_tick_sweeps_against_the_runs_own_proposal_timeout(
+    world: WorldState, event_bus: EventBus, fake_clock: FakeClock
+) -> None:
+    """The lifetime is a per-run rule, not a repository constant.
+
+    On the serialized local path a target breathes only every ``N * latency`` seconds,
+    so a run derives a far longer lifetime; sweeping against the module constant
+    instead would expire the proposal before its target ever perceived it -- the exact
+    defect that made reproduction silently never complete.
+    """
+    world.run_settings = RunSettings(mating_proposal_timeout_seconds=600.0)
+    await initiate_mating(
+        world,
+        event_bus,
+        "wanderer_001",
+        target="wanderer_002",
+        message="be mine",
+        resources={ResourceTypes.ENERGY: 50.0, ResourceTypes.MATERIALS: 30.0},
+    )
+
+    # Well past the module constant (45s) but inside this run's 600s window.
+    fake_clock.advance(MATING_PROPOSAL_TIMEOUT_SECONDS + 1.0)
+    await tick(world, event_bus)
+    assert ("wanderer_001", "wanderer_002") in world.pending_proposals
+
+    fake_clock.advance(600.0)
+    await tick(world, event_bus)
+    assert ("wanderer_001", "wanderer_002") not in world.pending_proposals

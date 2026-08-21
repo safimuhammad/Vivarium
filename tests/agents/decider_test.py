@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -239,6 +239,98 @@ async def test_ollama_decider_times_out_on_a_hung_client() -> None:
         await decider.decide([], [])
 
 
+async def test_ollama_decider_reuses_owned_client_and_closes_it_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lazy production client is retained and its transport is closed once."""
+    clients: list[Any] = []
+
+    class _FakeTransport:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    class _FakeOwnedClient:
+        def __init__(self) -> None:
+            self._client = _FakeTransport()
+            clients.append(self)
+
+        async def chat(self, **kwargs: Any) -> SimpleNamespace:
+            return _fake_response(content="ok", thinking=None, tool_calls=[])
+
+    monkeypatch.setattr("ollama.AsyncClient", _FakeOwnedClient)
+    decider = OllamaDecider("test-model")
+
+    await decider.decide([], [])
+    await decider.decide([], [])
+    await decider.aclose()
+    await decider.aclose()
+
+    assert len(clients) == 1
+    assert clients[0]._client.close_calls == 1
+
+
+async def test_ollama_decider_never_closes_injected_client() -> None:
+    """An injected chat client remains owned by its caller."""
+
+    class _InjectedClient:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def chat(self, **kwargs: Any) -> SimpleNamespace:
+            return _fake_response(content="ok", thinking=None, tool_calls=[])
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    client = _InjectedClient()
+    decider = OllamaDecider("test-model", client=client)
+
+    await decider.decide([], [])
+    await decider.aclose()
+    await decider.aclose()
+
+    assert client.close_calls == 0
+
+
+async def test_ollama_decider_rejects_decision_after_close_before_first_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing an unused adapter is terminal and must not create a leaked client later."""
+    clients: list[object] = []
+
+    class _FakeOwnedClient:
+        def __init__(self) -> None:
+            clients.append(self)
+
+        async def chat(self, **kwargs: Any) -> SimpleNamespace:
+            return _fake_response(content="ok", thinking=None, tool_calls=[])
+
+    monkeypatch.setattr("ollama.AsyncClient", _FakeOwnedClient)
+    decider = OllamaDecider("test-model")
+
+    await decider.aclose()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        await decider.decide([], [])
+    assert clients == []
+
+
+async def test_installed_ollama_client_exposes_the_supported_close_boundary() -> None:
+    """The installed Ollama client still owns the async transport our adapter closes."""
+    import ollama
+
+    client = ollama.AsyncClient()
+    decider = OllamaDecider("test-model")
+    decider._client = cast(Any, client)
+
+    await decider.aclose()
+
+    assert client._client.is_closed
+
+
 async def test_serializing_decider_never_overlaps() -> None:
     """Concurrent decisions through the wrapper run strictly one at a time.
 
@@ -281,3 +373,43 @@ async def test_serializing_decider_releases_on_error() -> None:
     with pytest.raises(RuntimeError):
         await dec.decide([], [])
     assert not dec._lock.locked()  # context manager released it
+
+
+async def test_serializing_decider_closes_once_after_active_decision_finishes() -> None:
+    """Closing waits for the inference lock, then delegates exactly once."""
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _ClosableProbe:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def decide(
+            self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        ) -> Decision:
+            started.set()
+            await release.wait()
+            return Decision(text="ok")
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    inner = _ClosableProbe()
+    decider = SerializingDecider(inner)
+    decision_task = asyncio.create_task(decider.decide([], []))
+    await started.wait()
+
+    close_task = asyncio.create_task(decider.aclose())
+    await asyncio.sleep(0)
+    assert inner.close_calls == 0
+    assert not close_task.done()
+
+    release.set()
+    await decision_task
+    await close_task
+    await decider.aclose()
+
+    assert inner.close_calls == 1
+
+    with pytest.raises(RuntimeError, match="closed"):
+        await decider.decide([], [])

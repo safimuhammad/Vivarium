@@ -1,0 +1,29 @@
+{
+  "characterId": "m3",
+  "description": "Exact RGBs in M3's final 16-color quantized palette eligible for palette-variant remapping. 'top' = the vest (M3's dominant, most visually prominent upper-body garment) — the cream shirt underneath is intentionally NOT a remap family; see note. Skin and hair (including eyebrows) are never remapped, matching the roster-integration structural decision (#2).",
+  "sourcePalette": {
+    "top": [
+      { "role": "vest-main", "rgb": [134, 75, 29], "hex": "#864b1d", "note": "Dominant vest fill (verified via strap/collar-clear sample rectangles on front chest + back)." },
+      { "role": "vest-secondary", "rgb": [124, 65, 26], "hex": "#7c411a", "note": "Second fold-shading tone, near-equal pixel count to vest-main; the vest's painterly multi-tone shading (matches the source reference) uses several close browns, but only these two came back clean against both the pure-hair sample and the pure-trousers sample." }
+    ],
+    "trousers": [
+      { "role": "trousers-main", "rgb": [109, 91, 44], "hex": "#6d5b2c", "note": "Dominant, and only safely-usable, trousers tone. M3's palette has just 2 candidate trouser tones total; the other ((97,68,29)) is excluded (see note) leaving trousers as a single-tone family, same shape as F1's flat blouse-main." }
+    ]
+  },
+  "excludedFromRemap": {
+    "skin": [[252, 198, 132], [230, 150, 82]],
+    "hair": [[204, 150, 72], [234, 183, 107], [222, 165, 93], [169, 112, 48], [77, 41, 18]],
+    "shirtAndAccent": [[245, 218, 172], [190, 155, 101], [191, 135, 64]],
+    "sharedUtilityShade": [[97, 68, 29], [39, 28, 14]],
+    "note": "M3 needed the deepest cross-check of the roster so far (full-file pixel scans, not just sample rectangles, because the vest/trousers 'dark brown' cluster is unusually tight against hair/eyebrow tones at only 16 total colors). (77,41,18) is excluded from 'top' despite reading as a vest-adjacent brown in the ASCII legend — a full-image scan found it is M3's actual EYEBROW color (confirmed by a zoomed crop), so remapping it would recolor the eyebrows. (97,68,29) is excluded from both families — it is a triple-shared generic shade tone appearing in hair-shadow, vest fold-shading, AND trousers-shade. (245,218,172), the shirt-cream, is deliberately excluded from 'top' even though it is visually the most obvious second torso color: touchup_m3.py reuses it as the eye highlight (matching m1/F1's 'reuse an existing light color' convention), so remapping it would also recolor the eyes. trousers-main (109,91,44) has a minor, documented seam-boundary leak: ~5-12px per view at the vest/trousers waist transition (rows 23-31) also use this exact tone (belt-shadow blending into the trouser tone) — remapping trousers will very slightly tint those few seam pixels too; visually negligible given their count and boundary position, flagged for Safi's eyes at native atlas scale per the same standard as F1's skirt-hem caveat."
+  },
+  "suggestedVariant": {
+    "name": "ochre",
+    "note": "One example remap into the world's muted garment families (BEING_PALETTE_VARIANTS in beingPalette.ts: slate-blue / violet-grey / moss / ochre / bone). M3 ships in a warm brown vest already, so 'ochre' (a related but distinguishable warm family) is proposed for variant testing — re-validate visually against the actual atlas render before locking in for R3.",
+    "remap": [
+      { "from": [134, 75, 29], "to": [176, 128, 56], "role": "vest-main" },
+      { "from": [124, 65, 26], "to": [162, 114, 48], "role": "vest-secondary" },
+      { "from": [109, 91, 44], "to": [150, 122, 64], "role": "trousers-main" }
+    ]
+  }
+}

@@ -1,0 +1,155 @@
+.chronicle-validation-route {
+  position: relative;
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: #111611;
+  /* Measured (see ChronicleValidationApp.tsx's inset effect) heights of the QA
+     chrome docked at the top (guided-tour toggle + overlay) and bottom
+     (validation bar), defaulting to 0 before the first measurement. */
+  --qa-top-inset: 0px;
+  --qa-bottom-inset: 0px;
+}
+
+/* Reserve space for the QA chrome instead of overlaying production UI — the top
+   HUD chip (`.observer-hud`) and the bottom story ribbon (`.story-now`) were
+   being covered by the QA overlays that float above them at a higher z-index
+   (see the guided-tour report's "Review fixes" section). Production's own
+   `.vivarium-2d-app` is `position: fixed; inset: 0` (always the full viewport,
+   by design, so the standalone `/?renderer=2d` route fills the screen); this
+   QA-scoped override turns it into a box inset by the QA chrome's own measured
+   height instead, so every production panel positioned *inside* it (the HUD,
+   the story ribbon, drawers, ...) lays out within the remaining area rather
+   than underneath the QA chrome. Production's `/?renderer=2d` route never has
+   `.chronicle-validation-route` as an ancestor, so this rule never applies
+   there — verified visually unchanged. */
+.chronicle-validation-route .vivarium-2d-app {
+  position: absolute;
+  top: var(--qa-top-inset);
+  right: 0;
+  bottom: var(--qa-bottom-inset);
+  left: 0;
+  width: auto;
+  height: auto;
+}
+
+/*
+ * THE QA PUCK — what is left of the old bottom control bar.
+ *
+ * Owner (Safi, 2026-07-30) on the full-width bar: *"fine for testing but ugly
+ * and useless"*. Everything production owns — LIVE, play/pause, speed — now
+ * lives with the feed inside the Chronicle killfeed's transport cluster, so
+ * nothing here is a viewing control any more.
+ *
+ * What remains is genuinely QA-only and has no production meaning: the chronicle
+ * picker, restart, the review markers and the failure token. Those cannot move
+ * into a production drawer, and this element cannot move inside the world app
+ * either: `chronicleValidation.contract.test.tsx` pins `.chronicle-validation-bar`
+ * to one stable DOM identity across generation swaps in which the world app is
+ * unmounted entirely. So it stays a sibling, and stops stretching across the
+ * screen: a collapsed puck in the corner that opens on hover or focus.
+ */
+.chronicle-validation-bar {
+  position: fixed;
+  z-index: 100;
+  inset: auto auto 12px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 15rem;
+  max-height: 2.25rem;
+  padding: 6px 10px;
+  overflow: hidden;
+  color: #f5f0d8;
+  background: color-mix(in srgb, #17221b 94%, transparent);
+  border: 2px solid #d8bb74;
+  border-radius: 10px;
+  box-shadow: 0 4px 0 #080c09, 0 12px 28px rgb(0 0 0 / 35%);
+  font: 600 12px/1.2 system-ui, sans-serif;
+  opacity: 0.55;
+  flex-wrap: wrap;
+  transition: max-width 120ms ease, max-height 120ms ease, opacity 120ms ease;
+}
+
+.chronicle-validation-bar:hover,
+.chronicle-validation-bar:focus-within {
+  max-width: min(56rem, calc(100vw - 24px));
+  max-height: min(46dvh, 360px);
+  overflow: auto;
+  opacity: 1;
+}
+
+/* Collapsed, only the run's identity shows; everything else is one hover away. */
+.chronicle-validation-bar > :not(.chronicle-validation-bar__identity) {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.chronicle-validation-bar:hover > *,
+.chronicle-validation-bar:focus-within > * {
+  opacity: 1;
+}
+
+.chronicle-validation-bar label,
+.chronicle-validation-bar__identity,
+.chronicle-validation-bar__readout {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chronicle-validation-bar__buttons,
+.chronicle-validation-bar__scenario {
+  display: flex;
+  gap: 6px;
+}
+
+.chronicle-validation-bar button,
+.chronicle-validation-bar select {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 10px;
+  color: inherit;
+  background: #26392c;
+  border: 1px solid #af9b67;
+  border-radius: 8px;
+  font: inherit;
+}
+
+.chronicle-validation-bar button:focus-visible,
+.chronicle-validation-bar select:focus-visible {
+  outline: 3px solid #fff1a8;
+  outline-offset: 2px;
+}
+
+.chronicle-validation-bar button:disabled {
+  opacity: 0.5;
+}
+
+.chronicle-validation-bar__error {
+  margin: 0;
+  color: #ffc3b8;
+}
+
+@media (max-width: 900px) {
+  .chronicle-validation-bar {
+    max-height: min(46dvh, 360px);
+    overflow: auto;
+    flex-wrap: wrap;
+  }
+
+  .chronicle-validation-bar__buttons,
+  .chronicle-validation-bar__scenario,
+  .chronicle-validation-bar__readout {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chronicle-validation-bar,
+  .chronicle-validation-bar * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}

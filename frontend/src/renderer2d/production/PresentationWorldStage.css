@@ -1,0 +1,158 @@
+.presentation-world-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #101813;
+  isolation: isolate;
+}
+
+.presentation-world-stage__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  outline: none;
+  touch-action: none;
+  cursor: grab;
+}
+
+/**
+ * Hover affordance at world zoom: an island under the pointer is a place you can enter, so the
+ * cursor says so. Declared BEFORE `--dragging` on purpose — equal specificity, so a grab in
+ * progress still wins.
+ */
+.presentation-world-stage__canvas--over-island {
+  cursor: pointer;
+}
+
+.presentation-world-stage__canvas--dragging {
+  cursor: grabbing;
+}
+
+.presentation-world-stage__canvas:focus-visible {
+  box-shadow: inset 0 0 0 3px #f4d58b;
+}
+
+.presentation-world-stage__failure {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: min(24rem, calc(100% - 2rem));
+  padding: 1rem;
+  transform: translate(-50%, -50%);
+  border: 2px solid #4c5b48;
+  border-radius: 0.75rem;
+  background: #f2e7c9;
+  color: #243126;
+  box-shadow: 0 0.75rem 0 #18251c80;
+  text-align: center;
+}
+
+.presentation-world-stage__failure p {
+  margin: 0 0 0.75rem;
+}
+
+.presentation-world-stage__failure button {
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  border: 2px solid #314535;
+  border-radius: 999px;
+  background: #d7c57c;
+  color: #17231a;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/**
+ * Viewer-camera release affordance. Present ONLY while the viewer has taken framing authority,
+ * so automatic framing can never stop silently: the badge says the camera is theirs and the
+ * button (mirroring the S key) is the single explicit way to hand it back.
+ */
+.presentation-world-stage__camera-release {
+  position: absolute;
+  inset: 0.75rem 0.75rem auto auto;
+  z-index: 2;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+  padding: 0.375rem 0.375rem 0.375rem 0.75rem;
+  border: 2px solid #314535;
+  border-radius: 999px;
+  background: #f2e7c9e6;
+  color: #17231a;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  box-shadow: 0 0.375rem 0 #18251c66;
+}
+
+.presentation-world-stage__camera-release button {
+  min-height: 2rem;
+  padding: 0.25rem 0.75rem;
+  border: 2px solid #314535;
+  border-radius: 999px;
+  background: #d7c57c;
+  color: #17231a;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/**
+ * The explicit way OUT of a region. Present whenever the viewer is inside a place, because
+ * "leaving must be deliberate" is only honest if there is always a deliberate way to leave. While
+ * the viewer is pressed against the region's zoom floor it becomes the step-out hint instead, which
+ * is how the detent explains itself.
+ */
+.presentation-world-stage__region-exit {
+  position: absolute;
+  /* Bottom-left: the shell already owns the stage's top-left (region summary), top-right (the
+     camera-release badge) and bottom-right (the NOW panel). Measured against a live capture, where
+     a top-left placement was half-hidden behind the summary bar. */
+  inset: auto auto 0.75rem 0.75rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+  padding: 0.375rem 0.375rem 0.375rem 0.75rem;
+  border: 2px solid #2b3a44;
+  border-radius: 999px;
+  background: #0f1c22cc;
+  color: #e9f2ee;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  box-shadow: 0 0.375rem 0 #05101466;
+}
+
+.presentation-world-stage__region-exit[data-exit-offered="true"] {
+  border-color: #d7c57c;
+  background: #1b2a20e6;
+  color: #f6e8c4;
+}
+
+.presentation-world-stage__region-exit button {
+  min-height: 2rem;
+  padding: 0.25rem 0.75rem;
+  border: 2px solid #2b3a44;
+  border-radius: 999px;
+  background: #24333a;
+  color: #f2e7c9;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .presentation-world-stage__camera-release {
+    transition: opacity 120ms ease-out;
+  }
+
+  .presentation-world-stage__region-exit {
+    transition: border-color 160ms ease-out, background-color 160ms ease-out;
+  }
+}

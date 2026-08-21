@@ -24,7 +24,7 @@ population growth so the world neither collapses nor explodes):
 * **Cooldown** (``MATING_COOLDOWN_SECONDS``) — an agent that mated recently cannot
   initiate or accept; eligibility is re-validated for *both* parties at accept-time
   (a pending proposal's initiate-time snapshot can go stale).
-* **Per-agent offspring cap** (``MATING_MAX_OFFSPRING``) — checked for the initiator
+* **Per-agent offspring cap** (``RunSettings.mating_max_offspring``) — checked for the initiator
   at initiate-time and for both parties at accept-time.
 
 When the initiator is no longer eligible at accept-time the proposal can never
@@ -45,11 +45,11 @@ from core.constants import (
     AGENT_ID_CATEGORIES,
     GENESIS_SEED,
     MATING_COOLDOWN_SECONDS,
-    MATING_MAX_OFFSPRING,
     MATING_MIN_ENERGY_CONTRIBUTION,
     MATING_MIN_MATERIALS_CONTRIBUTION,
     MATING_OFFSPRING_MULTIPLIER,
 )
+from observability.event_payloads import serialize_resource_map
 from world.agents import AgentState, AgentStatus
 from world.regions import ResourceTypes
 from world.world import WorldState
@@ -143,7 +143,7 @@ async def initiate_mating(
     # precondition -> proposal validity, all ahead of the affordability/balance check.
     if world.is_on_mating_cooldown(agent_init.id, world.now(), MATING_COOLDOWN_SECONDS):
         return _COOLDOWN_MESSAGE
-    if agent_init.offspring_count >= MATING_MAX_OFFSPRING:
+    if agent_init.offspring_count >= world.run_settings.mating_max_offspring:
         return _OFFSPRING_CAP_MESSAGE
     if (
         committed.get(ResourceTypes.ENERGY, 0.0) < MATING_MIN_ENERGY_CONTRIBUTION
@@ -168,6 +168,11 @@ async def initiate_mating(
         if resource_type == ResourceTypes.MATERIALS and agent_init.current_materials < quantity:
             return f"Error: Committed {resource_type} more than currently available."
 
+    # Pre-mutation snapshot for the renderer (spec §4.2): the payload reports the
+    # initiator's balances after the escrow deduction, so the "before" side is read here.
+    initiator_energy_before = agent_init.current_energy
+    initiator_materials_before = agent_init.current_materials
+
     for resource_type, quantity in committed.items():
         if resource_type == ResourceTypes.ENERGY:
             world.modify_agent_energy(agent_init.id, -quantity)
@@ -178,7 +183,19 @@ async def initiate_mating(
     event_message = Event(
         "mating_initiated",
         agent_init.id,
-        {"message": message},
+        {
+            "message": message,
+            "initiator_id": agent_init.id,
+            "target_id": agent_target.id,
+            "resources": serialize_resource_map(committed),
+            "proposal_timestamp": world.now(),
+            "initiator_name": agent_init.name,
+            "target_name": agent_target.name,
+            "initiator_energy_before": initiator_energy_before,
+            "initiator_energy": agent_init.current_energy,
+            "initiator_materials_before": initiator_materials_before,
+            "initiator_materials": agent_init.current_materials,
+        },
         ScopeType.TARGETED,
         target=agent_target.id,
         timestamp=world.now(),
@@ -229,6 +246,10 @@ async def reject_mating(
         return "Error: No pending proposal found."
 
     resources: Any = pend_proposal.get("resources", {})
+    # Pre-mutation snapshot for the renderer (spec §4.2): the escrow returns to the
+    # initiator here, so report both sides of the refund rather than only its size.
+    initiator_energy_before = agent_target.current_energy
+    initiator_materials_before = agent_target.current_materials
     for resource_type, quantity in resources.items():
         if resource_type == ResourceTypes.ENERGY:
             world.modify_agent_energy(agent_target.id, quantity)
@@ -239,7 +260,19 @@ async def reject_mating(
     event_message = Event(
         "mating_rejected",
         agent_init.id,
-        {"message": message},
+        {
+            "message": message,
+            "rejecter_id": agent_init.id,
+            "rejecter_name": agent_init.name,
+            "initiator_id": agent_target.id,
+            "initiator_name": agent_target.name,
+            "target_id": agent_init.id,
+            "resources_refunded": serialize_resource_map(resources),
+            "initiator_energy_before": initiator_energy_before,
+            "initiator_energy": agent_target.current_energy,
+            "initiator_materials_before": initiator_materials_before,
+            "initiator_materials": agent_target.current_materials,
+        },
         scope=ScopeType.TARGETED,
         target=target,
         timestamp=world.now(),
@@ -318,7 +351,7 @@ async def accept_mating(
     # later via reject/timeout -- so no escrow is touched.
     if world.is_on_mating_cooldown(agent_accept.id, world.now(), MATING_COOLDOWN_SECONDS):
         return _COOLDOWN_MESSAGE
-    if agent_accept.offspring_count >= MATING_MAX_OFFSPRING:
+    if agent_accept.offspring_count >= world.run_settings.mating_max_offspring:
         return _OFFSPRING_CAP_MESSAGE
 
     # Re-validate the INITIATOR at commit-time: a proposal can sit in escrow while the
@@ -328,8 +361,12 @@ async def accept_mating(
     # stranded behind a permanently-dead proposal.
     if (
         world.is_on_mating_cooldown(agent_init.id, world.now(), MATING_COOLDOWN_SECONDS)
-        or agent_init.offspring_count >= MATING_MAX_OFFSPRING
+        or agent_init.offspring_count >= world.run_settings.mating_max_offspring
     ):
+        # Pre-mutation snapshot for the renderer (spec §4.2): report both sides of the
+        # auto-refund, not only its size.
+        initiator_energy_before = agent_init.current_energy
+        initiator_materials_before = agent_init.current_materials
         for resource_type, quantity in resources.items():
             if resource_type == ResourceTypes.ENERGY:
                 world.modify_agent_energy(agent_init.id, quantity)
@@ -345,11 +382,19 @@ async def accept_mating(
                 "mating_proposal_invalidated",
                 agent_init.id,
                 {
+                    "initiator_id": agent_init.id,
+                    "target_id": agent_accept.id,
+                    "reason": "initiator_ineligible",
+                    "resources_refunded": serialize_resource_map(resources),
+                    "initiator_energy_before": initiator_energy_before,
+                    "initiator_energy": agent_init.current_energy,
+                    "initiator_materials_before": initiator_materials_before,
+                    "initiator_materials": agent_init.current_materials,
                     "message": (
                         f"Your mating proposal to {agent_accept.id} was invalidated because "
                         f"you are no longer eligible to mate (cooldown or offspring cap); "
                         f"your committed resources have been refunded."
-                    )
+                    ),
                 },
                 scope=ScopeType.TARGETED,
                 target=agent_init.id,
@@ -399,6 +444,10 @@ async def accept_mating(
         status=AgentStatus.ALIVE,
     )
 
+    # Pre-mutation snapshot for the renderer (spec §4.2): the acceptor matches the
+    # escrow here, so the birth reports both sides of its commitment.
+    acceptor_energy_before = agent_accept.current_energy
+    acceptor_materials_before = agent_accept.current_materials
     for resource_type, quantity in resources.items():
         if resource_type == ResourceTypes.ENERGY:
             world.modify_agent_energy(agent_accept.id, -quantity)
@@ -412,17 +461,36 @@ async def accept_mating(
     world.record_mating(agent_init.id, completed_at)
     world.record_mating(agent_accept.id, completed_at)
     payload = {
+        "child_id": offspring_id,
+        "child_name": offspring_name,
+        "parent_ids": [agent_init.id, agent_accept.id],
+        "initiator_id": agent_init.id,
+        "initiator_name": agent_init.name,
+        "acceptor_id": agent_accept.id,
+        "acceptor_name": agent_accept.name,
+        "region": offspring.current_position,
+        "committed_resources": serialize_resource_map(resources),
+        "acceptor_energy_before": acceptor_energy_before,
+        "acceptor_energy": agent_accept.current_energy,
+        "acceptor_materials_before": acceptor_materials_before,
+        "acceptor_materials": agent_accept.current_materials,
+        "child_resources": {
+            ResourceTypes.ENERGY.value: offspring.current_energy,
+            ResourceTypes.MATERIALS.value: offspring.current_materials,
+        },
+        "offspring_multiplier": MATING_OFFSPRING_MULTIPLIER,
         "message": (
             f"New Agent is born with Agent ID:{offspring_id}|Agent Name:{offspring_name}, "
             f"Mated by Agent ID:{agent_init.id}|Agent Name:{agent_init.name} and "
             f"Agent ID:{agent_accept.id}|Agent Name:{agent_accept.name}"
-        )
+        ),
     }
     event_message = Event(
         "agent_born",
         offspring_id,
         payload,
         scope=ScopeType.LOCAL,
+        region=offspring.current_position,
         timestamp=world.now(),
     )
     await event_bus.publish(event_message)

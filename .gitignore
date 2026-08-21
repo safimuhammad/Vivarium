@@ -33,3 +33,21 @@ venv/
 .coverage.*
 htmlcov/
 coverage.xml
+
+# Node / frontend QA artifacts
+node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+.playwright-mcp/
+playwright-report/
+test-results/
+
+# Working artifacts — evidence plates, probes, rollback tars (53GB), scratch
+scratchpad/
+tmp/
+
+# Live run artifacts: event/snapshot ledgers, usage logs, and per-being memory
+runs/
+
+# Working ledgers and SDD reports — kept local
+.superpowers/

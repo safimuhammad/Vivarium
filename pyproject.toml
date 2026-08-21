@@ -27,6 +27,9 @@ dependencies = [
     "httpx",
     # Loads the gitignored .env so a hosted provider's key (GEMINI_API_KEY) is present.
     "python-dotenv",
+    # Browser-facing live API for the frontend observer.
+    "fastapi",
+    "uvicorn",
 ]
 
 [project.optional-dependencies]
@@ -47,7 +50,17 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["world*", "bus*", "tools*", "config*", "core*", "agents*", "observability*", "memory*"]
+include = [
+    "world*",
+    "bus*",
+    "tools*",
+    "config*",
+    "core*",
+    "agents*",
+    "observability*",
+    "memory*",
+    "server*",
+]
 exclude = ["tests*"]
 
 # ---------------------------------------------------------------------------
@@ -130,7 +143,18 @@ markers = [
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
 branch = true
-source = ["world", "bus", "tools", "config", "core", "agents", "observability", "memory", "scripts"]
+source = [
+    "world",
+    "bus",
+    "tools",
+    "config",
+    "core",
+    "agents",
+    "observability",
+    "memory",
+    "scripts",
+    "server",
+]
 omit = ["tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]

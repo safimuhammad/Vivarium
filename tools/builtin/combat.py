@@ -85,6 +85,14 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
             f"lower than required to attack {ATTACK_ENERGY_COST}."
         )
 
+    # Pre-mutation snapshot: every number this tool changes is reported in the payload
+    # *after* the change, so a renderer needs the "before" side to animate the drain
+    # (spec §4.2). Read here, before the first modify_*, for both parties.
+    attacker_energy_before = attacker_agent.current_energy
+    attacker_materials_before = attacker_agent.current_materials
+    victim_energy_before = target_agent.current_energy
+    victim_materials_before = target_agent.current_materials
+
     world.modify_agent_energy(attacker_agent.id, -ATTACK_ENERGY_COST)
 
     target_was_paralyzed = target_agent.status is AgentStatus.PARALYZED
@@ -108,14 +116,30 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
         world.modify_agent_energy(attacker_agent.id, looted_energy)
         world.modify_agent_materials(attacker_agent.id, looted_materials)
         death_payload: dict[str, Any] = {
+            "victim_id": target_agent.id,
+            "victim_name": target_agent.name,
+            "killer_id": attacker_agent.id,
             "message": (
                 f"{target_agent.name} (ID:{target_agent.id}) was slain by "
                 f"{attacker_agent.name} (ID:{attacker_agent.id}), who took "
                 f"{looted_energy} energy and {looted_materials} materials as loot."
             ),
             "killer": attacker_agent.id,
+            "region": death_region,
+            "attack_damage": ATTACK_DAMAGE,
+            "attack_energy_cost": ATTACK_ENERGY_COST,
+            "victim_was_paralyzed": target_was_paralyzed,
             "looted_energy": looted_energy,
             "looted_materials": looted_materials,
+            "attacker_name": attacker_agent.name,
+            "attacker_energy_before": attacker_energy_before,
+            "attacker_energy": attacker_agent.current_energy,
+            "attacker_materials_before": attacker_materials_before,
+            "attacker_materials": attacker_agent.current_materials,
+            "victim_energy_before": victim_energy_before,
+            "victim_energy": target_agent.current_energy,
+            "victim_materials_before": victim_materials_before,
+            "victim_materials": target_agent.current_materials,
         }
         await event_bus.publish(
             Event(
@@ -136,17 +160,29 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
 
     world.modify_agent_energy(target_agent.id, -ATTACK_DAMAGE)
     payload = {
+        "attacker_id": attacker_agent.id,
+        "attacker_name": attacker_agent.name,
+        "victim_id": target_agent.id,
+        "victim_name": target_agent.name,
+        "region": target_agent.current_position,
+        "damage": ATTACK_DAMAGE,
+        "attack_energy_cost": ATTACK_ENERGY_COST,
+        "attacker_energy_before": attacker_energy_before,
+        "attacker_energy": attacker_agent.current_energy,
+        "victim_energy_before": victim_energy_before,
+        "victim_energy": target_agent.current_energy,
         "message": (
             f"Agent ID:{attacker_agent.id}|Agent Name:{attacker_agent.name} Attacked you! "
             f"and drained {ATTACK_DAMAGE} Energy points. "
             f"Energy Remaining:{target_agent.current_energy} "
-        )
+        ),
     }
     event_message = Event(
         "attack",
         attacker_agent.id,
         payload,
         scope=ScopeType.LOCAL,
+        region=target_agent.current_position,
         target=target_agent.id,
         timestamp=world.now(),
     )
@@ -164,7 +200,16 @@ async def attack(world: WorldState, event_bus: EventBus, agent_id: str, target: 
             Event(
                 "agent_paralyzed",
                 "system",
-                {"message": f"{target_agent.name} has collapsed and can no longer move."},
+                {
+                    "agent_id": target_agent.id,
+                    "victim_id": target_agent.id,
+                    "attacker_id": attacker_agent.id,
+                    "region": target_agent.current_position,
+                    "trigger": "attack",
+                    "energy_before": victim_energy_before,
+                    "energy": target_agent.current_energy,
+                    "message": f"{target_agent.name} has collapsed and can no longer move.",
+                },
                 scope=ScopeType.LOCAL,
                 region=target_agent.current_position,
                 timestamp=world.now(),

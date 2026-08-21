@@ -155,3 +155,20 @@ def test_world_mechanics_describes_break_in_and_ruins() -> None:
     # The DD9 forbidden-words guard MUST stay green.
     for banned in FORBIDDEN_TERMS:
         assert banned not in lowered
+
+
+def test_world_mechanics_distinguishes_private_awareness_from_reaching_acts() -> None:
+    """A being should understand which acts only inform itself versus touch the world."""
+    from agents.prompt import WORLD_MECHANICS
+
+    lowered = WORLD_MECHANICS.lower()
+    assert "looking around" in lowered
+    assert "sharpens your own awareness" in lowered
+    assert "changes nothing" in lowered
+    assert "reaches no one else" in lowered
+    assert "speaking" in lowered
+    assert "travelling" in lowered
+    assert "gathering" in lowered
+    # DD9 still holds: this must remain consequence language, not a test/UI instruction.
+    for banned in FORBIDDEN_TERMS:
+        assert banned not in lowered

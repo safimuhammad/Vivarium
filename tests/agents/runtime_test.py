@@ -31,6 +31,7 @@ from core.constants import (
     PROMPT_BUDGET_TOKENS,
     REFLECT_EVERY_N_BREATHS,
 )
+from core.run_settings import RunSettings
 from memory.models import Importance
 from memory.store import FileMemoryStore
 from observability.event_log import InMemoryEventLog
@@ -760,6 +761,12 @@ async def test_breath_into_paralysis_emits_event_and_loop_survives(world: WorldS
     assert agent._can_continue(None) is True  # paralysis is NOT terminal; the loop survives
     paralyzed = [event for event in log.events if event.type == "agent_paralyzed"]
     assert len(paralyzed) == 1  # the transition fires exactly once, not every frozen breath
+    collapsed = _live(world, ADA)
+    payload = paralyzed[0].payload
+    assert payload["agent_id"] == ADA
+    assert payload["region"] == collapsed.current_position
+    assert payload["trigger"] == "breath"
+    assert payload["energy"] == collapsed.current_energy
 
 
 async def test_run_does_not_act_for_dead_agent(
@@ -1011,11 +1018,10 @@ async def test_reflection_fires_on_nth_breath_and_persists(
     event_bus: EventBus,
     populated_registry: ToolRegistry,
     memory_store: FileMemoryStore,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import agents.runtime as runtime_module
-
-    monkeypatch.setattr(runtime_module, "REFLECT_EVERY_N_BREATHS", 2)
+    # The cadence is a per-run world rule now, so set it on the world rather than
+    # monkeypatching a module constant.
+    world.run_settings = RunSettings(reflect_every_n_breaths=2)
     decider = ReflectAwareDecider(
         action=Decision(tool_calls=[ToolCall("look_around")]),
         reflection=Decision(
@@ -1228,14 +1234,19 @@ async def test_reflection_ignores_unexpected_tool(
 
 
 class ToolsCapturingDecider:
-    """Records the tool schemas offered on the latest ``decide`` call."""
+    """Records the tool schemas offered on each ``decide`` call."""
 
-    def __init__(self) -> None:
+    def __init__(self, decisions: list[Decision] | None = None) -> None:
         self.tools: list[dict[str, Any]] = []
+        self.tool_batches: list[list[dict[str, Any]]] = []
+        self.message_batches: list[list[dict[str, Any]]] = []
+        self._decisions = decisions or [Decision()]
 
     async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
+        self.message_batches.append(messages)
         self.tools = tools
-        return Decision()
+        self.tool_batches.append(tools)
+        return self._decisions[(len(self.tool_batches) - 1) % len(self._decisions)]
 
 
 async def test_recall_offered_in_action_schemas_when_memory_present(
@@ -1252,6 +1263,135 @@ async def test_recall_offered_in_action_schemas_when_memory_present(
     names = {tool["function"]["name"] for tool in decider.tools}
     assert "recall" in names
     assert "look_around" in names  # registry tools still offered alongside recall
+
+
+async def test_first_breath_schema_uses_perception_instead_of_private_reread(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+) -> None:
+    decider = ToolsCapturingDecider()
+    agent = Agent(ADA, world, event_bus, populated_registry, decider)
+
+    await agent.perceive()
+    perception = str(agent.lifecycle_history[-1]["content"])
+    assert "Where you stand" in perception
+    assert "Paths lead to" in perception
+    assert "Also here" in perception
+    assert "Energy in this place" in perception
+    assert "Materials in this place" in perception
+    await agent.decide()
+
+    first_names = {tool["function"]["name"] for tool in decider.tool_batches[0]}
+    assert "look_around" not in first_names
+    assert {"move", "speak", "harvest_resources"} <= first_names
+    first_system = str(decider.message_batches[0][0]["content"])
+    assert "- look_around" not in first_system
+    assert "- move" in first_system
+    assert "- speak" in first_system
+
+    agent.breath_count = 1
+    await agent.perceive()
+    await agent.decide()
+
+    second_names = {tool["function"]["name"] for tool in decider.tool_batches[1]}
+    assert "look_around" in second_names
+    second_system = str(decider.message_batches[1][0]["content"])
+    assert "- look_around" in second_system
+
+
+async def test_first_breath_schema_suppresses_recall_until_after_initial_perception(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+    memory_store: FileMemoryStore,
+) -> None:
+    decider = ToolsCapturingDecider()
+    agent = Agent(ADA, world, event_bus, populated_registry, decider, memory=memory_store)
+
+    await agent.perceive()
+    await agent.decide()
+    first_names = {tool["function"]["name"] for tool in decider.tool_batches[0]}
+    assert "look_around" not in first_names
+    assert "recall" not in first_names
+    first_system = str(decider.message_batches[0][0]["content"])
+    assert "- look_around" not in first_system
+    assert "- recall" not in first_system
+
+    agent.breath_count = 1
+    await agent.perceive()
+    await agent.decide()
+    second_names = {tool["function"]["name"] for tool in decider.tool_batches[1]}
+    assert "look_around" in second_names
+    assert "recall" in second_names
+    second_system = str(decider.message_batches[1][0]["content"])
+    assert "- look_around" in second_system
+
+
+async def test_private_reread_breath_suppresses_private_tools_on_next_decision(
+    world: WorldState,
+    event_bus: EventBus,
+    populated_registry: ToolRegistry,
+) -> None:
+    decider = ToolsCapturingDecider(
+        [
+            Decision(tool_calls=[ToolCall("look_around")]),
+            Decision(tool_calls=[ToolCall("speak", {"message": "The springs are awake."})]),
+            Decision(),
+        ]
+    )
+    agent = Agent(ADA, world, event_bus, populated_registry, decider)
+    agent.breath_count = 1  # past the newborn first-breath filter
+
+    await agent.breathe()
+    first_names = {tool["function"]["name"] for tool in decider.tool_batches[0]}
+    assert "look_around" in first_names
+
+    await agent.breathe()
+    second_names = {tool["function"]["name"] for tool in decider.tool_batches[1]}
+    assert "look_around" not in second_names
+
+    await agent.breathe()
+    third_names = {tool["function"]["name"] for tool in decider.tool_batches[2]}
+    assert "look_around" in third_names
+
+
+async def test_tool_like_json_text_is_not_self_talk_and_suppresses_private_next(
+    world: WorldState,
+) -> None:
+    event_bus, registry, log = _wired(world, with_log=True)
+    assert log is not None
+    decider = ToolsCapturingDecider(
+        [
+            Decision(text='{"name":"look_around","parameters":{}}'),
+            Decision(),
+        ]
+    )
+    agent = Agent(ADA, world, event_bus, registry, decider)
+    agent.breath_count = 1  # past the newborn first-breath filter
+
+    await agent.breathe()
+
+    assert [event for event in log.events if event.type == "self_talk"] == []
+
+    await agent.breathe()
+
+    second_names = {tool["function"]["name"] for tool in decider.tool_batches[1]}
+    assert "look_around" not in second_names
+
+
+async def test_malformed_tool_like_json_text_is_not_self_talk(
+    world: WorldState,
+) -> None:
+    event_bus, registry, log = _wired(world, with_log=True)
+    assert log is not None
+    decider = ToolsCapturingDecider([Decision(text='{"name": "use_hearth", "parameters": {"}}')])
+    agent = Agent(ADA, world, event_bus, registry, decider)
+    agent.breath_count = 1
+
+    await agent.breathe()
+
+    assert [event for event in log.events if event.type == "self_talk"] == []
 
 
 async def test_recall_not_offered_without_memory(
@@ -1674,6 +1814,7 @@ async def test_text_only_breath_emits_private_self_talk(
     assert len(self_talks) == 1
     assert self_talks[0].scope is ScopeType.PRIVATE
     assert self_talks[0].payload["message"] == "I wonder what lies past the hills."
+    assert self_talks[0].payload["agent_id"] == ADA
     assert event_bus.get_events(ADA) == []  # delivered to no one, not even itself
     # Self-talk itself costs nothing extra; the idle breath it rides on still ages.
     assert _live(world, ADA).current_energy == energy_before - IDLE_AGING_ENERGY_COST

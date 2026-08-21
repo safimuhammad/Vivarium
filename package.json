@@ -1,0 +1,29 @@
+{
+  "name": "simulation",
+  "private": true,
+  "scripts": {
+    "dev:frontend": "npm --prefix frontend run dev",
+    "live": "node scripts/live-observatory.js --idle",
+    "dev:observatory": "node scripts/live-observatory.js",
+    "build:frontend": "npm --prefix frontend run build",
+    "test:frontend:bundle": "npm --prefix frontend run check:bundle",
+    "test:frontend:unit": "npm --prefix frontend run test:unit",
+    "test:frontend:capture-handoff": "node --expose-gc --test frontend/scripts/project-2d-capture-handoff.test.mjs frontend/scripts/finalize-2d-capture-handoff.test.mjs frontend/scripts/chronicle-evidence-oracles.test.mjs frontend/scripts/record-2d-chronicles.test.mjs",
+    "test:frontend:app": "playwright test -c playwright.frontend-app.config.js",
+    "test:frontend:live": "playwright test -c playwright.frontend-live.config.js",
+    "test:frontend:live:local-handoff": "node tests/frontend-live/local-handoff-smoke.js",
+    "test:frontend:live:built": "playwright test -c playwright.frontend-live-built.config.js",
+    "test:frontend:live:unit": "node --test tests/frontend-live/*.test.js",
+    "test:frontend:live:real:guard": "node tests/frontend-live/guard-real-provider-smoke.js",
+    "test:frontend:live:real:guard:unit": "node --test tests/frontend-live/guard-real-provider-smoke.test.js",
+    "test:frontend:live:real:preflight:unit": "node --test tests/frontend-live/preflight-real-provider-smoke.test.js",
+    "test:frontend:live:real:preflight": "node tests/frontend-live/preflight-real-provider-smoke.js",
+    "test:frontend:live:real": "npm run test:frontend:live:real:preflight && playwright test -c playwright.frontend-real-live.config.js",
+    "test:frontend": "playwright test tests/frontend"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "acorn": "^8.17.0",
+    "typescript": "^5.9.3"
+  }
+}

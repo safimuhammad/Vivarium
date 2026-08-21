@@ -1,0 +1,222 @@
+.slice2d {
+  position: fixed;
+  inset: 0;
+  width: 100dvw;
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  color: #f5ead5;
+  background:
+    radial-gradient(circle at 50% 42%, #26372e 0, #111a17 62%, #070b0a 100%);
+  isolation: isolate;
+}
+
+.slice2d__canvas {
+  z-index: 0;
+  display: block;
+  max-width: none;
+  max-height: none;
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+  touch-action: manipulation;
+  cursor: crosshair;
+}
+
+.slice2d__camera-controls,
+.slice2d__dialogue,
+.slice2d__semantic-mirror {
+  position: absolute;
+  z-index: 2;
+  border: 1px solid rgba(237, 208, 135, 0.58);
+  border-radius: 10px;
+  color: #f5ead5;
+  background: rgba(10, 15, 13, 0.96);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.48);
+}
+
+.slice2d__camera-controls {
+  top: max(12px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100dvw - max(24px, env(safe-area-inset-left)) - max(24px, env(safe-area-inset-right)));
+  padding: 8px;
+}
+
+.slice2d__control-group {
+  display: flex;
+  gap: 4px;
+}
+
+.slice2d button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid rgba(245, 234, 213, 0.34);
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: #f5ead5;
+  background: #1b2922;
+  font: 700 0.8125rem/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.slice2d button:hover {
+  border-color: #f0cf7c;
+  background: #26382e;
+}
+
+.slice2d button[aria-pressed="true"] {
+  border-color: #f5d77f;
+  color: #0a0f0d;
+  background: #f5d77f;
+  box-shadow: inset 0 0 0 2px #0a0f0d;
+}
+
+.slice2d button:focus-visible,
+.slice2d__canvas:focus-visible {
+  outline: 3px solid #fff1a8;
+  outline-offset: 3px;
+}
+
+.slice2d__readiness {
+  padding: 0 8px;
+  color: #d8ccb5;
+  font: 600 0.75rem/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.slice2d__readiness[data-state="unavailable"] {
+  color: #ffd1c6;
+}
+
+.slice2d__failure {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffd1c6;
+  font: 600 0.75rem/1.35 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.slice2d__dialogue {
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  width: min(34rem, calc(100dvw - 24px));
+  max-height: min(28dvh, 14rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 144px 14px 16px;
+  scrollbar-gutter: stable;
+  user-select: text;
+}
+
+.slice2d__dialogue strong {
+  color: #f5d77f;
+  font-size: 0.8125rem;
+  letter-spacing: 0.04em;
+}
+
+.slice2d__dialogue p {
+  margin: 5px 0 0;
+  color: #f5ead5;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.slice2d__dialogue .slice2d__quiet {
+  color: #d8ccb5;
+}
+
+.slice2d__view-moment {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+}
+
+.slice2d__semantic-mirror {
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: grid;
+  gap: 6px;
+  width: min(22rem, calc(100dvw - 24px));
+  max-height: 30dvh;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.slice2d__semantic-mirror p {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.slice2d__semantic-mirror button {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.slice2d__live-region {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 700px), (max-height: 520px) {
+  .slice2d {
+    min-height: max(52dvh, 288px);
+  }
+
+  .slice2d__camera-controls {
+    right: max(8px, env(safe-area-inset-right));
+    left: max(8px, env(safe-area-inset-left));
+    gap: 4px;
+    padding: 6px;
+  }
+
+  .slice2d__camera-controls button {
+    padding-inline: 9px;
+  }
+
+  .slice2d__readiness {
+    display: none;
+  }
+
+  .slice2d__semantic-mirror {
+    right: max(8px, env(safe-area-inset-right));
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: max(8px, env(safe-area-inset-left));
+    grid-template-columns: 1fr 1fr;
+    width: auto;
+    max-height: 18dvh;
+  }
+
+  .slice2d__dialogue {
+    right: max(8px, env(safe-area-inset-right));
+    bottom: calc(max(8px, env(safe-area-inset-bottom)) + 104px);
+    left: max(8px, env(safe-area-inset-left));
+    width: auto;
+    max-height: 24dvh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slice2d,
+  .slice2d *,
+  .slice2d *::before,
+  .slice2d *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

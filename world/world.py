@@ -32,9 +32,11 @@ from core.constants import (
 )
 from core.logging import get_logger
 from core.rng import Clock, SimContext, default_clock, make_rng
+from core.run_settings import DEFAULT_RUN_SETTINGS, RunSettings
 
 from .agents import AgentState, AgentStatus
 from .homes import Home, HomeStatus, max_integrity
+from .pressure import RegionPressureHighWater
 from .regions import Region, ResourceTypes
 
 logger = get_logger(__name__)
@@ -58,6 +60,11 @@ class WorldState:
         context: The :class:`~core.rng.SimContext` bundling the seam.
         rng: The injected :class:`random.Random`; route all randomness here.
         clock: The injected clock callable (seconds); prefer :meth:`now`.
+        run_settings: The :class:`~core.run_settings.RunSettings` for this run --
+            the handful of world rules that depend on how the run is wired rather
+            than on the repository. Defaults to
+            :data:`~core.run_settings.DEFAULT_RUN_SETTINGS`, which is exactly the
+            module constants, so an unconfigured world is unchanged.
     """
 
     def __init__(
@@ -65,26 +72,41 @@ class WorldState:
         regions: list[Region] | None = None,
         agents: list[AgentState] | None = None,
         *,
+        homes: list[Home] | None = None,
         rng: random.Random | None = None,
         clock: Clock | None = None,
+        run_settings: RunSettings | None = None,
     ) -> None:
         """Initialise the world.
 
         Args:
             regions: Initial regions; ``None`` starts with an empty world.
             agents: Initial agents; ``None`` starts with no agents.
+            homes: Initial standing homes and ruins. ``None`` starts with none.
             rng: Seedable RNG for all randomness. ``None`` builds an unseeded
                 :func:`~core.rng.make_rng` (non-deterministic).
             clock: Zero-argument callable returning the current time in seconds.
                 ``None`` uses :func:`~core.rng.default_clock` (wall clock).
+            run_settings: Per-run world rules (mating proposal lifetime, offspring
+                ceiling, reflection cadence). ``None`` uses
+                :data:`~core.run_settings.DEFAULT_RUN_SETTINGS`.
         """
         regions = regions or []
         agents = agents or []
+        homes = homes or []
         self.regions: dict[str, Region] = {region.name: region for region in regions}
         self.agents: dict[str, AgentState] = {agent.id: agent for agent in agents}
         self.pending_proposals: dict[tuple[str, str], dict[str, Any]] = {}
         self.pending_proposal_targets: dict[str, list[str]] = {}
-        self.homes: dict[str, Home] = {}
+        self.homes: dict[str, Home] = {home.home_id: home for home in homes}
+        self._region_pressure: dict[str, RegionPressureHighWater] = {
+            region_name: RegionPressureHighWater(
+                region=region_name,
+                population_high_water=self._current_population(region_name),
+                built_footprint_high_water=self._current_built_footprint(region_name),
+            )
+            for region_name in self.regions
+        }
 
         self.context: SimContext = SimContext(
             rng=rng if rng is not None else make_rng(),
@@ -93,6 +115,9 @@ class WorldState:
         # Convenience references to the seam; same objects held by ``context``.
         self.rng: random.Random = self.context.rng
         self.clock: Clock = self.context.clock
+        self.run_settings: RunSettings = (
+            run_settings if run_settings is not None else DEFAULT_RUN_SETTINGS
+        )
 
     def now(self) -> float:
         """Return the current time from the injected clock.
@@ -156,6 +181,24 @@ class WorldState:
         """
         return [agent for agent in self.agents.values() if agent.current_position == region_name]
 
+    def get_region_pressure(self) -> list[RegionPressureHighWater]:
+        """Return detached pressure records sorted by exact region name.
+
+        Returns:
+            New frozen values for every known region, ordered by ``region``.
+        """
+        return [
+            RegionPressureHighWater(
+                region=pressure.region,
+                population_high_water=pressure.population_high_water,
+                built_footprint_high_water=pressure.built_footprint_high_water,
+            )
+            for pressure in sorted(
+                self._region_pressure.values(),
+                key=lambda item: item.region,
+            )
+        ]
+
     # ---- Agent methods ----
 
     def add_agent(self, agent: AgentState) -> bool:
@@ -172,6 +215,7 @@ class WorldState:
         """
         if agent.id not in self.agents:
             self.agents[agent.id] = agent
+            self._bump_population_pressure(agent.current_position)
             return True
         return False
 
@@ -218,6 +262,7 @@ class WorldState:
                 return False
             if destination in current_region.connections:
                 self.agents[agent_id].current_position = destination
+                self._bump_population_pressure(destination)
                 return True
         return False
 
@@ -519,6 +564,11 @@ class WorldState:
         """
         if region.name not in self.regions:
             self.regions[region.name] = region
+            self._region_pressure[region.name] = RegionPressureHighWater(
+                region=region.name,
+                population_high_water=self._current_population(region.name),
+                built_footprint_high_water=self._current_built_footprint(region.name),
+            )
             return True
         return False
 
@@ -628,6 +678,7 @@ class WorldState:
             stakeholders=[owner_id],
             last_integrity_at=built_at,
         )
+        self._bump_built_footprint_pressure(region)
         return True
 
     def remove_home(self, home_id: str) -> bool:
@@ -984,3 +1035,40 @@ class WorldState:
             A new list of all :class:`~world.homes.Home` instances.
         """
         return list(self.homes.values())
+
+    def _current_population(self, region: str) -> int:
+        """Return current non-dead population for one exact region name."""
+        return sum(
+            agent.current_position == region and agent.status is not AgentStatus.DEAD
+            for agent in self.agents.values()
+        )
+
+    def _current_built_footprint(self, region: str) -> int:
+        """Return current standing-home plus ruin footprint for one exact region."""
+        return sum(home.region == region for home in self.homes.values())
+
+    def _bump_population_pressure(self, region: str) -> None:
+        """Raise, but never lower, one known region's population pressure."""
+        pressure = self._region_pressure.get(region)
+        if pressure is None:
+            return
+        current = self._current_population(region)
+        if current > pressure.population_high_water:
+            self._region_pressure[region] = RegionPressureHighWater(
+                region=region,
+                population_high_water=current,
+                built_footprint_high_water=pressure.built_footprint_high_water,
+            )
+
+    def _bump_built_footprint_pressure(self, region: str) -> None:
+        """Raise, but never lower, one known region's built-footprint pressure."""
+        pressure = self._region_pressure.get(region)
+        if pressure is None:
+            return
+        current = self._current_built_footprint(region)
+        if current > pressure.built_footprint_high_water:
+            self._region_pressure[region] = RegionPressureHighWater(
+                region=region,
+                population_high_water=pressure.population_high_water,
+                built_footprint_high_water=current,
+            )

@@ -30,8 +30,18 @@ async def test_speak_broadcast_is_local_and_charges_energy(
     assert event.type == "speak"
     assert event.source == "wanderer_001"
     assert event.scope is ScopeType.LOCAL
+    assert event.region == "alpha"
     assert event.target is None
-    assert event.payload == {"message": "hello"}
+    assert event.payload == {
+        "message": "hello",
+        "speaker_id": "wanderer_001",
+        "speaker_name": "Ada",
+        "target_id": None,
+        "region": "alpha",
+        "speak_energy_cost": SPEAK_ENERGY_COST,
+        "speaker_energy_before": 100.0,
+        "speaker_energy": 100.0 - SPEAK_ENERGY_COST,
+    }
     assert event.timestamp == world.now()
 
     assert result == "Your message was sent to Region|alpha"
@@ -44,7 +54,10 @@ async def test_speak_targeted_only_reaches_target(world: WorldState, event_bus: 
     event = event_bus.get_events("wanderer_002")
     assert len(event) == 1
     assert event[0].scope is ScopeType.TARGETED
+    assert event[0].region == "alpha"
     assert event[0].target == "wanderer_002"
+    assert event[0].payload["speaker_id"] == "wanderer_001"
+    assert event[0].payload["target_id"] == "wanderer_002"
     assert event_bus.get_events("wanderer_001") == []  # speaker does not hear targeted
 
     speaker = world.get_agent("wanderer_001")

@@ -3,3 +3,5 @@ ollama
 rich
 pyyaml
 faker
+fastapi
+uvicorn

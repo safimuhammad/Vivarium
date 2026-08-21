@@ -1,0 +1,30 @@
+{
+  "characterId": "f2",
+  "description": "Exact RGBs in F2's final 16-color quantized palette eligible for palette-variant remapping. Only the top and trousers families are listed — skin (deep warm brown) and hair (black bun) are never remapped, matching the roster-integration structural decision (#2) and beingPalette.ts's existing remap-table shape (garment-only exact-RGB swap).",
+  "sourcePalette": {
+    "top": [
+      { "role": "top-main", "rgb": [176, 77, 29], "hex": "#b04d1d", "note": "Dominant terracotta fill, verified clean via a strap-free torso patch (front rows 23-25) and cross-checked against the diagonal-strap band sample (no overlap)." },
+      { "role": "top-highlight", "rgb": [177, 84, 31], "hex": "#b1541f", "note": "Fold/sleeve highlight, only ~7 luminance steps above top-main; confirmed as a large clean block on the side view's chest/sleeve (rows 21-22), not a strap tone." }
+    ],
+    "trousers": [
+      { "role": "trousers-main", "rgb": [72, 46, 29], "hex": "#482e1d", "note": "Dominant trousers fill below the waist row (hip_frac=0.73)." },
+      { "role": "trousers-shade", "rgb": [63, 38, 25], "hex": "#3f2619", "note": "Leg-seam/fold shading, confirmed clean on both the front (row 37-38) and side (row 32-34) trouser columns." }
+    ]
+  },
+  "excludedFromRemap": {
+    "skin": [[168, 98, 44], [162, 90, 41]],
+    "hair": [[42, 36, 34], [24, 23, 23], [13, 12, 11], [53, 47, 47], [18, 18, 18], [7, 6, 6]],
+    "bootsAndStrap": [[32, 22, 15], [53, 27, 11], [119, 58, 25], [84, 46, 24]],
+    "note": "Verified by direct sampling (not ASCII legend alone): (119,58,25) reads as the diagonal crossbody-strap's main color in a dedicated strap-band sample AND independently as the side view's sleeve-shade tone — a multi-role color, excluded even though one of its roles borders the top. (18,18,18) is the touch-up's pupil tone but also occurs naturally in the bun's back-view shading, confirming it is a hair/eye tone, never a garment one. (84,46,24) is the bag-pouch shade tone (confirmed via a hip-bag patch sample), not a top color despite sitting one row above clean top territory in the front view."
+  },
+  "suggestedVariant": {
+    "name": "moss",
+    "note": "One example remap into the world's muted garment families (BEING_PALETTE_VARIANTS in beingPalette.ts: slate-blue / violet-grey / moss / ochre / bone) — F1 already used slate-blue, so this proposes moss for variety. Values keep the same luminance spacing as F2's own terracotta/trousers pair. Re-validate visually against the actual atlas render before locking in for R3.",
+    "remap": [
+      { "from": [176, 77, 29], "to": [100, 114, 68], "role": "top-main" },
+      { "from": [177, 84, 31], "to": [108, 124, 76], "role": "top-highlight" },
+      { "from": [72, 46, 29], "to": [58, 64, 42], "role": "trousers-main" },
+      { "from": [63, 38, 25], "to": [48, 54, 34], "role": "trousers-shade" }
+    ]
+  }
+}

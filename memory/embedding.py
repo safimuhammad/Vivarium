@@ -65,16 +65,18 @@ class FakeEmbeddingFunction:
 def default_embedding_function() -> EmbeddingFunction:  # pragma: no cover - prod model
     """Return Chroma's local ``all-MiniLM-L6-v2`` embedding function (production).
 
-    Uses :class:`DefaultEmbeddingFunction` (onnxruntime; downloads the model on
-    first use) rather than the sentence-transformers variant, so no extra runtime
-    dependency is required. See :data:`core.constants.EMBED_MODEL`.
+    Retains one :class:`ONNXMiniLM_L6_V2` callable for the lifetime of the returned
+    embedding-function object. Chroma's ``DefaultEmbeddingFunction`` constructs a
+    fresh ONNX wrapper on every call; retaining the same wrapper preserves identical
+    vectors while keeping its tokenizer and inference session warm. The model still
+    downloads and loads lazily on first use. See :data:`core.constants.EMBED_MODEL`.
 
     Returns:
         A Chroma-compatible :class:`EmbeddingFunction`.
     """
-    from chromadb.utils import embedding_functions
+    from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
-    # Chroma's EF returns numpy arrays; it satisfies our ``list[list[float]]``
+    # The ONNX callable returns numpy arrays; it satisfies our ``list[list[float]]``
     # protocol numerically and is consumed opaquely by the collection. Assert the
     # fit at this boundary (mirrors the ``ollama.AsyncClient`` cast in decider.py).
-    return cast(EmbeddingFunction, embedding_functions.DefaultEmbeddingFunction())
+    return cast(EmbeddingFunction, ONNXMiniLM_L6_V2())

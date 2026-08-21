@@ -37,7 +37,7 @@ from core.constants import (
 )
 from tools.builtin.resources import _announce_if_started_hoarding, _coerce_positive_amount
 from world.agents import AgentStatus, is_hoarding
-from world.homes import Home, HomeStatus, home_is_hoarding
+from world.homes import Home, HomeStatus, home_is_hoarding, max_integrity
 from world.world import WorldState
 
 
@@ -46,6 +46,7 @@ async def _announce_if_home_started_hoarding(
     home: Home,
     *,
     was_hoarding: bool,
+    vault_materials_before: float,
     source: str,
     region: str,
     timestamp: float,
@@ -62,6 +63,8 @@ async def _announce_if_home_started_hoarding(
         event_bus: The bus the event is published to.
         home: The credited home (its ``vault_materials`` already reflects the deposit).
         was_hoarding: Whether the home was hoarding *before* the deposit.
+        vault_materials_before: The vault balance before the deposit (payload pre-state,
+            so a renderer can animate the crossing rather than repaint its far side).
         source: Id of the being that made the deposit (the event's source).
         region: Region to scope the LOCAL announcement to.
         timestamp: World-clock stamp for the event.
@@ -76,10 +79,16 @@ async def _announce_if_home_started_hoarding(
             "home_started_hoarding",
             source,
             {
+                "home_id": home.home_id,
+                "target_home": home.home_id,
+                "agent_id": source,
+                "region": region,
+                "vault_materials_before": vault_materials_before,
+                "vault_materials": home.vault_materials,
                 "message": (
                     f"The home {home.home_id} in {region} is now sitting on a great store "
                     f"of materials (vault {home.vault_materials})."
-                )
+                ),
             },
             scope=ScopeType.LOCAL,
             region=region,
@@ -125,6 +134,9 @@ async def build_home(world: WorldState, event_bus: EventBus, agent_id: str) -> s
             f"(need {HOME_BUILD_MATERIALS_COST:.0f}, you have {agent.current_materials})."
         )
 
+    # Pre-mutation snapshot for the renderer (spec §4.2): the payload reports the
+    # builder's materials after the build cost, so the "before" side is read here.
+    builder_materials_before = agent.current_materials
     world.modify_agent_materials(agent_id, -HOME_BUILD_MATERIALS_COST)
     home_id = f"home_{world.rng.getrandbits(32):08x}"
     region = agent.current_position
@@ -133,7 +145,20 @@ async def build_home(world: WorldState, event_bus: EventBus, agent_id: str) -> s
         Event(
             "home_built",
             agent_id,
-            {"message": f"{agent.name} has raised a home in {region}."},
+            {
+                "home_id": home_id,
+                "target_home": home_id,
+                "builder_id": agent_id,
+                "builder_name": agent.name,
+                "owner_id": agent_id,
+                "region": region,
+                "materials_cost": HOME_BUILD_MATERIALS_COST,
+                "builder_materials_before": builder_materials_before,
+                "builder_materials": agent.current_materials,
+                "integrity": HOME_MAX_INTEGRITY,
+                "stakeholders": [agent_id],
+                "message": f"{agent.name} has raised a home in {region}.",
+            },
             scope=ScopeType.LOCAL,
             region=region,
             timestamp=world.now(),
@@ -211,6 +236,10 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
     # threshold while the energy credit crosses 500 never actually stopped hoarding,
     # so it must not be re-announced as "started".
     was_hoarding = is_hoarding(agent)
+    # Pre-mutation snapshot for the renderer (spec §4.2): both balances are reported
+    # post-burn, so the "before" side is read here, before the burn or the credit.
+    agent_energy_before = agent.current_energy
+    agent_materials_before = agent.current_materials
 
     burned = min(agent.current_materials, HEARTH_MATERIALS_PER_USE)
     world.modify_agent_materials(agent_id, -burned)  # destroy the fuel FIRST (conservation)
@@ -221,7 +250,19 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
         Event(
             "hearth_used",
             agent_id,
-            {"message": f"{agent.name} rests at the hearth, kindling materials into warmth."},
+            {
+                "agent_id": agent_id,
+                "home_id": home.home_id,
+                "target_home": home.home_id,
+                "region": region,
+                "materials_burned": burned,
+                "energy_gained": gained,
+                "agent_energy_before": agent_energy_before,
+                "agent_energy": agent.current_energy,
+                "agent_materials_before": agent_materials_before,
+                "agent_materials": agent.current_materials,
+                "message": f"{agent.name} rests at the hearth, kindling materials into warmth.",
+            },
             scope=ScopeType.LOCAL,
             region=region,
             timestamp=world.now(),
@@ -235,6 +276,8 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
         event_bus,
         agent,
         was_hoarding=was_hoarding,
+        energy_before=agent_energy_before,
+        materials_before=agent_materials_before,
         region=region,
         timestamp=world.now(),
     )
@@ -296,13 +339,32 @@ async def pledge_home(world: WorldState, event_bus: EventBus, agent_id: str, hom
             return "You already tend this home."
         return "Invalid: You already belong to a home; you may share only one."
 
+    # Pre-mutation snapshot for the renderer (spec §4.2): joining raises the home's
+    # integrity ceiling, so the payload's post-pledge roster/ceiling need their "before"
+    # side (mirrors leave_home's existing ``previous_stakeholders``).
+    previous_stakeholders = sorted(home.stakeholders)
+    integrity_before = home.integrity
+    max_integrity_before = max_integrity(len(home.stakeholders))
     world.add_stakeholder(home_id, agent_id)
     region = agent.current_position
     await event_bus.publish(
         Event(
             "home_joined",
             agent_id,
-            {"message": f"{agent.name} has pledged to a home in {region}."},
+            {
+                "agent_id": agent_id,
+                "home_id": home.home_id,
+                "target_home": home.home_id,
+                "owner_id": home.owner_id,
+                "region": region,
+                "previous_stakeholders": previous_stakeholders,
+                "stakeholders": sorted(home.stakeholders),
+                "integrity_before": integrity_before,
+                "integrity": home.integrity,
+                "max_integrity_before": max_integrity_before,
+                "max_integrity": max_integrity(len(home.stakeholders)),
+                "message": f"{agent.name} has pledged to a home in {region}.",
+            },
             scope=ScopeType.LOCAL,
             region=region,
             timestamp=world.now(),
@@ -352,12 +414,33 @@ async def leave_home(world: WorldState, event_bus: EventBus, agent_id: str) -> s
         return "Invalid: Your home has fallen to ruin; there is no place left to give up."
 
     region = home.region
+    home_id = home.home_id
+    previous_owner_id = home.owner_id
+    previous_stakeholders = sorted(home.stakeholders)
+    # Pre-mutation snapshot for the renderer (spec §4.2): departure lowers the ceiling
+    # and may clamp integrity down with it.
+    integrity_before = home.integrity
+    max_integrity_before = max_integrity(len(home.stakeholders))
     world.remove_stakeholder(home.home_id, agent_id)  # prune + promote owner + clamp integrity
     await event_bus.publish(
         Event(
             "home_left",
             agent_id,
-            {"message": f"{agent.name} has left a home in {region}."},
+            {
+                "agent_id": agent_id,
+                "home_id": home_id,
+                "target_home": home_id,
+                "previous_owner_id": previous_owner_id,
+                "owner_id": home.owner_id,
+                "region": region,
+                "previous_stakeholders": previous_stakeholders,
+                "stakeholders": sorted(home.stakeholders),
+                "integrity_before": integrity_before,
+                "integrity": home.integrity,
+                "max_integrity_before": max_integrity_before,
+                "max_integrity": max_integrity(len(home.stakeholders)),
+                "message": f"{agent.name} has left a home in {region}.",
+            },
             scope=ScopeType.LOCAL,
             region=region,
             timestamp=world.now(),
@@ -429,6 +512,7 @@ async def deposit_to_home(
     # (mirrors harvest_resources/use_hearth). A deposit only raises the vault, so the vault
     # can only cross UP into hoarding.
     was_hoarding = home_is_hoarding(home)
+    vault_materials_before = home.vault_materials
 
     world.modify_agent_materials(agent_id, -quantity)  # deduct the source FIRST (conservation)
     world.deposit_to_home_vault(home.home_id, quantity)  # THEN credit the vault
@@ -436,6 +520,7 @@ async def deposit_to_home(
         event_bus,
         home,
         was_hoarding=was_hoarding,
+        vault_materials_before=vault_materials_before,
         source=agent_id,
         region=home.region,
         timestamp=world.now(),
@@ -618,6 +703,14 @@ async def break_in(
             f"{agent.current_materials} materials."
         )
 
+    # Pre-mutation snapshot for the renderer (spec §4.2): the payloads below report the
+    # post-blow integrity and the raider is drained by a pure sink, so the "before" side
+    # of each is read here, ahead of the first mutation.
+    breacher_energy_before = agent.current_energy
+    breacher_materials_before = agent.current_materials
+    integrity_before = home.integrity
+    vault_materials_before = home.vault_materials
+
     # Pay the cost — a PURE SINK (both pools destroyed, credited to no one).
     world.modify_agent_energy(agent_id, -BREAKIN_ENERGY_COST)
     world.modify_agent_materials(agent_id, -BREAKIN_MATERIALS_COST)
@@ -626,11 +719,29 @@ async def break_in(
 
     region = home.region
     if home.integrity <= 0.0:
+        breachers = sorted(home.breachers)
         await event_bus.publish(
             Event(
                 "home_breached",
                 agent_id,
-                {"message": f"{agent.name} has broken into the home {home.home_id} in {region}."},
+                {
+                    "home_id": home.home_id,
+                    "target_home": home.home_id,
+                    "breacher_id": agent_id,
+                    "intent": intent,
+                    "region": region,
+                    "breachers": breachers,
+                    "energy_cost": BREAKIN_ENERGY_COST,
+                    "materials_cost": BREAKIN_MATERIALS_COST,
+                    "integrity_damage": BREAKIN_INTEGRITY_DAMAGE,
+                    "integrity_before": integrity_before,
+                    "integrity": home.integrity,
+                    "breacher_energy_before": breacher_energy_before,
+                    "breacher_energy": agent.current_energy,
+                    "breacher_materials_before": breacher_materials_before,
+                    "breacher_materials": agent.current_materials,
+                    "message": f"{agent.name} has broken into the home {home.home_id} in {region}.",
+                },
                 scope=ScopeType.LOCAL,
                 region=region,
                 timestamp=world.now(),
@@ -651,6 +762,8 @@ async def break_in(
             # Deduct the WHOLE vault FIRST -> 0 (conservation).
             world.withdraw_from_home_vault(target_home, loot)
             share = loot / len(recipients)
+            recipient_shares = dict.fromkeys(recipients, share)
+            recipient_shares[agent_id] = loot - share * (len(recipients) - 1)
             for recipient in recipients:
                 if recipient == agent_id:
                     continue
@@ -663,10 +776,21 @@ async def break_in(
                     "home_thieved",
                     agent_id,
                     {
+                        "home_id": home.home_id,
+                        "target_home": home.home_id,
+                        "breacher_id": agent_id,
+                        "intent": intent,
+                        "region": region,
+                        "recipients": recipients,
+                        "loot": {"materials": loot},
+                        "loot_shares": recipient_shares,
+                        "vault_materials_before": vault_materials_before,
+                        "vault_materials": home.vault_materials,
+                        "integrity": home.integrity,
                         "message": (
                             f"{agent.name} and {len(recipients) - 1} other(s) stripped the home "
                             f"{home.home_id} of {loot} materials."
-                        )
+                        ),
                     },
                     scope=ScopeType.LOCAL,
                     region=region,
@@ -678,6 +802,9 @@ async def break_in(
                 f"split among {len(recipients)}. The emptied wreck still stands, for now."
             )
         # intent == "colonize"
+        previous_owner_id = home.owner_id
+        previous_stakeholders = sorted(home.stakeholders)
+        vault_materials = home.vault_materials
         old = world.stakeholder_home_of(agent_id)
         if old is not None:
             world.remove_stakeholder(
@@ -699,10 +826,21 @@ async def break_in(
                 "home_colonized",
                 agent_id,
                 {
+                    "home_id": home.home_id,
+                    "target_home": home.home_id,
+                    "breacher_id": agent_id,
+                    "intent": intent,
+                    "region": region,
+                    "previous_owner_id": previous_owner_id,
+                    "previous_stakeholders": previous_stakeholders,
+                    "new_owner_id": home.owner_id,
+                    "new_stakeholders": sorted(home.stakeholders),
+                    "vault_materials": vault_materials,
+                    "integrity": home.integrity,
                     "message": (
                         f"{agent.name} and {len(new_stakeholders) - 1} other(s) seized the home "
                         f"{home.home_id} in {region}."
-                    )
+                    ),
                 },
                 scope=ScopeType.LOCAL,
                 region=region,
@@ -772,13 +910,29 @@ async def scavenge_ruins(
     if home.remnant_materials <= 0.0:
         return "Invalid: These ruins have already been picked clean."
 
+    # Pre-mutation snapshot for the renderer (spec §4.2): the payload reports the
+    # post-draw remnant and personal stock, so the "before" side is read here.
+    remnant_materials_before = home.remnant_materials
+    agent_materials_before = agent.current_materials
     taken = world.scavenge_ruin(target_home, quantity)  # deduct the remnant FIRST (conservation)
     world.modify_agent_materials(agent_id, taken)  # THEN credit personal stock
     await event_bus.publish(
         Event(
             "ruins_scavenged",
             agent_id,
-            {"message": f"{agent.name} picks {taken} materials from the ruins in {home.region}."},
+            {
+                "agent_id": agent_id,
+                "home_id": home.home_id,
+                "target_home": home.home_id,
+                "region": home.region,
+                "resource_type": "materials",
+                "amount": taken,
+                "remnant_materials_before": remnant_materials_before,
+                "remnant_materials": home.remnant_materials,
+                "agent_materials_before": agent_materials_before,
+                "agent_materials": agent.current_materials,
+                "message": f"{agent.name} picks {taken} materials from the ruins in {home.region}.",
+            },
             scope=ScopeType.LOCAL,
             region=home.region,
             timestamp=world.now(),

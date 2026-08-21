@@ -1,0 +1,30 @@
+{
+  "components": {
+    "compressedBytes": 29133,
+    "decodedBytes": 1572864,
+    "sha256": "d88c132846a3eeb56ddd5f9cbbd7b0170577ed19962db8a0ab723d5630ab2efd",
+    "width": 768,
+    "height": 512
+  },
+  "details": {
+    "compressedBytes": 1222,
+    "decodedBytes": 131072,
+    "sha256": "03ac745420bf56b8def05ce9e155f2661961159a7c60812b5d7a9ac0860602f4",
+    "width": 256,
+    "height": 128
+  },
+  "ruins": {
+    "compressedBytes": 25537,
+    "decodedBytes": 524288,
+    "sha256": "b83a0b2e3b06041e0156729cf76396f8b2fc022917431f06c6cc2cbdf7c99049",
+    "width": 512,
+    "height": 256
+  },
+  "yards": {
+    "compressedBytes": 8942,
+    "decodedBytes": 614400,
+    "sha256": "df393d6c9cff482786ecbb4d069eec66a14c591310aa416c7f0327a2682cc520",
+    "width": 960,
+    "height": 160
+  }
+}

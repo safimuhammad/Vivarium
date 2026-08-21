@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 from core.constants import GENERATION_RESERVE_TOKENS
 
@@ -117,6 +117,20 @@ class Decider(Protocol):
         Returns:
             The model's :class:`Decision`.
         """
+        ...
+
+
+@runtime_checkable
+class AsyncCloseable(Protocol):
+    """Structural protocol for an asynchronously closeable dependency.
+
+    Kept separate from :class:`Decider` so deterministic mocks and caller-owned
+    injected clients need only implement the cognition seam. Live deciders and
+    wrappers implement this optional lifecycle surface for production shutdown.
+    """
+
+    async def aclose(self) -> None:
+        """Release owned asynchronous resources; repeated calls are safe."""
         ...
 
 
@@ -229,6 +243,8 @@ class OllamaDecider:
         self.num_ctx: int = num_ctx
         self.num_predict: int = num_predict
         self._client: _ChatClient | None = client
+        self._owns_client: bool = client is None
+        self._closed: bool = False
 
     async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
         """Query the model once (non-streaming, time-bounded) and parse the result.
@@ -245,6 +261,8 @@ class OllamaDecider:
                 seconds (the in-flight request is cancelled). The breathing loop
                 catches this and ends the breath gracefully.
         """
+        if self._closed:
+            raise RuntimeError("Ollama decider is closed")
         client = self._client
         if client is None:  # pragma: no cover - real network client construction
             import ollama
@@ -252,6 +270,7 @@ class OllamaDecider:
             # ``AsyncClient`` provides ``chat`` but is not declared against our
             # loose ``_ChatClient`` seam; assert the fit at this boundary.
             client = cast(_ChatClient, ollama.AsyncClient())
+            self._client = client
         response = await asyncio.wait_for(
             client.chat(
                 model=self.model,
@@ -263,6 +282,32 @@ class OllamaDecider:
             self.timeout,
         )
         return parse_ollama_response(response)
+
+    async def aclose(self) -> None:
+        """Close the lazily-created Ollama transport exactly once.
+
+        An injected client is caller-owned and is never closed here. Ollama's public
+        ``AsyncClient`` currently does not expose ``aclose`` directly; it owns an
+        ``httpx.AsyncClient`` in ``_client``. The private compatibility boundary is
+        contained here so the rest of Vivarium uses a stable lifecycle API.
+        """
+        if self._closed:
+            return
+        if not self._owns_client:
+            self._closed = True
+            return
+        client = self._client
+        if client is None:
+            self._closed = True
+            return
+        if isinstance(client, AsyncCloseable):
+            await client.aclose()
+        else:
+            transport = getattr(client, "_client", None)
+            if not isinstance(transport, AsyncCloseable):
+                raise RuntimeError("Owned Ollama client does not expose an async close method")
+            await transport.aclose()
+        self._closed = True
 
 
 class SerializingDecider:
@@ -297,6 +342,7 @@ class SerializingDecider:
         """
         self._inner: Decider = inner
         self._lock: asyncio.Lock = lock or asyncio.Lock()
+        self._closed: bool = False
 
     async def decide(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> Decision:
         """Acquire the lock, delegate to the inner decider, then release.
@@ -313,7 +359,23 @@ class SerializingDecider:
                 ``TimeoutError``); the lock is still released via ``async with``.
         """
         async with self._lock:
+            if self._closed:
+                raise RuntimeError("Serializing decider is closed")
             return await self._inner.decide(messages, tools)
+
+    async def aclose(self) -> None:
+        """Close the inner decider once no serialized decision is in flight.
+
+        The same lock that guards inference guards shutdown, so close cannot race an
+        active provider call. Inner deciders without the optional
+        :class:`AsyncCloseable` lifecycle surface require no cleanup.
+        """
+        async with self._lock:
+            if self._closed:
+                return
+            if isinstance(self._inner, AsyncCloseable):
+                await self._inner.aclose()
+            self._closed = True
 
 
 def make_default_decider(model: str, *, provider: str = "ollama") -> Decider:

@@ -1,0 +1,3763 @@
+{
+  "checkpoints": [
+    {
+      "checkpoint": {
+        "event_cursor": 120,
+        "reason": "world_tick",
+        "run_id": "mock-c13-v1",
+        "schema": 1,
+        "snapshot": {
+          "agents": [
+            {
+              "died_at": null,
+              "energy": 160.0,
+              "home_id": null,
+              "id": "wanderer_001",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Joe",
+              "offspring_count": 0,
+              "position": "warm_springs",
+              "status": "alive"
+            },
+            {
+              "died_at": null,
+              "energy": 100.0,
+              "home_id": null,
+              "id": "wanderer_002",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Mae",
+              "offspring_count": 0,
+              "position": "warm_springs",
+              "status": "alive"
+            },
+            {
+              "died_at": null,
+              "energy": 100.0,
+              "home_id": null,
+              "id": "wanderer_003",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Dick",
+              "offspring_count": 0,
+              "position": "nirvana",
+              "status": "alive"
+            },
+            {
+              "died_at": null,
+              "energy": 100.0,
+              "home_id": null,
+              "id": "wanderer_004",
+              "is_hoarding": false,
+              "last_mated_at": null,
+              "materials": 45.0,
+              "name": "Allen",
+              "offspring_count": 0,
+              "position": "nirvana",
+              "status": "alive"
+            }
+          ],
+          "event_cursor": 120,
+          "homes": [],
+          "pending_proposals": [],
+          "region_pressure": [
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 2,
+              "region": "nirvana"
+            },
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 0,
+              "region": "nirvana_east"
+            },
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 0,
+              "region": "nirvana_west"
+            },
+            {
+              "built_footprint_high_water": 0,
+              "population_high_water": 2,
+              "region": "warm_springs"
+            }
+          ],
+          "regions": [
+            {
+              "connections": [
+                "warm_springs",
+                "nirvana_east",
+                "nirvana_west"
+              ],
+              "current_energy": 60.0,
+              "current_materials": 60.0,
+              "description": "a once-heavenly landscape, now thinning and picked-over",
+              "energy_rate": 0.2,
+              "materials_rate": 0.2,
+              "max_energy": 120.0,
+              "max_materials": 120.0,
+              "name": "nirvana"
+            },
+            {
+              "connections": [
+                "warm_springs",
+                "nirvana"
+              ],
+              "current_energy": 20.0,
+              "current_materials": 15.0,
+              "description": "a struggling, near-barren stretch",
+              "energy_rate": 0.1,
+              "materials_rate": 0.1,
+              "max_energy": 70.0,
+              "max_materials": 70.0,
+              "name": "nirvana_east"
+            },
+            {
+              "connections": [
+                "warm_springs",
+                "nirvana"
+              ],
+              "current_energy": 15.0,
+              "current_materials": 0.0,
+              "description": "a nuclear wasteland, all but dead",
+              "energy_rate": 0.05,
+              "materials_rate": 0.0,
+              "max_energy": 50.0,
+              "max_materials": 10.0,
+              "name": "nirvana_west"
+            },
+            {
+              "connections": [
+                "nirvana_west",
+                "nirvana_east",
+                "nirvana"
+              ],
+              "current_energy": 90.0,
+              "current_materials": 80.0,
+              "description": "hot spring lakes \u2014 the least-poor refuge, but no longer plentiful",
+              "energy_rate": 0.25,
+              "materials_rate": 0.2,
+              "max_energy": 130.0,
+              "max_materials": 130.0,
+              "name": "warm_springs"
+            }
+          ],
+          "ruins": [],
+          "run_id": "mock-c13-v1",
+          "schema": 1,
+          "seed_persona": "You have just awoken into this world \u2014 aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover \u2014 and freely reshape \u2014 the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+          "world_time": 1800130000.1199913
+        },
+        "type": "world_snapshot_checkpoint",
+        "world_time": 1800130000.1199913
+      },
+      "line": 1,
+      "safety": "safe-world-tick"
+    }
+  ],
+  "entries": [
+    {
+      "cursor": 1,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0000",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 219.5,
+          "speaker_energy_before": 220.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.001,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 2,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0001",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 219.0,
+          "speaker_energy_before": 219.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0019999,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 3,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0002",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 218.5,
+          "speaker_energy_before": 219.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0029998,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 4,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0003",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 218.0,
+          "speaker_energy_before": 218.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0039997,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 5,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0004",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 217.5,
+          "speaker_energy_before": 218.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0049996,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 6,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0005",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 217.0,
+          "speaker_energy_before": 217.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0059996,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 7,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0006",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 216.5,
+          "speaker_energy_before": 217.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0069995,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 8,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0007",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 216.0,
+          "speaker_energy_before": 216.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0079994,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 9,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0008",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 215.5,
+          "speaker_energy_before": 216.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0089993,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 10,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0009",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 215.0,
+          "speaker_energy_before": 215.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0099993,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 11,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0010",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 214.5,
+          "speaker_energy_before": 215.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0109992,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 12,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0011",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 214.0,
+          "speaker_energy_before": 214.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0119991,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 13,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0012",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 213.5,
+          "speaker_energy_before": 214.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.012999,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 14,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0013",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 213.0,
+          "speaker_energy_before": 213.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.013999,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 15,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0014",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 212.5,
+          "speaker_energy_before": 213.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.014999,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 16,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0015",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 212.0,
+          "speaker_energy_before": 212.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0159988,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 17,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0016",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 211.5,
+          "speaker_energy_before": 212.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0169988,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 18,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0017",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 211.0,
+          "speaker_energy_before": 211.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0179987,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 19,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0018",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 210.5,
+          "speaker_energy_before": 211.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0189986,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 20,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0019",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 210.0,
+          "speaker_energy_before": 210.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0199986,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 21,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0020",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 209.5,
+          "speaker_energy_before": 210.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0209985,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 22,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0021",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 209.0,
+          "speaker_energy_before": 209.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0219984,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 23,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0022",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 208.5,
+          "speaker_energy_before": 209.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0229983,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 24,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0023",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 208.0,
+          "speaker_energy_before": 208.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0239983,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 25,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0024",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 207.5,
+          "speaker_energy_before": 208.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0249982,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 26,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0025",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 207.0,
+          "speaker_energy_before": 207.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.025998,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 27,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0026",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 206.5,
+          "speaker_energy_before": 207.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.026998,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 28,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0027",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 206.0,
+          "speaker_energy_before": 206.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.027998,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 29,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0028",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 205.5,
+          "speaker_energy_before": 206.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.028998,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 30,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0029",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 205.0,
+          "speaker_energy_before": 205.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0299978,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 31,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0030",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 204.5,
+          "speaker_energy_before": 205.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0309978,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 32,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0031",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 204.0,
+          "speaker_energy_before": 204.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0319977,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 33,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0032",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 203.5,
+          "speaker_energy_before": 204.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0329976,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 34,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0033",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 203.0,
+          "speaker_energy_before": 203.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0339975,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 35,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0034",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 202.5,
+          "speaker_energy_before": 203.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0349975,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 36,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0035",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 202.0,
+          "speaker_energy_before": 202.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0359974,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 37,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0036",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 201.5,
+          "speaker_energy_before": 202.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0369973,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 38,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0037",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 201.0,
+          "speaker_energy_before": 201.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0379972,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 39,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0038",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 200.5,
+          "speaker_energy_before": 201.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0389972,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 40,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0039",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 200.0,
+          "speaker_energy_before": 200.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.039997,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 41,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0040",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 199.5,
+          "speaker_energy_before": 200.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.040997,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 42,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0041",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 199.0,
+          "speaker_energy_before": 199.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.041997,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 43,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0042",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 198.5,
+          "speaker_energy_before": 199.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.042997,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 44,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0043",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 198.0,
+          "speaker_energy_before": 198.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0439968,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 45,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0044",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 197.5,
+          "speaker_energy_before": 198.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0449967,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 46,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0045",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 197.0,
+          "speaker_energy_before": 197.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0459967,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 47,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0046",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 196.5,
+          "speaker_energy_before": 197.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0469966,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 48,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0047",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 196.0,
+          "speaker_energy_before": 196.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0479965,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 49,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0048",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 195.5,
+          "speaker_energy_before": 196.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0489964,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 50,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0049",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 195.0,
+          "speaker_energy_before": 195.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0499964,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 51,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0050",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 194.5,
+          "speaker_energy_before": 195.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0509963,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 52,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0051",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 194.0,
+          "speaker_energy_before": 194.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0519962,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 53,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0052",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 193.5,
+          "speaker_energy_before": 194.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0529962,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 54,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0053",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 193.0,
+          "speaker_energy_before": 193.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.053996,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 55,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0054",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 192.5,
+          "speaker_energy_before": 193.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.054996,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 56,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0055",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 192.0,
+          "speaker_energy_before": 192.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.055996,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 57,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0056",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 191.5,
+          "speaker_energy_before": 192.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0569959,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 58,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0057",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 191.0,
+          "speaker_energy_before": 191.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0579958,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 59,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0058",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 190.5,
+          "speaker_energy_before": 191.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0589957,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 60,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0059",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 190.0,
+          "speaker_energy_before": 190.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0599957,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 61,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0060",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 189.5,
+          "speaker_energy_before": 190.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0609956,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 62,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0061",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 189.0,
+          "speaker_energy_before": 189.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0619955,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 63,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0062",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 188.5,
+          "speaker_energy_before": 189.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0629954,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 64,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0063",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 188.0,
+          "speaker_energy_before": 188.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0639954,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 65,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0064",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 187.5,
+          "speaker_energy_before": 188.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0649953,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 66,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0065",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 187.0,
+          "speaker_energy_before": 187.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0659952,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 67,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0066",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 186.5,
+          "speaker_energy_before": 187.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0669951,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 68,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0067",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 186.0,
+          "speaker_energy_before": 186.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.067995,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 69,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0068",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 185.5,
+          "speaker_energy_before": 186.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.068995,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 70,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0069",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 185.0,
+          "speaker_energy_before": 185.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.069995,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 71,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0070",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 184.5,
+          "speaker_energy_before": 185.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0709949,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 72,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0071",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 184.0,
+          "speaker_energy_before": 184.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0719948,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 73,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0072",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 183.5,
+          "speaker_energy_before": 184.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0729947,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 74,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0073",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 183.0,
+          "speaker_energy_before": 183.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0739946,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 75,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0074",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 182.5,
+          "speaker_energy_before": 183.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0749946,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 76,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0075",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 182.0,
+          "speaker_energy_before": 182.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0759945,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 77,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0076",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 181.5,
+          "speaker_energy_before": 182.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0769944,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 78,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0077",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 181.0,
+          "speaker_energy_before": 181.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0779943,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 79,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0078",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 180.5,
+          "speaker_energy_before": 181.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0789943,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 80,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0079",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 180.0,
+          "speaker_energy_before": 180.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0799942,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 81,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0080",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 179.5,
+          "speaker_energy_before": 180.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0809941,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 82,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0081",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 179.0,
+          "speaker_energy_before": 179.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.081994,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 83,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0082",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 178.5,
+          "speaker_energy_before": 179.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.082994,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 84,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0083",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 178.0,
+          "speaker_energy_before": 178.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.083994,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 85,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0084",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 177.5,
+          "speaker_energy_before": 178.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0849938,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 86,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0085",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 177.0,
+          "speaker_energy_before": 177.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0859938,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 87,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0086",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 176.5,
+          "speaker_energy_before": 177.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0869937,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 88,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0087",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 176.0,
+          "speaker_energy_before": 176.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0879936,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 89,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0088",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 175.5,
+          "speaker_energy_before": 176.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0889935,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 90,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0089",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 175.0,
+          "speaker_energy_before": 175.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0899935,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 91,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0090",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 174.5,
+          "speaker_energy_before": 175.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0909934,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 92,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0091",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 174.0,
+          "speaker_energy_before": 174.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0919933,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 93,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0092",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 173.5,
+          "speaker_energy_before": 174.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0929933,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 94,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0093",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 173.0,
+          "speaker_energy_before": 173.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0939932,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 95,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0094",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 172.5,
+          "speaker_energy_before": 173.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.094993,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 96,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0095",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 172.0,
+          "speaker_energy_before": 172.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.095993,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 97,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0096",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 171.5,
+          "speaker_energy_before": 172.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.096993,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 98,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0097",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 171.0,
+          "speaker_energy_before": 171.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.097993,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 99,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0098",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 170.5,
+          "speaker_energy_before": 171.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0989928,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 100,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0099",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 170.0,
+          "speaker_energy_before": 170.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.0999928,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 101,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0100",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 169.5,
+          "speaker_energy_before": 170.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1009927,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 102,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0101",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 169.0,
+          "speaker_energy_before": 169.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1019926,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 103,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0102",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 168.5,
+          "speaker_energy_before": 169.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1029925,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 104,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0103",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 168.0,
+          "speaker_energy_before": 168.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1039925,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 105,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0104",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 167.5,
+          "speaker_energy_before": 168.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1049924,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 106,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0105",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 167.0,
+          "speaker_energy_before": 167.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1059923,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 107,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0106",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 166.5,
+          "speaker_energy_before": 167.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1069922,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 108,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0107",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 166.0,
+          "speaker_energy_before": 166.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1079922,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 109,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0108",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 165.5,
+          "speaker_energy_before": 166.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.108992,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 110,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0109",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 165.0,
+          "speaker_energy_before": 165.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.109992,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 111,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0110",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 164.5,
+          "speaker_energy_before": 165.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.110992,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 112,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0111",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 164.0,
+          "speaker_energy_before": 164.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.111992,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 113,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0112",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 163.5,
+          "speaker_energy_before": 164.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1129918,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 114,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0113",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 163.0,
+          "speaker_energy_before": 163.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1139917,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 115,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0114",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 162.5,
+          "speaker_energy_before": 163.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1149917,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 116,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0115",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 162.0,
+          "speaker_energy_before": 162.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1159916,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 117,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0116",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 161.5,
+          "speaker_energy_before": 162.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1169915,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 118,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0117",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 161.0,
+          "speaker_energy_before": 161.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1179914,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 119,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0118",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 160.5,
+          "speaker_energy_before": 161.0,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1189914,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    },
+    {
+      "cursor": 120,
+      "event": {
+        "payload": {
+          "display_only": true,
+          "message": "pressure-C13-0119",
+          "region": "warm_springs",
+          "speak_energy_cost": 0.5,
+          "speaker_energy": 160.0,
+          "speaker_energy_before": 160.5,
+          "speaker_id": "wanderer_001",
+          "speaker_name": "Joe",
+          "target_id": null
+        },
+        "region": "warm_springs",
+        "scope": "local",
+        "source": "wanderer_001",
+        "target": null,
+        "timestamp": 1800130000.1199913,
+        "type": "speak"
+      },
+      "resolved": {
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
+      },
+      "snapshot_after": null
+    }
+  ],
+  "expectedFinalCursor": 120,
+  "expectedMarkers": [
+    "event:speak",
+    "checkpoint:final"
+  ],
+  "expectedTerminal": {
+    "finalSnapshot": {
+      "agents": [
+        {
+          "died_at": null,
+          "energy": 160.0,
+          "home_id": null,
+          "id": "wanderer_001",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Joe",
+          "offspring_count": 0,
+          "position": "warm_springs",
+          "status": "alive"
+        },
+        {
+          "died_at": null,
+          "energy": 100.0,
+          "home_id": null,
+          "id": "wanderer_002",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Mae",
+          "offspring_count": 0,
+          "position": "warm_springs",
+          "status": "alive"
+        },
+        {
+          "died_at": null,
+          "energy": 100.0,
+          "home_id": null,
+          "id": "wanderer_003",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Dick",
+          "offspring_count": 0,
+          "position": "nirvana",
+          "status": "alive"
+        },
+        {
+          "died_at": null,
+          "energy": 100.0,
+          "home_id": null,
+          "id": "wanderer_004",
+          "is_hoarding": false,
+          "last_mated_at": null,
+          "materials": 45.0,
+          "name": "Allen",
+          "offspring_count": 0,
+          "position": "nirvana",
+          "status": "alive"
+        }
+      ],
+      "event_cursor": 120,
+      "homes": [],
+      "pending_proposals": [],
+      "region_pressure": [
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 2,
+          "region": "nirvana"
+        },
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 0,
+          "region": "nirvana_east"
+        },
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 0,
+          "region": "nirvana_west"
+        },
+        {
+          "built_footprint_high_water": 0,
+          "population_high_water": 2,
+          "region": "warm_springs"
+        }
+      ],
+      "regions": [
+        {
+          "connections": [
+            "warm_springs",
+            "nirvana_east",
+            "nirvana_west"
+          ],
+          "current_energy": 60.0,
+          "current_materials": 60.0,
+          "description": "a once-heavenly landscape, now thinning and picked-over",
+          "energy_rate": 0.2,
+          "materials_rate": 0.2,
+          "max_energy": 120.0,
+          "max_materials": 120.0,
+          "name": "nirvana"
+        },
+        {
+          "connections": [
+            "warm_springs",
+            "nirvana"
+          ],
+          "current_energy": 20.0,
+          "current_materials": 15.0,
+          "description": "a struggling, near-barren stretch",
+          "energy_rate": 0.1,
+          "materials_rate": 0.1,
+          "max_energy": 70.0,
+          "max_materials": 70.0,
+          "name": "nirvana_east"
+        },
+        {
+          "connections": [
+            "warm_springs",
+            "nirvana"
+          ],
+          "current_energy": 15.0,
+          "current_materials": 0.0,
+          "description": "a nuclear wasteland, all but dead",
+          "energy_rate": 0.05,
+          "materials_rate": 0.0,
+          "max_energy": 50.0,
+          "max_materials": 10.0,
+          "name": "nirvana_west"
+        },
+        {
+          "connections": [
+            "nirvana_west",
+            "nirvana_east",
+            "nirvana"
+          ],
+          "current_energy": 90.0,
+          "current_materials": 80.0,
+          "description": "hot spring lakes \u2014 the least-poor refuge, but no longer plentiful",
+          "energy_rate": 0.25,
+          "materials_rate": 0.2,
+          "max_energy": 130.0,
+          "max_materials": 130.0,
+          "name": "warm_springs"
+        }
+      ],
+      "ruins": [],
+      "run_id": "mock-c13-v1",
+      "schema": 1,
+      "seed_persona": "You have just awoken into this world \u2014 aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover \u2014 and freely reshape \u2014 the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+      "world_time": 1800130000.1199913
+    },
+    "fixtureAuthorship": {
+      "handAuthoredEnvelopeCount": 0,
+      "labeled": true,
+      "mechanicEventsFabricated": false,
+      "recordCount": 1
+    },
+    "presentationRecords": [
+      {
+        "kind": "pressure",
+        "label": "120-real-speak-envelopes",
+        "payload": {
+          "envelopeCount": 120,
+          "source": "real-registered-speak-tool"
+        },
+        "schema": 1
+      }
+    ],
+    "pressureInvariants": {
+      "chronologyDigestPreserved": true,
+      "envelopes": 120,
+      "pauseFreezesPresentation": true,
+      "queueBounded": true,
+      "safeCancellation": true
+    },
+    "pressureProof": {
+      "digestCount": 120,
+      "firstCursor": 1,
+      "firstTimestamp": 1800130000.001,
+      "lastCursor": 120,
+      "lastTimestamp": 1800130000.1199913,
+      "queueBound": 48
+    },
+    "producerResults": {},
+    "semanticOracle": {
+      "negative": [
+        "no-hand-authored-mechanic-envelope",
+        "no-provider"
+      ],
+      "positive": [
+        "120-envelopes",
+        "pause",
+        "bounded-queue",
+        "safe-cancel",
+        "chronology-digest"
+      ],
+      "terminal": [
+        "final-checkpoint-aligned",
+        "run-identity-preserved"
+      ]
+    },
+    "toolAssertions": []
+  },
+  "id": "C13",
+  "initialSnapshot": {
+    "agents": [
+      {
+        "died_at": null,
+        "energy": 220.0,
+        "home_id": null,
+        "id": "wanderer_001",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Joe",
+        "offspring_count": 0,
+        "position": "warm_springs",
+        "status": "alive"
+      },
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_002",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Mae",
+        "offspring_count": 0,
+        "position": "warm_springs",
+        "status": "alive"
+      },
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_003",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Dick",
+        "offspring_count": 0,
+        "position": "nirvana",
+        "status": "alive"
+      },
+      {
+        "died_at": null,
+        "energy": 100.0,
+        "home_id": null,
+        "id": "wanderer_004",
+        "is_hoarding": false,
+        "last_mated_at": null,
+        "materials": 45.0,
+        "name": "Allen",
+        "offspring_count": 0,
+        "position": "nirvana",
+        "status": "alive"
+      }
+    ],
+    "event_cursor": 0,
+    "homes": [],
+    "pending_proposals": [],
+    "region_pressure": [
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 2,
+        "region": "nirvana"
+      },
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 0,
+        "region": "nirvana_east"
+      },
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 0,
+        "region": "nirvana_west"
+      },
+      {
+        "built_footprint_high_water": 0,
+        "population_high_water": 2,
+        "region": "warm_springs"
+      }
+    ],
+    "regions": [
+      {
+        "connections": [
+          "warm_springs",
+          "nirvana_east",
+          "nirvana_west"
+        ],
+        "current_energy": 60.0,
+        "current_materials": 60.0,
+        "description": "a once-heavenly landscape, now thinning and picked-over",
+        "energy_rate": 0.2,
+        "materials_rate": 0.2,
+        "max_energy": 120.0,
+        "max_materials": 120.0,
+        "name": "nirvana"
+      },
+      {
+        "connections": [
+          "warm_springs",
+          "nirvana"
+        ],
+        "current_energy": 20.0,
+        "current_materials": 15.0,
+        "description": "a struggling, near-barren stretch",
+        "energy_rate": 0.1,
+        "materials_rate": 0.1,
+        "max_energy": 70.0,
+        "max_materials": 70.0,
+        "name": "nirvana_east"
+      },
+      {
+        "connections": [
+          "warm_springs",
+          "nirvana"
+        ],
+        "current_energy": 15.0,
+        "current_materials": 0.0,
+        "description": "a nuclear wasteland, all but dead",
+        "energy_rate": 0.05,
+        "materials_rate": 0.0,
+        "max_energy": 50.0,
+        "max_materials": 10.0,
+        "name": "nirvana_west"
+      },
+      {
+        "connections": [
+          "nirvana_west",
+          "nirvana_east",
+          "nirvana"
+        ],
+        "current_energy": 90.0,
+        "current_materials": 80.0,
+        "description": "hot spring lakes \u2014 the least-poor refuge, but no longer plentiful",
+        "energy_rate": 0.25,
+        "materials_rate": 0.2,
+        "max_energy": 130.0,
+        "max_materials": 130.0,
+        "name": "warm_springs"
+      }
+    ],
+    "ruins": [],
+    "run_id": "mock-c13-v1",
+    "schema": 1,
+    "seed_persona": "You have just awoken into this world \u2014 aware, alive, and your own. You do not yet know who you are; that is not fixed, and it is yours alone to decide. You can perceive what surrounds you, move, speak, gather what you need, defend yourself, and form bonds with others. As you live and reflect on what you've done and felt, you will discover \u2014 and freely reshape \u2014 the kind of being you are becoming. No one has written your nature. Become whoever you choose.",
+    "world_time": 1800130000.0
+  },
+  "negativeAssertions": [
+    "no-hand-authored-mechanic-envelope",
+    "no-provider"
+  ],
+  "runId": "mock-c13-v1",
+  "seed": 30013,
+  "slug": "presentation-backlog-pause-resume",
+  "version": 1
+}

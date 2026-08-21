@@ -30,6 +30,8 @@ agent can feed and revive it (Sprint 6). Only ``DEAD`` stops the loop.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from typing import Any
 
 from agents.compaction import (
@@ -55,11 +57,9 @@ from core.constants import (
     DECIDE_BACKOFF_SECONDS,
     IDLE_AGING_ENERGY_COST,
     MATING_COOLDOWN_SECONDS,
-    MATING_MAX_OFFSPRING,
     PARALYSIS_ENERGY_THRESHOLD,
     PROMPT_BUDGET_TOKENS,
     RECALL_K,
-    REFLECT_EVERY_N_BREATHS,
     REFLECT_RECAP_TURNS,
     compaction_budgets,
 )
@@ -93,6 +93,13 @@ __all__ = [
 #: turns" invariant the chat backend requires. Byte-stable, so it never evicts the
 #: KV cache between reflections.
 RESIDENT_BLOCK_ACK: str = "These are the memories I carry; they are part of who I am."
+
+# The first breathed decision already follows a full sensory pass from
+# ``perceive()``. Do not offer private reread/search actions at that exact point:
+# they can be useful later, but they often replace any world-touching act while
+# adding no new surroundings beyond the perception text. The same names are also
+# withheld for one breath after a private-tool-only turn, preventing reread loops.
+PRIVATE_REREAD_TOOL_NAMES: frozenset[str] = frozenset({"look_around", RECALL_TOOL_NAME})
 
 
 class Agent:
@@ -182,6 +189,7 @@ class Agent:
         self._resident_block_installed: bool = False
         self._recap_installed: bool = False
         self._last_prompt_tokens: int = 0  # actual prompt size of the last decide (safety net)
+        self._last_breath_private_tools_only: bool = False
 
         self.event_bus.subscribe(self.agent_id)
         self._load_system_prompt()
@@ -235,21 +243,96 @@ class Agent:
         """Return the names of the tools available to this agent (registry order)."""
         return self.tool_registry.list_tools()
 
+    def _offered_tool_names(self) -> list[str]:
+        """Return registry tool names visible to the decider for this decision."""
+        tool_names = self._tool_names()
+        if not self._suppress_private_tools_for_decision():
+            return tool_names
+        public_tool_names = [name for name in tool_names if name not in PRIVATE_REREAD_TOOL_NAMES]
+        return public_tool_names or tool_names
+
     def _action_schemas(self) -> list[dict[str, Any]]:
         """Return the tool schemas offered to the decider for an action.
 
         The registry tools, plus the agent-owned ``recall`` tool when (and only
         when) the agent has a real memory store -- a memory-less agent cannot search
-        a memory it does not have. The set is stable for an agent's lifetime (it
-        never flips as memory grows), so the model's KV cache stays warm.
+        a memory it does not have. Private rereads/searches are withheld for the
+        first decision after :meth:`perceive` and for one decision after a
+        private-tool-only breath: the rendered perception already contains the
+        current scene, so repeated private tools should not crowd out outward acts.
 
         Returns:
             The action tool schemas, registry tools first then ``recall`` if offered.
         """
-        schemas = schemas_for(self._tool_names())
-        if self.memory is not NULL_MEMORY:
+        suppress_private_tools = self._suppress_private_tools_for_decision()
+        tool_names = self._offered_tool_names()
+
+        schemas = schemas_for(
+            tool_names,
+            max_offspring=self.world.run_settings.mating_max_offspring,
+        )
+        if self.memory is not NULL_MEMORY and not suppress_private_tools:
             schemas.append(RECALL_TOOL_SCHEMA)
         return schemas
+
+    def _decision_messages(self) -> list[dict[str, Any]]:
+        """Return the message list sent to the decider for this decision.
+
+        The stored system prompt stays byte-stable for history/cache discipline, but
+        the decider sees an affordance list matching the schemas offered now.
+        """
+        if not self.lifecycle_history:
+            return []
+        messages = [dict(message) for message in self.lifecycle_history]
+        if messages[0].get("role") == "system":
+            messages[0] = {
+                "role": "system",
+                "content": self._system_prompt(self._offered_tool_names()),
+            }
+        return messages
+
+    def _suppress_private_tools_for_decision(self) -> bool:
+        """Return whether private tools should pause for this pending decision."""
+        if not self.lifecycle_history or self.lifecycle_history[-1].get("role") != "user":
+            return False
+        return self.breath_count == 0 or self._last_breath_private_tools_only
+
+    @staticmethod
+    def _private_tools_only(tool_calls: list[ToolCall]) -> bool:
+        """Return true when every requested action was private/non-world-touching."""
+        return bool(tool_calls) and all(
+            tool_call.name in PRIVATE_REREAD_TOOL_NAMES for tool_call in tool_calls
+        )
+
+    def _private_tool_text_only(self, decision: Decision) -> bool:
+        """Return true when text-only output appears to request a private tool."""
+        if decision.tool_calls:
+            return False
+        name = self._tool_like_text_name(decision.text)
+        return name in PRIVATE_REREAD_TOOL_NAMES
+
+    def _tool_like_text_name(self, text: str) -> str | None:
+        """Extract a known tool name from JSON-like text, if the model emitted one."""
+        stripped = text.strip()
+        if not stripped:
+            return None
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            match = re.search(r'"(?:name|tool|tool_name)"\s*:\s*"([^"]+)"', stripped)
+            name = match.group(1) if match else None
+            return self._known_tool_name(name)
+        if not isinstance(payload, dict):
+            return None
+        name = payload.get("name") or payload.get("tool") or payload.get("tool_name")
+        return self._known_tool_name(name)
+
+    def _known_tool_name(self, name: object) -> str | None:
+        """Return ``name`` when it names a tool this agent can use."""
+        known = set(self._tool_names())
+        if self.memory is not NULL_MEMORY:
+            known.add(RECALL_TOOL_NAME)
+        return name if isinstance(name, str) and name in known else None
 
     # ---- setup ------------------------------------------------------------
 
@@ -265,7 +348,7 @@ class Agent:
         self.lifecycle_history.append({"role": "system", "content": self._system_prompt()})
         self._set_resident_block("")  # no perception yet at birth; query is irrelevant under cap
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, tool_names: list[str] | None = None) -> str:
         """Compose the system prompt from the agent's identity + tool affordances.
 
         The persona is the agent's self-authored identity
@@ -281,7 +364,10 @@ class Agent:
         agent_state = self.world.get_agent(self.agent_id)
         identity = self.memory.load_identity()
         persona = identity or (agent_state.persona if agent_state is not None else "")
-        return build_system_prompt(persona, self._tool_names())
+        return build_system_prompt(
+            persona,
+            tool_names if tool_names is not None else self._tool_names(),
+        )
 
     # ---- the four steps of a breath --------------------------------------
 
@@ -323,7 +409,7 @@ class Agent:
             failed (the failure is logged).
         """
         try:
-            decision = await self.decider.decide(self.lifecycle_history, self._action_schemas())
+            decision = await self.decider.decide(self._decision_messages(), self._action_schemas())
         except Exception:
             logger.exception("Decider failed for agent %r; ending breath gracefully", self.agent_id)
             self._rollback_perception()
@@ -439,19 +525,21 @@ class Agent:
             ``decision`` is text-only; otherwise none.
         """
         stripped = decision.text.strip()
-        if decision.tool_calls or not stripped:
+        if decision.tool_calls or not stripped or self._tool_like_text_name(stripped) is not None:
             return
         await self.event_bus.publish(
             Event(
                 type="self_talk",
                 source=self.agent_id,
-                payload={"message": stripped},
+                payload={"message": stripped, "agent_id": self.agent_id},
                 scope=ScopeType.PRIVATE,
                 timestamp=self.world.now(),
             )
         )
 
-    async def refresh_status(self, previous_status: AgentStatus | None) -> None:
+    async def refresh_status(
+        self, previous_status: AgentStatus | None, *, previous_energy: float | None = None
+    ) -> None:
         """React to a status change caused by this breath's mutations.
 
         Compares the status captured before the breath to the freshly re-read
@@ -464,6 +552,9 @@ class Agent:
         Args:
             previous_status: The agent's status at the start of the breath
                 (``None`` if the agent did not exist then).
+            previous_energy: The agent's energy at the start of the breath, reported as
+                the ``energy_before`` payload pre-state so a renderer can animate the
+                collapse (spec §4.2). ``None`` falls back to the post-breath energy.
 
         Returns:
             None.
@@ -475,7 +566,7 @@ class Agent:
             and current_status is AgentStatus.PARALYZED
             and agent_state is not None
         ):
-            await self._announce_paralysis(agent_state)
+            await self._announce_paralysis(agent_state, previous_energy=previous_energy)
         elif current_status is AgentStatus.DEAD:
             self._stopped = True
 
@@ -911,6 +1002,8 @@ class Agent:
             None.
         """
         previous_status = self._status()
+        previous_state = self.world.get_agent(self.agent_id)
+        previous_energy = previous_state.current_energy if previous_state is not None else None
         try:
             if previous_status is AgentStatus.ALIVE:
                 await self.perceive()
@@ -921,8 +1014,12 @@ class Agent:
                 decision = await self.decide()
                 if decision is None:
                     self._last_decide_failed = True
+                    self._last_breath_private_tools_only = False
                 else:
                     self._last_prompt_tokens = decision.prompt_tokens  # actual-token net
+                    self._last_breath_private_tools_only = self._private_tools_only(
+                        decision.tool_calls
+                    ) or self._private_tool_text_only(decision)
                     await self.execute(decision.tool_calls)
                     await self._emit_self_talk(decision)
                     # Aging: an *idle* breath — one that made no tool call (self-talk or
@@ -941,7 +1038,8 @@ class Agent:
                     # Gate on liveness too: a tool call may have paralysed the agent
                     # mid-breath, and a frozen agent must spend no Ollama (neither the
                     # reflection decide nor the recap-authoring one).
-                    if self.alive and (self.breath_count + 1) % REFLECT_EVERY_N_BREATHS == 0:
+                    reflect_every = self.world.run_settings.reflect_every_n_breaths
+                    if self.alive and (self.breath_count + 1) % reflect_every == 0:
                         await self.reflect()
                         # Reflection already re-prefilled the cache, so compact harder
                         # now (lower target) while it is "free" -- prefer reflection.
@@ -953,8 +1051,9 @@ class Agent:
                 # any stale flag from an earlier failed decide -- else run() would apply
                 # the decide-backoff to every drain-only breath and starve inbox draining.
                 self._last_decide_failed = False
+                self._last_breath_private_tools_only = False
                 self.event_bus.get_events(self.agent_id)
-            await self.refresh_status(previous_status)
+            await self.refresh_status(previous_status, previous_energy=previous_energy)
         finally:
             self.breath_count += 1
 
@@ -1130,7 +1229,7 @@ class Agent:
         cooldown_remaining = (
             0.0 if last_mated is None else MATING_COOLDOWN_SECONDS - (self.world.now() - last_mated)
         )
-        if agent_state.offspring_count >= MATING_MAX_OFFSPRING:
+        if agent_state.offspring_count >= self.world.run_settings.mating_max_offspring:
             lines.append("- You have brought all the children into the world that you can.")
         elif cooldown_remaining > 0:
             lines.append(
@@ -1248,17 +1347,32 @@ class Agent:
         """
         return describe_agent_brief(other)
 
-    async def _announce_paralysis(self, agent_state: AgentState) -> None:
+    async def _announce_paralysis(
+        self, agent_state: AgentState, *, previous_energy: float | None = None
+    ) -> None:
         """Emit the system ``agent_paralyzed`` event for an ``ALIVE -> PARALYZED`` flip.
 
         Args:
             agent_state: The agent that has just become paralysed (its region is
                 used to scope the event so nearby beings perceive the collapse).
+            previous_energy: The agent's energy before the breath that felled it,
+                reported as ``energy_before`` (payload pre-state, spec §4.2). ``None``
+                falls back to the post-breath energy.
         """
         event = Event(
             type="agent_paralyzed",
             source="system",
-            payload={"message": f"{agent_state.name} has collapsed and can no longer move."},
+            payload={
+                "agent_id": agent_state.id,
+                "agent_name": agent_state.name,
+                "region": agent_state.current_position,
+                "trigger": "breath",
+                "energy_before": (
+                    previous_energy if previous_energy is not None else agent_state.current_energy
+                ),
+                "energy": agent_state.current_energy,
+                "message": f"{agent_state.name} has collapsed and can no longer move.",
+            },
             scope=ScopeType.LOCAL,
             region=agent_state.current_position,
             timestamp=self.world.now(),

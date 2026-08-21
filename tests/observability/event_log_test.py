@@ -83,7 +83,10 @@ def test_jsonl_log_writes_one_parseable_line_per_event(tmp_path: Path) -> None:
     assert records[0]["type"] == "speak"
     assert records[0]["scope"] == "local"
     assert records[0]["region"] == "alpha"
-    assert records[0]["payload"] == {"message": "speak happened"}
+    # The durable record carries the backend's own display-only classification
+    # alongside the event's authored payload (live-presentation spec §4.1).
+    assert records[0]["payload"] == {"message": "speak happened", "display_only": True}
+    assert records[1]["payload"] == {"message": "attack happened", "display_only": False}
     assert records[1]["source"] == "wanderer_002"
 
 
@@ -111,7 +114,13 @@ def test_feed_cursor_returns_only_new() -> None:
     feed = FeedEventLog(maxlen=10)
     feed.record(_ev(1))
     feed.record(_ev(2))
-    new, cursor = feed.new_events(0)
+    result = feed.read_events(0)
+    assert result.requested_cursor == 0
+    assert result.oldest_cursor == 0
+    assert result.next_cursor == 2
+    assert result.overflow is False
+    assert result.snapshot_required is False
+    new, cursor = result.events, result.next_cursor
     assert [e.type for e in new] == ["t1", "t2"]
     assert cursor == 2
     feed.record(_ev(3))
@@ -120,10 +129,32 @@ def test_feed_cursor_returns_only_new() -> None:
     assert cursor2 == 3
 
 
-def test_feed_ring_buffer_bounds_and_cursor_resumes_after_overflow() -> None:
+def test_feed_ring_buffer_reports_overflow_and_cursor_resumes() -> None:
     feed = FeedEventLog(maxlen=2)
     for i in range(5):
         feed.record(_ev(i))  # only t3,t4 retained; count == 5
-    new, cursor = feed.new_events(0)  # cursor behind the buffer -> resume from oldest kept
+    result = feed.read_events(0)  # cursor behind the buffer -> resume from oldest kept
+    assert [e.type for e in result.events] == ["t3", "t4"]
+    assert result.requested_cursor == 0
+    assert result.oldest_cursor == 3
+    assert result.next_cursor == 5
+    assert result.overflow is True
+    assert result.snapshot_required is True
+
+    # The legacy terminal-feed helper keeps its old tuple behavior.
+    new, cursor = feed.new_events(0)
     assert [e.type for e in new] == ["t3", "t4"]
     assert cursor == 5
+
+
+def test_feed_read_events_exposes_current_and_oldest_cursors() -> None:
+    feed = FeedEventLog(maxlen=3)
+    assert feed.current_cursor == 0
+    assert feed.oldest_cursor == 0
+    for i in range(4):
+        feed.record(_ev(i))
+    assert feed.current_cursor == 4
+    assert feed.oldest_cursor == 1
+    result = feed.read_events(3)
+    assert [event.type for event in result.events] == ["t3"]
+    assert result.overflow is False

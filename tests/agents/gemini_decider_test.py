@@ -263,6 +263,65 @@ async def test_gemini_decider_thinking_level_is_overridable() -> None:
     assert fake.calls[0]["config"]["thinking_config"].thinking_level.value == "HIGH"
 
 
+async def test_gemini_decider_reuses_owned_client_and_closes_it_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lazy SDK client is retained and its async transport is closed once."""
+    response = _response(parts=[SimpleNamespace(text="ok", function_call=None)])
+    async_clients: list[Any] = []
+
+    class _FakeAsyncClient:
+        def __init__(self) -> None:
+            self.models = _FakeModels(response)
+            self.close_calls = 0
+            async_clients.append(self)
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    class _FakeRootClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.aio = _FakeAsyncClient()
+
+    monkeypatch.setattr("google.genai.Client", _FakeRootClient)
+    monkeypatch.setattr("httpx.AsyncHTTPTransport", lambda: object())
+    monkeypatch.setattr("agents.gemini_decider.types.HttpOptions", lambda **kwargs: kwargs)
+    decider = GeminiDecider("gemini-test", api_key="test-key")
+
+    await decider.decide([], [])
+    await decider.decide([], [])
+    await decider.aclose()
+    await decider.aclose()
+
+    assert len(async_clients) == 1
+    assert async_clients[0].close_calls == 1
+
+
+async def test_gemini_decider_never_closes_injected_client() -> None:
+    """An injected models client remains owned by its caller."""
+    response = _response(parts=[SimpleNamespace(text="ok", function_call=None)])
+
+    class _InjectedModels(_FakeModels):
+        def __init__(self) -> None:
+            super().__init__(response)
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    client = _InjectedModels()
+    decider = GeminiDecider("gemini-test", client=client)
+
+    await decider.decide([], [])
+    await decider.aclose()
+    await decider.aclose()
+
+    assert client.close_calls == 0
+
+    with pytest.raises(RuntimeError, match="closed"):
+        await decider.decide([], [])
+
+
 # ---- make_default_decider provider branch -----------------------------------
 
 

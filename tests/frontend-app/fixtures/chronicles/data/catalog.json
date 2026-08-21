@@ -1,0 +1,185 @@
+{
+  "chronicles": [
+    {
+      "expectedFinalCursor": 0,
+      "file": "C00-world-four-regions-topology.json",
+      "id": "C00",
+      "runId": "mock-c00-v1",
+      "seed": 30000,
+      "slug": "world-four-regions-topology",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 2,
+      "file": "C01-movement-local-path.json",
+      "id": "C01",
+      "runId": "mock-c01-v1",
+      "seed": 30001,
+      "slug": "movement-local-path",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 20,
+      "file": "C02-travel-all-regions.json",
+      "id": "C02",
+      "runId": "mock-c02-v1",
+      "seed": 30002,
+      "slug": "travel-all-regions",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 2,
+      "file": "C03-resources-harvest-hoard-transfer.json",
+      "id": "C03",
+      "runId": "mock-c03-v1",
+      "seed": 30003,
+      "slug": "resources-harvest-hoard-transfer",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 4,
+      "file": "C04-mating-proposal-birth.json",
+      "id": "C04",
+      "runId": "mock-c04-v1",
+      "seed": 30004,
+      "slug": "mating-proposal-birth",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 6,
+      "file": "C05-mating-failure-branches.json",
+      "id": "C05",
+      "runId": "mock-c05-v1",
+      "seed": 30005,
+      "slug": "mating-failure-branches",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 5,
+      "file": "C06-home-build-hearth-stake-vault.json",
+      "id": "C06",
+      "runId": "mock-c06-v1",
+      "seed": 30006,
+      "slug": "home-build-hearth-stake-vault",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 4,
+      "file": "C07-home-contest-thieve.json",
+      "id": "C07",
+      "runId": "mock-c07-v1",
+      "seed": 30007,
+      "slug": "home-contest-thieve",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 4,
+      "file": "C08-home-contest-colonize.json",
+      "id": "C08",
+      "runId": "mock-c08-v1",
+      "seed": 30008,
+      "slug": "home-contest-colonize",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 6,
+      "file": "C09-home-silent-repair-collapse-ruin.json",
+      "id": "C09",
+      "runId": "mock-c09-v1",
+      "seed": 30009,
+      "slug": "home-silent-repair-collapse-ruin",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 4,
+      "file": "C10-combat-hit-paralyze-recover.json",
+      "id": "C10",
+      "runId": "mock-c10-v1",
+      "seed": 30010,
+      "slug": "combat-hit-paralyze-recover",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 2,
+      "file": "C11-combat-lethal-death-decay.json",
+      "id": "C11",
+      "runId": "mock-c11-v1",
+      "seed": 30011,
+      "slug": "combat-lethal-death-decay",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 12,
+      "file": "C12-cross-region-causal-life-story.json",
+      "id": "C12",
+      "runId": "mock-c12-v1",
+      "seed": 30012,
+      "slug": "cross-region-causal-life-story",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 120,
+      "file": "C13-presentation-backlog-pause-resume.json",
+      "id": "C13",
+      "runId": "mock-c13-v1",
+      "seed": 30013,
+      "slug": "presentation-backlog-pause-resume",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 0,
+      "file": "C14-transport-reconnect-checkpoint-recovery.json",
+      "id": "C14",
+      "runId": "mock-c14-v1",
+      "seed": 30014,
+      "slug": "transport-reconnect-checkpoint-recovery",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 0,
+      "file": "C15-archive-live-isolation.json",
+      "id": "C15",
+      "runId": "mock-c15-v1",
+      "seed": 30015,
+      "slug": "archive-live-isolation",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 4096,
+      "file": "C16-pressure-4096-envelopes.json",
+      "id": "C16",
+      "runId": "mock-c16-v1",
+      "seed": 30016,
+      "slug": "pressure-4096-envelopes",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 3,
+      "file": "C17-communication-perception-privacy.json",
+      "id": "C17",
+      "runId": "mock-c17-v1",
+      "seed": 30017,
+      "slug": "communication-perception-privacy",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 38,
+      "file": "C18-grand-tour-all-events.json",
+      "id": "C18",
+      "runId": "mock-c18-v1",
+      "seed": 30018,
+      "slug": "grand-tour-all-events",
+      "version": 1
+    },
+    {
+      "expectedFinalCursor": 28,
+      "file": "C19-two-beings.json",
+      "id": "C19",
+      "runId": "mock-c19-v1",
+      "seed": 30019,
+      "slug": "two-beings",
+      "version": 1
+    }
+  ],
+  "schema": 1
+}

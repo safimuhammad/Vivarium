@@ -16,6 +16,7 @@ from agents.tool_schemas import TOOL_SCHEMAS, schemas_for
 from core.constants import (
     ATTACK_DAMAGE,
     ATTACK_ENERGY_COST,
+    MATING_MAX_OFFSPRING,
     MOVE_ENERGY_COST,
     SPEAK_ENERGY_COST,
 )
@@ -78,6 +79,13 @@ def test_costed_action_schemas_state_their_energy_cost() -> None:
     assert "loot" in attack_desc.lower()
 
 
+def test_look_around_schema_states_private_read_only_consequence() -> None:
+    desc = TOOL_SCHEMAS["look_around"]["function"]["description"].lower()
+    assert "private awareness" in desc
+    assert "changes nothing" in desc
+    assert "reaches no one else" in desc
+
+
 def test_no_schema_description_leaks_forbidden_dd9_language() -> None:
     """DD9 regression: no tool-schema description may leak goal/strategy/sim language.
 
@@ -93,3 +101,29 @@ def test_no_schema_description_leaks_forbidden_dd9_language() -> None:
         description = schema["function"]["description"].lower()
         for banned in FORBIDDEN_TERMS:
             assert banned not in description, f"{name!r} schema description leaks {banned!r}"
+
+
+def test_schemas_for_returns_the_shared_objects_at_the_default_offspring_cap() -> None:
+    """Default runs must see byte-identical schemas: identity, not just equality."""
+    schemas = schemas_for(["initiate_mating", "look_around"])
+    assert schemas[0] is TOOL_SCHEMAS["initiate_mating"]
+    assert schemas[1] is TOOL_SCHEMAS["look_around"]
+
+
+def test_schemas_for_states_a_runs_own_offspring_ceiling() -> None:
+    """The cap is enforced silently, so a run that lowers it must SAY the new number."""
+    schemas = schemas_for(["initiate_mating"], max_offspring=2)
+    description = schemas[0]["function"]["description"]
+    assert "up to 2 children in all" in description
+    assert schemas[0] is not TOOL_SCHEMAS["initiate_mating"]
+    # The shared schema is never mutated -- another run must not inherit this ceiling.
+    assert (
+        f"up to {MATING_MAX_OFFSPRING} children in all"
+        in TOOL_SCHEMAS["initiate_mating"]["function"]["description"]
+    )
+
+
+def test_schemas_for_leaves_other_tools_shared_when_the_ceiling_changes() -> None:
+    schemas = schemas_for(["look_around", "initiate_mating"], max_offspring=9)
+    assert schemas[0] is TOOL_SCHEMAS["look_around"]
+    assert "up to 9 children in all" in schemas[1]["function"]["description"]

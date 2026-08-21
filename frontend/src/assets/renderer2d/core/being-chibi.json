@@ -1,0 +1,661 @@
+{
+  "frameWidth": 22,
+  "frameHeight": 48,
+  "feet": {
+    "x": 11,
+    "y": 46
+  },
+  "characters": {
+    "m1": {
+      "frames": {
+        "walk-down-0": {
+          "x": 0,
+          "y": 0
+        },
+        "walk-down-1": {
+          "x": 22,
+          "y": 0
+        },
+        "walk-down-2": {
+          "x": 44,
+          "y": 0
+        },
+        "walk-down-3": {
+          "x": 66,
+          "y": 0
+        },
+        "walk-up-0": {
+          "x": 0,
+          "y": 48
+        },
+        "walk-up-1": {
+          "x": 22,
+          "y": 48
+        },
+        "walk-up-2": {
+          "x": 44,
+          "y": 48
+        },
+        "walk-up-3": {
+          "x": 66,
+          "y": 48
+        },
+        "walk-side-0": {
+          "x": 0,
+          "y": 96
+        },
+        "walk-side-1": {
+          "x": 22,
+          "y": 96
+        },
+        "walk-side-2": {
+          "x": 44,
+          "y": 96
+        },
+        "walk-side-3": {
+          "x": 66,
+          "y": 96
+        },
+        "pose-blink": {
+          "x": 0,
+          "y": 144
+        },
+        "pose-talk": {
+          "x": 22,
+          "y": 144
+        },
+        "pose-reach": {
+          "x": 44,
+          "y": 144
+        },
+        "pose-crouch": {
+          "x": 66,
+          "y": 144
+        },
+        "pose-kneel": {
+          "x": 88,
+          "y": 144
+        }
+      },
+      "walkCycles": {
+        "down": [
+          "walk-down-0",
+          "walk-down-1",
+          "walk-down-2",
+          "walk-down-3"
+        ],
+        "up": [
+          "walk-up-0",
+          "walk-up-1",
+          "walk-up-2",
+          "walk-up-3"
+        ],
+        "side": [
+          "walk-side-0",
+          "walk-side-1",
+          "walk-side-2",
+          "walk-side-3"
+        ]
+      },
+      "idleFrame": "walk-down-1"
+    },
+    "f1": {
+      "frames": {
+        "walk-down-0": {
+          "x": 0,
+          "y": 192
+        },
+        "walk-down-1": {
+          "x": 22,
+          "y": 192
+        },
+        "walk-down-2": {
+          "x": 44,
+          "y": 192
+        },
+        "walk-down-3": {
+          "x": 66,
+          "y": 192
+        },
+        "walk-up-0": {
+          "x": 0,
+          "y": 240
+        },
+        "walk-up-1": {
+          "x": 22,
+          "y": 240
+        },
+        "walk-up-2": {
+          "x": 44,
+          "y": 240
+        },
+        "walk-up-3": {
+          "x": 66,
+          "y": 240
+        },
+        "walk-side-0": {
+          "x": 0,
+          "y": 288
+        },
+        "walk-side-1": {
+          "x": 22,
+          "y": 288
+        },
+        "walk-side-2": {
+          "x": 44,
+          "y": 288
+        },
+        "walk-side-3": {
+          "x": 66,
+          "y": 288
+        },
+        "pose-blink": {
+          "x": 0,
+          "y": 336
+        },
+        "pose-talk": {
+          "x": 22,
+          "y": 336
+        },
+        "pose-reach": {
+          "x": 44,
+          "y": 336
+        },
+        "pose-crouch": {
+          "x": 66,
+          "y": 336
+        },
+        "pose-kneel": {
+          "x": 88,
+          "y": 336
+        }
+      },
+      "walkCycles": {
+        "down": [
+          "walk-down-0",
+          "walk-down-1",
+          "walk-down-2",
+          "walk-down-3"
+        ],
+        "up": [
+          "walk-up-0",
+          "walk-up-1",
+          "walk-up-2",
+          "walk-up-3"
+        ],
+        "side": [
+          "walk-side-0",
+          "walk-side-1",
+          "walk-side-2",
+          "walk-side-3"
+        ]
+      },
+      "idleFrame": "walk-down-1"
+    },
+    "f2": {
+      "frames": {
+        "walk-down-0": {
+          "x": 0,
+          "y": 384
+        },
+        "walk-down-1": {
+          "x": 22,
+          "y": 384
+        },
+        "walk-down-2": {
+          "x": 44,
+          "y": 384
+        },
+        "walk-down-3": {
+          "x": 66,
+          "y": 384
+        },
+        "walk-up-0": {
+          "x": 0,
+          "y": 432
+        },
+        "walk-up-1": {
+          "x": 22,
+          "y": 432
+        },
+        "walk-up-2": {
+          "x": 44,
+          "y": 432
+        },
+        "walk-up-3": {
+          "x": 66,
+          "y": 432
+        },
+        "walk-side-0": {
+          "x": 0,
+          "y": 480
+        },
+        "walk-side-1": {
+          "x": 22,
+          "y": 480
+        },
+        "walk-side-2": {
+          "x": 44,
+          "y": 480
+        },
+        "walk-side-3": {
+          "x": 66,
+          "y": 480
+        },
+        "pose-blink": {
+          "x": 0,
+          "y": 528
+        },
+        "pose-talk": {
+          "x": 22,
+          "y": 528
+        },
+        "pose-reach": {
+          "x": 44,
+          "y": 528
+        },
+        "pose-crouch": {
+          "x": 66,
+          "y": 528
+        },
+        "pose-kneel": {
+          "x": 88,
+          "y": 528
+        }
+      },
+      "walkCycles": {
+        "down": [
+          "walk-down-0",
+          "walk-down-1",
+          "walk-down-2",
+          "walk-down-3"
+        ],
+        "up": [
+          "walk-up-0",
+          "walk-up-1",
+          "walk-up-2",
+          "walk-up-3"
+        ],
+        "side": [
+          "walk-side-0",
+          "walk-side-1",
+          "walk-side-2",
+          "walk-side-3"
+        ]
+      },
+      "idleFrame": "walk-down-1"
+    },
+    "f3": {
+      "frames": {
+        "walk-down-0": {
+          "x": 0,
+          "y": 576
+        },
+        "walk-down-1": {
+          "x": 22,
+          "y": 576
+        },
+        "walk-down-2": {
+          "x": 44,
+          "y": 576
+        },
+        "walk-down-3": {
+          "x": 66,
+          "y": 576
+        },
+        "walk-up-0": {
+          "x": 0,
+          "y": 624
+        },
+        "walk-up-1": {
+          "x": 22,
+          "y": 624
+        },
+        "walk-up-2": {
+          "x": 44,
+          "y": 624
+        },
+        "walk-up-3": {
+          "x": 66,
+          "y": 624
+        },
+        "walk-side-0": {
+          "x": 0,
+          "y": 672
+        },
+        "walk-side-1": {
+          "x": 22,
+          "y": 672
+        },
+        "walk-side-2": {
+          "x": 44,
+          "y": 672
+        },
+        "walk-side-3": {
+          "x": 66,
+          "y": 672
+        },
+        "pose-blink": {
+          "x": 0,
+          "y": 720
+        },
+        "pose-talk": {
+          "x": 22,
+          "y": 720
+        },
+        "pose-reach": {
+          "x": 44,
+          "y": 720
+        },
+        "pose-crouch": {
+          "x": 66,
+          "y": 720
+        },
+        "pose-kneel": {
+          "x": 88,
+          "y": 720
+        }
+      },
+      "walkCycles": {
+        "down": [
+          "walk-down-0",
+          "walk-down-1",
+          "walk-down-2",
+          "walk-down-3"
+        ],
+        "up": [
+          "walk-up-0",
+          "walk-up-1",
+          "walk-up-2",
+          "walk-up-3"
+        ],
+        "side": [
+          "walk-side-0",
+          "walk-side-1",
+          "walk-side-2",
+          "walk-side-3"
+        ]
+      },
+      "idleFrame": "walk-down-1"
+    },
+    "m2": {
+      "frames": {
+        "walk-down-0": {
+          "x": 0,
+          "y": 768
+        },
+        "walk-down-1": {
+          "x": 22,
+          "y": 768
+        },
+        "walk-down-2": {
+          "x": 44,
+          "y": 768
+        },
+        "walk-down-3": {
+          "x": 66,
+          "y": 768
+        },
+        "walk-up-0": {
+          "x": 0,
+          "y": 816
+        },
+        "walk-up-1": {
+          "x": 22,
+          "y": 816
+        },
+        "walk-up-2": {
+          "x": 44,
+          "y": 816
+        },
+        "walk-up-3": {
+          "x": 66,
+          "y": 816
+        },
+        "walk-side-0": {
+          "x": 0,
+          "y": 864
+        },
+        "walk-side-1": {
+          "x": 22,
+          "y": 864
+        },
+        "walk-side-2": {
+          "x": 44,
+          "y": 864
+        },
+        "walk-side-3": {
+          "x": 66,
+          "y": 864
+        },
+        "pose-blink": {
+          "x": 0,
+          "y": 912
+        },
+        "pose-talk": {
+          "x": 22,
+          "y": 912
+        },
+        "pose-reach": {
+          "x": 44,
+          "y": 912
+        },
+        "pose-crouch": {
+          "x": 66,
+          "y": 912
+        },
+        "pose-kneel": {
+          "x": 88,
+          "y": 912
+        }
+      },
+      "walkCycles": {
+        "down": [
+          "walk-down-0",
+          "walk-down-1",
+          "walk-down-2",
+          "walk-down-3"
+        ],
+        "up": [
+          "walk-up-0",
+          "walk-up-1",
+          "walk-up-2",
+          "walk-up-3"
+        ],
+        "side": [
+          "walk-side-0",
+          "walk-side-1",
+          "walk-side-2",
+          "walk-side-3"
+        ]
+      },
+      "idleFrame": "walk-down-1"
+    },
+    "m3": {
+      "frames": {
+        "walk-down-0": {
+          "x": 0,
+          "y": 960
+        },
+        "walk-down-1": {
+          "x": 22,
+          "y": 960
+        },
+        "walk-down-2": {
+          "x": 44,
+          "y": 960
+        },
+        "walk-down-3": {
+          "x": 66,
+          "y": 960
+        },
+        "walk-up-0": {
+          "x": 0,
+          "y": 1008
+        },
+        "walk-up-1": {
+          "x": 22,
+          "y": 1008
+        },
+        "walk-up-2": {
+          "x": 44,
+          "y": 1008
+        },
+        "walk-up-3": {
+          "x": 66,
+          "y": 1008
+        },
+        "walk-side-0": {
+          "x": 0,
+          "y": 1056
+        },
+        "walk-side-1": {
+          "x": 22,
+          "y": 1056
+        },
+        "walk-side-2": {
+          "x": 44,
+          "y": 1056
+        },
+        "walk-side-3": {
+          "x": 66,
+          "y": 1056
+        },
+        "pose-blink": {
+          "x": 0,
+          "y": 1104
+        },
+        "pose-talk": {
+          "x": 22,
+          "y": 1104
+        },
+        "pose-reach": {
+          "x": 44,
+          "y": 1104
+        },
+        "pose-crouch": {
+          "x": 66,
+          "y": 1104
+        },
+        "pose-kneel": {
+          "x": 88,
+          "y": 1104
+        }
+      },
+      "walkCycles": {
+        "down": [
+          "walk-down-0",
+          "walk-down-1",
+          "walk-down-2",
+          "walk-down-3"
+        ],
+        "up": [
+          "walk-up-0",
+          "walk-up-1",
+          "walk-up-2",
+          "walk-up-3"
+        ],
+        "side": [
+          "walk-side-0",
+          "walk-side-1",
+          "walk-side-2",
+          "walk-side-3"
+        ]
+      },
+      "idleFrame": "walk-down-1"
+    },
+    "m4": {
+      "frames": {
+        "walk-down-0": {
+          "x": 0,
+          "y": 1152
+        },
+        "walk-down-1": {
+          "x": 22,
+          "y": 1152
+        },
+        "walk-down-2": {
+          "x": 44,
+          "y": 1152
+        },
+        "walk-down-3": {
+          "x": 66,
+          "y": 1152
+        },
+        "walk-up-0": {
+          "x": 0,
+          "y": 1200
+        },
+        "walk-up-1": {
+          "x": 22,
+          "y": 1200
+        },
+        "walk-up-2": {
+          "x": 44,
+          "y": 1200
+        },
+        "walk-up-3": {
+          "x": 66,
+          "y": 1200
+        },
+        "walk-side-0": {
+          "x": 0,
+          "y": 1248
+        },
+        "walk-side-1": {
+          "x": 22,
+          "y": 1248
+        },
+        "walk-side-2": {
+          "x": 44,
+          "y": 1248
+        },
+        "walk-side-3": {
+          "x": 66,
+          "y": 1248
+        },
+        "pose-blink": {
+          "x": 0,
+          "y": 1296
+        },
+        "pose-talk": {
+          "x": 22,
+          "y": 1296
+        },
+        "pose-reach": {
+          "x": 44,
+          "y": 1296
+        },
+        "pose-crouch": {
+          "x": 66,
+          "y": 1296
+        },
+        "pose-kneel": {
+          "x": 88,
+          "y": 1296
+        }
+      },
+      "walkCycles": {
+        "down": [
+          "walk-down-0",
+          "walk-down-1",
+          "walk-down-2",
+          "walk-down-3"
+        ],
+        "up": [
+          "walk-up-0",
+          "walk-up-1",
+          "walk-up-2",
+          "walk-up-3"
+        ],
+        "side": [
+          "walk-side-0",
+          "walk-side-1",
+          "walk-side-2",
+          "walk-side-3"
+        ]
+      },
+      "idleFrame": "walk-down-1"
+    }
+  }
+}
