@@ -116,7 +116,20 @@ const MECHANICS_CHRONICLE_ROWS = [];
 // and unchanged for a stability window. The flight is wall-clock paced, so a
 // loaded machine loses this race far more often than a fast one -- it is a
 // race either way.
-const MECHANICS_FRAME_TIMEOUT_MS = 10000;
+// 45s, re-derived after CI failed at 11,079ms with a diagnostic that ruled out the
+// interesting causes: the point was finite, INSIDE the stage, overflow 0 on every
+// edge -- it simply had not held still within tolerance before the deadline. So the
+// camera frames the region correctly there; it is still converging when the clock
+// runs out. Settle costs 0.95-1.9s on a dev Mac, and that CI run took 4.1m against
+// 27.6s locally (~9x), which puts settle around 8.5-17s there -- straddling the old
+// 10s. Bound = ceil(1.9s heaviest local x 9x observed runner x 2.6 variance).
+// Note this did NOT reproduce under 30x CPU throttling locally: a runner rasterising
+// WebGL in software stretches the rAF interval, and the eased flight is wall-clock
+// paced, so convergence takes more real time in a way CPU throttling does not model.
+// This is a wall-clock deadline only -- the settle CONTRACT (finite, inside the
+// stage, unchanged within tolerance for the stability window) is unchanged, and a
+// camera that never frames its subject still fails here rather than hanging.
+const MECHANICS_FRAME_TIMEOUT_MS = 45000;
 const MECHANICS_FRAME_STABLE_MS = 250;
 const MECHANICS_FRAME_TOLERANCE_PX = 1;
 const MECHANICS_CLICK_OFFSETS = Object.freeze([
@@ -1028,7 +1041,19 @@ async function settleMechanicsFrame(page, { kind, id }) {
         return { ...latest, settled: true, elapsedMs: Math.round(performance.now() - startedAt) };
       }
       if (performance.now() >= deadline) {
-        return { ...latest, settled: false, elapsedMs: Math.round(performance.now() - startedAt) };
+        return {
+          ...latest,
+          settled: false,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          // Distinguishes the two ways this can time out: `anchoredMs` near 0 with a
+          // large `drift` means the point never stopped moving (a jitter floor above
+          // tolerancePx); a large `anchoredMs` means it was holding still and simply
+          // needed longer. Without this the two look identical in CI output.
+          anchoredMs: anchor === null ? 0 : Math.round(performance.now() - anchor.since),
+          drift: anchor === null || !latest.point
+            ? null
+            : { x: round(latest.point.x - anchor.x), y: round(latest.point.y - anchor.y) },
+        };
       }
       await nextFrame();
     }
