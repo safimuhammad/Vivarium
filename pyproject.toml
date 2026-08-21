@@ -37,8 +37,15 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
-    "ruff",
-    "mypy",
+    # Gate tools are PINNED EXACTLY, on purpose. `ruff format --check` and
+    # `mypy --strict` are pass/fail gates whose verdict depends on the tool
+    # version: ruff's formatter output legitimately changes between releases and
+    # mypy gains checks. Unpinned, CI resolved the newest release on each clean
+    # run while developers kept older wheels, so the format gate could go red on
+    # a commit that changed nothing and no local run could reproduce it. Bump
+    # these deliberately, and reformat/re-typecheck in the same commit.
+    "ruff==0.16.4",
+    "mypy==2.3.1",
     # Git pre-commit hook runner (ruff + mypy + fast pytest); see
     # `.pre-commit-config.yaml`.
     "pre-commit",
@@ -71,7 +78,14 @@ line-length = 100
 target-version = "py313"
 # Relocated live-Ollama prototypes kept as-is (legacy style); they are collected
 # by pytest under the `integration` marker but not linted/formatted by this pass.
-extend-exclude = ["tests/integration"]
+# Do NOT format Markdown. ruff 0.16 began formatting Python code blocks inside
+# .md files; our design docs quote FRAGMENTS (an indented arm of a larger
+# expression, a snippet of a function body), not complete programs. Formatting
+# them as standalone modules rewrites their meaning -- it split an implicit
+# string concatenation into two separate statements, silently changing the
+# string a reader would copy. Prose is reviewed by humans, not by a Python
+# formatter.
+extend-exclude = ["tests/integration", "*.md"]
 
 [tool.ruff.lint]
 select = [
