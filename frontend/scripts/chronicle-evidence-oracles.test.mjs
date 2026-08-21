@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   CHRONICLE_IDS,
+  EVIDENCE_CHRONICLE_IDS,
   EVIDENCE_SIDECAR_FILES,
   PRODUCTION_ACTOR_VISUAL_ENVELOPE,
   buildCursorEvidence,
@@ -19,6 +20,14 @@ import { canonicalJson, sha256Buffer, sha256File } from "./recording-artifacts.m
 import { buildProductionStageAnalysis } from "./build-production-stage-analysis.mjs";
 import { encodeFrameSequence } from "./record-2d-chronicles.mjs";
 
+// Full canonical catalog identity (independent literal, guards CHRONICLE_IDS against drift).
+const CATALOG_IDS = Object.freeze([
+  "C00", "C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08",
+  "C09", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17",
+  "C18", "C19",
+]);
+// Chronicles with fully captured evidence (independent literal, guards EVIDENCE_CHRONICLE_IDS
+// against drift). C18/C19 are cataloged (see CATALOG_IDS) but have no captured evidence yet.
 const LITERAL_IDS = Object.freeze([
   "C00", "C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08",
   "C09", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17",
@@ -621,7 +630,7 @@ await mkdir(path.join(TRUSTED_ROOT, "analysis", ".vite"), { recursive: true });
 await mkdir(path.join(TRUSTED_ROOT, "analysis", "assets"), { recursive: true });
 await mkdir(path.join(TRUSTED_ROOT, "artifacts"), { recursive: true });
 const catalogEntries = [];
-for (const id of LITERAL_IDS) {
+for (const id of CATALOG_IDS) {
   const c16 = id === "C16";
   const agents = c16 ? Array.from({ length: 256 }, (_, index) => ({
     id: `pressure_${String(index).padStart(3, "0")}`,
@@ -3848,7 +3857,8 @@ test("network accepts only the authored optional API statuses and requires dual 
 });
 
 test("canonical ordering is code-unit stable across input permutations and literal matrix order", async () => {
-  assert.deepEqual(CHRONICLE_IDS, LITERAL_IDS);
+  assert.deepEqual(CHRONICLE_IDS, CATALOG_IDS);
+  assert.deepEqual(EVIDENCE_CHRONICLE_IDS, LITERAL_IDS);
   const input = makeInput();
   assert.deepEqual((await buildViewportEvidence(input))["source-revision.json"].closure.files.map(({ file }) => file), ["assets/stage.js", "assets/z.js", "assets/ä.js"]);
 

@@ -20,10 +20,27 @@ import {
 } from "./recording-artifacts.mjs";
 import { assertTimingParity, probeVideo } from "./record-2d-chronicles.mjs";
 
+/** The full canonical Chronicle catalog (identity: what chronicles exist, and their order). */
 export const CHRONICLE_IDS = Object.freeze([
   "C00", "C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08",
   "C09", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17",
+  "C18", "C19",
 ]);
+/**
+ * Chronicles with fully captured evidence (desktop + mobile sidecars for every file in
+ * EVIDENCE_SIDECAR_FILES). This is a coverage list, not the catalog: it drives which
+ * evidence artifacts are required/produced, nothing else.
+ *
+ * STALE BY DESIGN, TEMPORARILY: C18 and C19 are real, cataloged chronicles (see
+ * CHRONICLE_IDS) but their evidence has not been captured yet. Capturing their sidecars
+ * and adding "C18"/"C19" here is what moves them onto this list.
+ */
+export const EVIDENCE_CHRONICLE_IDS = Object.freeze([
+  "C00", "C01", "C02", "C03", "C04", "C05", "C06", "C07", "C08",
+  "C09", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17",
+]);
+assertOrderedSubset(EVIDENCE_CHRONICLE_IDS, CHRONICLE_IDS, "EVIDENCE_CHRONICLE_IDS", "CHRONICLE_IDS");
+
 export const EVIDENCE_SIDECAR_FILES = Object.freeze([
   "semantic.json", "cursors.json", "motion.json", "performance.json", "network.json",
   "assets.json", "reduced-motion.json", "viewport.json", "source-revision.json",
@@ -350,7 +367,7 @@ async function buildChronicleEvidenceMatrixWithAuthority(inputs, authority) {
     if (byIdentity.has(key)) throw new Error(`duplicate Chronicle viewport ${key}`);
     byIdentity.set(key, input);
   }
-  const keys = CHRONICLE_IDS.flatMap((id) => ["desktop", "mobile"].map((viewport) => `${id}/${viewport}`));
+  const keys = EVIDENCE_CHRONICLE_IDS.flatMap((id) => ["desktop", "mobile"].map((viewport) => `${id}/${viewport}`));
   for (const key of keys) if (!byIdentity.has(key)) throw new Error(`missing Chronicle viewport ${key}`);
   if (byIdentity.size !== keys.length) throw new Error("extra Chronicle viewport in evidence matrix");
   return Promise.all(keys.map(async (key) => {
@@ -388,7 +405,7 @@ function loadAuthority(config) {
   const catalogFile = readTrustedFile(catalogRoot, { file: config.catalogFile }, "catalog");
   let catalog;
   try { catalog = JSON.parse(catalogFile.bytes.toString("utf8")); } catch { throw new Error("canonical catalog is not valid JSON"); }
-  if (!Array.isArray(catalog.chronicles) || !arraysEqual(catalog.chronicles.map(({ id }) => id), CHRONICLE_IDS)) throw new Error("canonical catalog must contain literal C00-C17 order");
+  if (!Array.isArray(catalog.chronicles) || !arraysEqual(catalog.chronicles.map(({ id }) => id), CHRONICLE_IDS)) throw new Error("canonical catalog must equal CHRONICLE_IDS exactly, in order");
   const catalogById = {};
   for (const entry of catalog.chronicles) {
     assertObject(entry, "catalog Chronicle entry");
@@ -4783,6 +4800,22 @@ function assertHash(value, label) {
 
 function arraysEqual(left, right) {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
+ * Throw loudly unless every id in `subset` appears in `superset`, in the same relative
+ * order. Catches both an id captured-but-not-cataloged and an id typo, without requiring
+ * `subset` to be a contiguous prefix of `superset`.
+ */
+function assertOrderedSubset(subset, superset, subsetLabel, supersetLabel) {
+  let cursor = 0;
+  for (const id of subset) {
+    const foundAt = superset.indexOf(id, cursor);
+    if (foundAt === -1) {
+      throw new Error(`${subsetLabel} entry ${id} is missing from ${supersetLabel} (or out of catalog order)`);
+    }
+    cursor = foundAt + 1;
+  }
 }
 
 function codeUnitCompare(left, right) {

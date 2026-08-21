@@ -1415,7 +1415,7 @@ test('Task 9 choreography family partition and declaration contract stay canonic
   );
 });
 
-test('Task 9 frozen Chronicles honestly cover 26 event types plus two emitter synthetics', () => {
+test('Task 9 frozen Chronicles honestly cover the full 28-event vocabulary', () => {
   const worldTypes = extractWorldReferenceEventTypes(readRepoFile('docs/world-reference.md'));
   const dataDir = path.join(repoRoot, 'tests/frontend-app/fixtures/chronicles/data');
   const fixtureTypes = new Set();
@@ -1423,20 +1423,20 @@ test('Task 9 frozen Chronicles honestly cover 26 event types plus two emitter sy
     const manifest = JSON.parse(fs.readFileSync(path.join(dataDir, fileName), 'utf8'));
     for (const entry of manifest.entries) fixtureTypes.add(entry.event.type);
   }
-  assert.equal(fixtureTypes.size, 26);
+  assert.equal(fixtureTypes.size, 28);
   assert.deepEqual(
     worldTypes.filter((eventType) => !fixtureTypes.has(eventType)),
-    ['agent_started_hoarding', 'simulation_started'],
+    [],
   );
 });
 
-test('Task 12 generated Chronicle catalog stays exactly ordered and identity-equal at C00-C17', () => {
+test('Task 12 generated Chronicle catalog stays exactly ordered and identity-equal at C00-C19', () => {
   const dataDir = path.join(repoRoot, 'tests/frontend-app/fixtures/chronicles/data');
   const catalog = JSON.parse(fs.readFileSync(path.join(dataDir, 'catalog.json'), 'utf8'));
-  const expectedIds = Array.from({ length: 18 }, (_unused, index) => `C${String(index).padStart(2, '0')}`);
+  const expectedIds = Array.from({ length: 20 }, (_unused, index) => `C${String(index).padStart(2, '0')}`);
   assert.deepEqual(Object.keys(catalog).sort(), ['chronicles', 'schema']);
   assert.equal(catalog.schema, 1);
-  assert.equal(catalog.chronicles.length, 18);
+  assert.equal(catalog.chronicles.length, 20);
   assert.deepEqual(catalog.chronicles.map(({ id }) => id), expectedIds);
 
   const generatedFiles = fs.readdirSync(dataDir)
@@ -1489,10 +1489,10 @@ test('Task 12 generated Chronicle catalog stays exactly ordered and identity-equ
   );
   assert.deepEqual(extractTypeScriptStringArrayConst(sourceFile, 'CHRONICLE_IDS'), expectedIds);
   const worldTypes = extractWorldReferenceEventTypes(readRepoFile('docs/world-reference.md'));
-  assert.equal(coveredTypes.size, 26);
+  assert.equal(coveredTypes.size, 28);
   assert.deepEqual(
     worldTypes.filter((eventType) => !coveredTypes.has(eventType)),
-    ['agent_started_hoarding', 'simulation_started'],
+    [],
   );
 });
 
