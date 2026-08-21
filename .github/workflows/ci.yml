@@ -83,6 +83,18 @@ jobs:
       - name: Install Chrome for Playwright
         run: npx playwright install --with-deps chrome
 
+      # The capture-handoff contract encodes PNG sequences into WebM/MP4 to
+      # verify timing parity, so it needs the ffmpeg BINARY, not an npm package.
+      # Developer machines have it; the runner image does not, and this step had
+      # never executed in CI, so the omission was invisible. Without it the
+      # oracles test file aborts wholesale (reported as one failing test, hiding
+      # ~55 subtests) rather than failing on anything it actually asserts.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
+
       - name: Frontend unit tests
         run: npm run test:frontend:unit
 
