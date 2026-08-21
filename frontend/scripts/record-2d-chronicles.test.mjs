@@ -1249,6 +1249,7 @@ function validC01RawInput(fixture, viewport, requests) {
             regions: final.regions.map((value) => ({ completeness: "exact", value })),
             ruins: final.ruins.map((value) => ({ completeness: "exact", value })),
             pendingProposals: final.pending_proposals,
+            regionPressure: structuredClone(final.region_pressure),
           },
         },
       },

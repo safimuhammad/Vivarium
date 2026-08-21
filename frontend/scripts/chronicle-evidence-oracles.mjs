@@ -1541,6 +1541,21 @@ function cursorRanges(cursors) {
   return ranges;
 }
 
+/**
+ * Trusted world-snapshot fields the presented terminal frame does not republish as a
+ * world fact, and which therefore carry no projection in the comparison below.
+ *
+ * - `schema` is the fixture envelope's version tag, not world state.
+ * - `seed_persona` is a derivation input rather than a presented fact: the snapshot
+ *   parser folds it into every being's resolved `persona` (see `resolvePersona` in
+ *   `frontend/src/app/schemas.ts`), so its content is already bound through `agents`.
+ *
+ * This set is closed on purpose. Every other trusted snapshot key must have a named
+ * projection in `validateSemanticTerminalObservation`; a new one fails loudly by name
+ * rather than being silently skipped.
+ */
+const NON_PRESENTED_TRUSTED_SNAPSHOT_KEYS = Object.freeze(["schema", "seed_persona"]);
+
 function validateSemanticTerminalObservation(observation, fixture, terminalAuthority) {
   assertObject(observation, "semantic terminal observation");
   const operationalAuthority = isEventlessPresentationAuthority(terminalAuthority);
@@ -1588,6 +1603,7 @@ function validateSemanticTerminalObservation(observation, fixture, terminalAutho
     event_cursor: frame.presentedCursor,
     homes: exactValues(frame.world.homes, "homes"),
     pending_proposals: frame.world.pendingProposals,
+    region_pressure: frame.world.regionPressure,
     regions: exactValues(frame.world.regions, "regions"),
     ruins: exactValues(frame.world.ruins, "ruins"),
     run_id: frame.runId,
@@ -1601,11 +1617,19 @@ function validateSemanticTerminalObservation(observation, fixture, terminalAutho
     if (!Array.isArray(value)) return value;
     const identity = key === "agents" ? "id"
       : key === "regions" ? "name"
-        : ["homes", "ruins"].includes(key) ? "home_id" : null;
+        : key === "region_pressure" ? "region"
+          : ["homes", "ruins"].includes(key) ? "home_id" : null;
     if (identity === null) return value;
     return [...value].sort((left, right) => codeUnitCompare(String(left?.[identity]), String(right?.[identity])));
   };
-  for (const key of Object.keys(trusted).filter((key) => key !== "schema")) {
+  for (const key of Object.keys(trusted)) {
+    if (NON_PRESENTED_TRUSTED_SNAPSHOT_KEYS.includes(key)) continue;
+    if (!Object.hasOwn(actual, key)) {
+      throw new Error(`terminal presented world has no projection for trusted ${key}`);
+    }
+    if (actual[key] === undefined) {
+      throw new Error(`terminal presented frame did not publish trusted ${key}`);
+    }
     if (canonicalJson(normalizedSnapshotValue(key, actual[key]))
       !== canonicalJson(normalizedSnapshotValue(key, trusted[key]))) {
       throw new Error(`terminal presented world differs from trusted ${key}`);
@@ -1646,6 +1670,9 @@ function validateSemanticTerminalObservation(observation, fixture, terminalAutho
         agents: exactRecords(actual.agents),
         homes: exactRecords(actual.homes),
         pendingProposals: JSON.parse(canonicalJson(frame.world.pendingProposals)),
+        ...(actual.region_pressure === undefined
+          ? {}
+          : { regionPressure: JSON.parse(canonicalJson(actual.region_pressure)) }),
         regions: exactRecords(actual.regions),
         ruins: exactRecords(actual.ruins),
       },

@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import sharp from "sharp";
+
 import {
   CHRONICLE_IDS,
   EVIDENCE_CHRONICLE_IDS,
@@ -688,8 +690,25 @@ const MEDIA_ROOT = path.join(TRUSTED_ROOT, "media-base");
 const MEDIA_FRAME_COUNTS = Object.freeze({ standard: 149, reduced: 3 });
 await mkdir(path.join(MEDIA_ROOT, "standard-frames"), { recursive: true });
 await mkdir(path.join(MEDIA_ROOT, "reduced-frames"), { recursive: true });
-await copyFile(path.resolve("frontend/dist/assets/components-CNa58wQd.png"), path.join(MEDIA_ROOT, "standard-frames", "000000.png"));
-await copyFile(path.resolve("frontend/dist/assets/details-4IYn8zML.png"), path.join(MEDIA_ROOT, "reduced-frames", "000000.png"));
+/**
+ * Seed frames for the synthetic media base, authored here rather than copied out of a
+ * production build. `frontend/dist` is gitignored, its asset filenames are content
+ * hashed, and CI runs this contract step before it ever builds the frontend, so
+ * borrowing build output can only ever pass on a developer machine. Nothing decodes
+ * these pixels: ffmpeg encodes them into the fixture videos and the oracles bind them by
+ * byte length and hash. The two modes differ in both dimensions and fill so the standard
+ * and reduced stills stay byte- and hash-distinct, which the "foreign still" rejection
+ * later in this file depends on. Dimensions stay even for h264 `yuv420p`.
+ */
+const MEDIA_SEED_FRAMES = Object.freeze({
+  standard: { width: 64, height: 48, background: { r: 24, g: 48, b: 96, alpha: 1 } },
+  reduced: { width: 64, height: 32, background: { r: 192, g: 96, b: 24, alpha: 1 } },
+});
+for (const [mode, seed] of Object.entries(MEDIA_SEED_FRAMES)) {
+  await sharp({
+    create: { width: seed.width, height: seed.height, channels: 4, background: seed.background },
+  }).png().toFile(path.join(MEDIA_ROOT, `${mode}-frames`, "000000.png"));
+}
 for (const mode of ["standard", "reduced"]) {
   for (let frameIndex = 1; frameIndex < MEDIA_FRAME_COUNTS[mode]; frameIndex += 1) {
     await copyFile(
@@ -3981,6 +4000,7 @@ test("canonical provider-free adapter binds real catalog fixtures to a productio
       regions: terminalSnapshot.regions.map((value) => ({ completeness: "exact", value })),
       ruins: terminalSnapshot.ruins.map((value) => ({ completeness: "exact", value })),
       pendingProposals: terminalSnapshot.pending_proposals,
+      regionPressure: structuredClone(terminalSnapshot.region_pressure),
     };
     input.semantic = {
       ...input.semantic,
@@ -4052,9 +4072,53 @@ test("canonical provider-free adapter binds real catalog fixtures to a productio
       () => canonical.buildViewportEvidence(wrongVisibleRegion),
       /visible Graph region must match canonical fixture/,
     );
+    const driftedPressure = mutate(input, (value) => {
+      value.semantic.terminalObservation.frame.world.regionPressure[0].population_high_water += 1;
+    });
+    await assert.rejects(
+      () => canonical.buildViewportEvidence(driftedPressure),
+      /terminal presented world differs from trusted region_pressure/,
+    );
+    const unpublishedPressure = mutate(input, (value) => {
+      delete value.semantic.terminalObservation.frame.world.regionPressure;
+    });
+    await assert.rejects(
+      () => canonical.buildViewportEvidence(unpublishedPressure),
+      /terminal presented frame did not publish trusted region_pressure/,
+    );
+    const reorderedPressure = mutate(input, (value) => {
+      value.semantic.terminalObservation.frame.world.regionPressure.reverse();
+    });
+    assert.deepEqual(
+      (await canonical.buildViewportEvidence(reorderedPressure))["semantic.json"]
+        .terminalObservation.frame.world.regionPressure.map(({ region }) => region),
+      terminalSnapshot.region_pressure.map(({ region }) => region).reverse(),
+      "region pressure binds by region identity, not authored order",
+    );
   } finally {
     await analysis.cleanup();
   }
+});
+
+test("a trusted snapshot fact with no presented projection fails by name", async () => {
+  const variantDirectory = "fixtures-unprojected";
+  await mkdir(path.join(TRUSTED_ROOT, variantDirectory), { recursive: true });
+  const fixture = JSON.parse(await readFile(path.join(TRUSTED_ROOT, "fixtures", "C03.json"), "utf8"));
+  fixture.initialSnapshot.tide_level = 3;
+  await writeFile(
+    path.join(TRUSTED_ROOT, variantDirectory, "C03.json"),
+    canonicalJson(fixture),
+  );
+  const oracle = createChronicleEvidenceOracle({
+    ...TRUSTED_CONFIG,
+    fixtureDirectory: variantDirectory,
+  });
+  const input = makeInput("C03");
+  input.semantic.terminalAuthority = trustedTerminalAuthority(fixture);
+  await assert.rejects(
+    () => oracle.buildViewportEvidence(input),
+    /terminal presented world has no projection for trusted tide_level/,
+  );
 });
 
 test("writer persists only canonical evidence sidecars", async () => {
