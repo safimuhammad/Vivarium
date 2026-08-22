@@ -714,33 +714,53 @@ async function waitForMechanicsStructuresMaterialized(page, burst, structure) {
   }, { timeout: 35000 });
 }
 
+// How long a kicked-off snapshot refresh gets to reach `applied`. The refresh is
+// network + parse + apply, not frame-rate bound, so it does not scale with the
+// runner's software rasterisation the way camera settling does -- but it does
+// coalesce with an in-flight passive refresh, so the wait must cover a passive
+// cycle already underway plus the one this triggers.
+const MECHANICS_SNAPSHOT_APPLIED_TIMEOUT_MS = 60000;
+
+/**
+ * Trigger a snapshot refresh and WAIT for it to be applied at or past `end_cursor`.
+ *
+ * This previously awaited `refreshSnapshotForTest()` and then read diagnostics
+ * exactly ONCE. That resolve does not mean "applied" -- it means the refresh has
+ * STARTED, and when a passive refresh is already in flight it coalesces and returns
+ * immediately. So the check only passed when the application happened to land inside
+ * that await, which is a race a fast machine wins and a slow one loses. CI observed
+ * `status: "started"` with byte-identical before/after diagnostics: nothing had
+ * progressed yet, and nothing was ever going to be re-read.
+ *
+ * Polling for the condition is what the assertion always meant. It is not a
+ * loosening: the terminal state required is unchanged (status `applied` AND
+ * `lastAcceptedSnapshotCursor >= end_cursor`), and a refresh that never applies, or
+ * applies behind the burst, still fails -- with the same full diagnostics.
+ */
 async function waitForMechanicsSnapshotApplied(page, burst, label) {
-  const refresh = await page.evaluate(async (endCursor) => {
-    const liveRun = window.__vivariumLiveRun;
-    if (!liveRun?.refreshSnapshotForTest) {
-      return {
-        ok: false,
-        reason: 'missing-refresh-hook',
-        before: liveRun?.diagnostics?.() ?? null,
-        after: null,
-      };
-    }
-    const before = liveRun.diagnostics();
-    await liveRun.refreshSnapshotForTest();
-    const after = liveRun.diagnostics();
-    return {
-      ok: (
-        after.lastSnapshotRefresh.status === 'applied' &&
-        (after.lastAcceptedSnapshotCursor ?? 0) >= endCursor
-      ),
-      reason: after.lastSnapshotRefresh.status,
-      before,
-      after,
-    };
-  }, burst.body.end_cursor);
+  const endCursor = burst.body.end_cursor;
+  const hasHook = await page.evaluate(() => Boolean(window.__vivariumLiveRun?.refreshSnapshotForTest));
+  expect(hasHook, `mechanics live smoke needs the refresh hook for ${label}`).toBe(true);
+
+  const before = await page.evaluate(() => window.__vivariumLiveRun.diagnostics());
+  // Kick the refresh off; deliberately not awaited as proof of application.
+  await page.evaluate(() => window.__vivariumLiveRun.refreshSnapshotForTest());
+
+  const applied = await page.waitForFunction((cursor) => {
+    const diagnostics = window.__vivariumLiveRun?.diagnostics?.();
+    return Boolean(
+      diagnostics &&
+        diagnostics.lastSnapshotRefresh?.status === 'applied' &&
+        (diagnostics.lastAcceptedSnapshotCursor ?? 0) >= cursor,
+    );
+  }, endCursor, { timeout: MECHANICS_SNAPSHOT_APPLIED_TIMEOUT_MS })
+    .then(() => true)
+    .catch(() => false);
+
+  const after = await page.evaluate(() => window.__vivariumLiveRun.diagnostics());
   expect(
-    refresh.ok,
-    `mechanics live smoke should apply a fresh world snapshot for ${label}: ${JSON.stringify(refresh)}`,
+    applied,
+    `mechanics live smoke should apply a fresh world snapshot for ${label}: ${JSON.stringify({ endCursor, before, after })}`,
   ).toBe(true);
 }
 
