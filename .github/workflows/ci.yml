@@ -4,9 +4,14 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # The built-live smoke runs here, not on every push -- see the
+  # `frontend-live-smoke` job. 09:00 UTC is ~02:00 PT.
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -47,7 +52,7 @@ jobs:
           --cov-fail-under=90
 
   frontend-live:
-    name: frontend built live smoke
+    name: frontend contracts · build · bundle
     runs-on: ubuntu-latest
 
     steps:
@@ -112,6 +117,57 @@ jobs:
 
       - name: Frontend bundle budget
         run: npm run test:frontend:bundle
+
+  # The built-live smoke drives a real three.js world, a live SSE stream and a
+  # mechanics burst against the built bundle. On a runner rasterising WebGL in
+  # software it costs ~951s -- 16 minutes, against 24s for the build and 6s for
+  # the bundle budget beside it. That is honest cost for what it covers, but it
+  # is too much to spend on every push, so it runs nightly and on demand
+  # (`workflow_dispatch`) instead. Everything it depends on -- the unit suites,
+  # the capture-handoff contract, the build and the bundle budget -- still gates
+  # every push in `frontend-live` above.
+  #
+  # It builds its own bundle: the Playwright config's `webServer` runs
+  # `build:frontend` before serving the preview, so no build step is needed here.
+  # ffmpeg is not needed either -- that is the capture-handoff contract's
+  # dependency, and that contract stays on the push path.
+  frontend-live-smoke:
+    name: built live smoke (nightly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Install root Node dependencies
+        run: npm ci
+
+      - name: Install frontend Node dependencies
+        run: npm ci --prefix frontend
+
+      - name: Install Chrome for Playwright
+        run: npx playwright install --with-deps chrome
 
       - name: Built frontend live API smoke
         run: npm run test:frontend:live:built -- --reporter=line
