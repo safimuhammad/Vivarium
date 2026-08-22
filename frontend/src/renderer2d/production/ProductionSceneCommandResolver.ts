@@ -6,6 +6,7 @@ import type {
   HomeVisualIntent,
   PresentedObserverFrame,
   PresentedSceneView,
+  PresentedStagingBeat,
   Vec2,
 } from "../../presentation/contracts";
 import type { PresentedEventType } from "../../presentation/eventPayloads";
@@ -119,6 +120,25 @@ type SceneCommandWithoutId = WithoutCommandId<ProductionSceneCommand>;
  */
 const MAX_REMEMBERED_UTTERANCES = 128;
 
+/**
+ * How many staging beat ids the resolver remembers before it forgets the oldest.
+ *
+ * Same contract and same reason as {@link MAX_REMEMBERED_UTTERANCES}: the frame
+ * carries a rolling window rather than a one-shot delivery, so the resolver must
+ * recognise beats it has already raised. Smaller because the staging window is.
+ */
+const MAX_REMEMBERED_STAGING = 64;
+
+/**
+ * The gait a conversational approach is walked at, in pixels per second.
+ *
+ * Identical to the scene-authored walk below, and to the number
+ * `conversationStaging.ts` timed the words' wait against. A being that came
+ * over to be spoken to must not walk at a different speed from one that came
+ * over to be struck.
+ */
+const STAGING_WALK_PX_PER_SECOND = 48;
+
 /** Translate one typed retained scene view into renderer-native idempotent commands. */
 export function createProductionSceneCommandResolver(
   options: ProductionSceneCommandResolverOptions,
@@ -213,6 +233,55 @@ export function createProductionSceneCommandResolver(
     return commands;
   };
 
+  const raisedStaging = new Set<string>();
+  const rememberStaging = (key: string): void => {
+    raisedStaging.add(key);
+    if (raisedStaging.size > MAX_REMEMBERED_STAGING) {
+      const oldest = raisedStaging.values().next();
+      if (!oldest.done) raisedStaging.delete(oldest.value);
+    }
+  };
+  /**
+   * The staging lane's commands for this frame.
+   *
+   * Conversational proximity (`presentation/conversationStaging.ts`): a being
+   * addressed by someone standing across the region walks over first, and both
+   * turn to face each other as the words land. Published exactly the way the
+   * overlay lane is — at `lastSceneToken`, so the scene graph accepts the batch
+   * without clearing its applied-command memory and a running scene is never
+   * disturbed — and it survives `clear-scene`, which cancels fallback
+   * repositions and offsets but never a route.
+   *
+   * The `reposition`-before-`move` ordering for a truncated approach is the same
+   * load-bearing order the scene lane uses and for the same reason: the graph
+   * applies each command as it validates it, so the reposition must land before
+   * the move's route-clearance gate reads the actor's position.
+   */
+  const stagingCommands = (
+    frame: PresentedObserverFrame,
+  ): readonly ProductionSceneCommand[] => {
+    const pending = (frame.staging ?? [])
+      .map((beat) => Object.freeze({
+        beat,
+        key: `${frame.runId}|${frame.sourceKey}|${beat.id}`,
+      }))
+      .filter(({ key }) => !raisedStaging.has(key));
+    if (pending.length === 0) return [];
+    const commands: ProductionSceneCommand[] = [];
+    for (const { beat, key } of pending) {
+      rememberStaging(key);
+      for (const [index, command] of stagingPrimitives(beat).entries()) {
+        commands.push({
+          kind: "actor",
+          commandId: `staging:${beat.id}:${index}`,
+          actorId: beat.beingId,
+          command,
+        });
+      }
+    }
+    return commands;
+  };
+
   return (frame) => {
     refreshBeingNames(frame);
     const scene = frame.scene;
@@ -222,7 +291,7 @@ export function createProductionSceneCommandResolver(
       && (activeExecution.runId !== frame.runId || activeExecution.sourceKey !== frame.sourceKey)
     ) activeExecution = null;
     if (scene === null) {
-      const overlay = utteranceCommands(frame, null);
+      const overlay = [...utteranceCommands(frame, null), ...stagingCommands(frame)];
       if (activeExecution === null) {
         return overlay.length === 0 ? null : deepFreeze({
           identity: identityOf(frame),
@@ -281,14 +350,17 @@ export function createProductionSceneCommandResolver(
       // The scene is unusable, but the overlay lane is independent of it: words
       // over a being's head are not part of the pose this batch could not
       // resolve, and dropping them would make the two lanes share a failure.
-      const overlay = utteranceCommands(frame, placement);
+      const overlay = [...utteranceCommands(frame, placement), ...stagingCommands(frame)];
       return overlay.length === 0 ? null : deepFreeze({
         identity: identityOf(frame),
         sceneToken: execution.sceneToken,
         commands: overlay,
       });
     }
-    const commands: ProductionSceneCommand[] = [...utteranceCommands(frame, placement)];
+    const commands: ProductionSceneCommand[] = [
+      ...utteranceCommands(frame, placement),
+      ...stagingCommands(frame),
+    ];
     updateExecutionFacts(executionState, frame, scene, placement);
     lifecycleCommands(executionState, frame, scene).forEach((command) => commands.push(command));
     presenceFadeModes(scene).forEach((mode, actorId) => {
@@ -1258,6 +1330,31 @@ function effectPoint(
     if (home !== undefined) return { ...home.door };
   }
   return null;
+}
+
+/**
+ * The renderer primitives one conversational staging beat performs.
+ *
+ * An `approach` is the ordinary production walk — same gait, same route shape,
+ * same truncate-then-walk contract — and a `face` is a bare turn. Neither
+ * consults the placement ledger: unlike a scene intent, a staging beat already
+ * carries a route resolved against the region's real ground and structures, and
+ * re-deriving anything here would be a second opinion about spatial truth.
+ */
+function stagingPrimitives(beat: PresentedStagingBeat): readonly HumanPrimitiveCommand[] {
+  if (beat.kind === "face") return [{ kind: "orient", facing: beat.facing }];
+  if (beat.waypoints.length < 2) return [];
+  const walk: HumanPrimitiveCommand = {
+    kind: "move",
+    waypoints: beat.waypoints.map((waypoint) => ({ ...waypoint })),
+    speedPixelsPerSecond: STAGING_WALK_PX_PER_SECOND,
+    gait: "walk",
+  };
+  if (beat.cutFrom === undefined) return [walk];
+  return [
+    { kind: "reposition", position: { ...beat.cutFrom }, reason: "distance-cut" },
+    walk,
+  ];
 }
 
 function directionFor(from: Vec2, to: Vec2): Direction4 {

@@ -274,6 +274,55 @@ export interface PresentedUtterance {
   readonly eventType: "speak" | "self_talk";
 }
 
+/**
+ * One out-of-band physical beat that stages a conversation, and nothing else.
+ *
+ * The third thing a frame can carry, after the scene (one body, serialised) and
+ * the utterance overlay (no body at all). A staging beat DOES occupy a body —
+ * a being walks — but it takes no stage lease, books no settlement handshake
+ * and is published on the same non-advancing scene token the utterance lane
+ * uses, so it can never block, delay or disturb a running scene.
+ *
+ * It exists because the backend publishes a region and an action but never a
+ * position: if two beings are talking to each other, only the frontend can
+ * decide that they should be standing together while they do it. See
+ * `conversationStaging.ts` for the rule, and why an approach that is not
+ * legal, not local, or not free is simply not staged rather than forced.
+ *
+ * Frames carry a bounded rolling window of the newest beats, exactly like
+ * `utterances`, so a deduplicated republication cannot lose one. Consumers
+ * dedupe on `id`.
+ */
+export type PresentedStagingBeat =
+  | Readonly<{
+    readonly id: string;
+    readonly kind: "approach";
+    /** The being that walks — always the ADDRESSEE, never the speaker. */
+    readonly beingId: string;
+    readonly regionId: string;
+    /**
+     * A certified route ending at a legal standing tile beside the speaker.
+     *
+     * Resolved by `interactionContact.ts`'s `resolveLegalContactRoute`, the
+     * same primitive every two-participant beat already walks on, so the
+     * renderer's own apply-time gates cannot silently veto it.
+     */
+    readonly waypoints: readonly Vec2[];
+    /**
+     * Where a truncated approach is cut to before it walks the part worth
+     * watching — always one of `waypoints`' own points, and always the first.
+     * Same contract and same legality argument as {@link ActorVisualIntent.cutFrom}.
+     */
+    readonly cutFrom?: Readonly<{ x: number; y: number }>;
+  }>
+  | Readonly<{
+    readonly id: string;
+    readonly kind: "face";
+    readonly beingId: string;
+    readonly regionId: string;
+    readonly facing: Direction4;
+  }>;
+
 export interface PresentationBacklog {
   readonly pendingMoments: number;
   readonly firstPendingCursor: number | null;
@@ -404,6 +453,14 @@ export interface PresentedObserverFrame extends FrameIdentity {
    * simply has none.
    */
   readonly utterances?: readonly PresentedUtterance[];
+  /**
+   * The staging lane: conversational approaches published without a stage lease.
+   *
+   * A bounded rolling window for the same reason `utterances` is one. Optional
+   * because every deterministic seam that builds a frame literal predates the
+   * lane and simply has none.
+   */
+  readonly staging?: readonly PresentedStagingBeat[];
   /**
    * Observer-only checkpoint camera beat. Production sessions always publish this
    * field; older deterministic seams may omit it while migrating frame literals.

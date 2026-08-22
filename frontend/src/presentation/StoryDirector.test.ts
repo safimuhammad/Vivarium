@@ -14,6 +14,11 @@ import type { PresentationClock } from "./storyClock";
 import { getChronicleManifest } from "./fixtures/chronicleCatalog";
 import type { PresentedEventType } from "./eventPayloads";
 import { createSceneExecutor } from "./choreography/SceneExecutor";
+import type {
+  ConversationStaging,
+  ConversationStagingDecision,
+  ConversationStagingInput,
+} from "./conversationStaging";
 
 class ClocklessRuntime implements SceneRuntimePort {
   private token = 0;
@@ -107,6 +112,7 @@ function setup(options: {
   readonly publish?: () => number;
   readonly programResolver?: Readonly<{ resolve(moment: ReturnType<typeof singleMoment>): SceneRuntimeStart["program"] }>;
   readonly manifestId?: "C07" | "C09" | "C12";
+  readonly conversationStaging?: ConversationStaging;
 } = {}) {
   const manifest = getChronicleManifest(options.manifestId ?? "C12");
   const identity: FrameIdentity = {
@@ -132,6 +138,9 @@ function setup(options: {
     model,
     settlement,
     ...(options.programResolver === undefined ? {} : { programResolver: options.programResolver }),
+    ...(options.conversationStaging === undefined
+      ? {}
+      : { conversationStaging: options.conversationStaging }),
   } as never);
   return { manifest, identity, model, runtime, settlement, clock, director };
 }
@@ -1146,6 +1155,146 @@ describe("StoryDirector", () => {
     expect(snapshot.presentedCursor).toBe(3);
   });
 
+  // ---------------------------------------------------------------------------
+  // CONVERSATIONAL STAGING 2026-08-22 — beings talking to each other stand
+  // together. The rule itself lives in `conversationStaging.ts` and is tested
+  // there against real terrain; what is tested HERE is the director's half: the
+  // words wait for the feet, they wait in order, they are never lost, and the
+  // walk is published the instant it is decided rather than with the words.
+  // ---------------------------------------------------------------------------
+
+  it("publishes an approach at once and holds its words until the feet arrive", () => {
+    const staging = stubStaging({ delayMs: 2_000 });
+    const { director, clock } = setup({ conversationStaging: staging });
+
+    director.ingest([reCursorMoment(singleMoment("C17", "speak"), 1)]);
+
+    // The walk is out immediately ...
+    const started = director.getSnapshot();
+    expect(started.staging.map((beat) => beat.id)).toEqual(["stub:1:approach"]);
+    // ... and the words are not.
+    expect(started.utterances).toEqual([]);
+    // The evidence and the cursor are NOT delayed with them: only the bubble is.
+    expect(started.presentedCursor).toBe(1);
+
+    clock.advanceBy(1_999);
+    expect(director.getSnapshot().utterances).toEqual([]);
+
+    clock.advanceBy(1);
+    const arrived = director.getSnapshot();
+    expect(arrived.utterances).toHaveLength(1);
+    expect(arrived.staging.map((beat) => beat.id))
+      .toEqual(["stub:1:approach", "stub:1:face"]);
+  });
+
+  it("raises an unstaged line with no delay at all", () => {
+    const staging = stubStaging({ delayMs: 0 });
+    const { director } = setup({ conversationStaging: staging });
+
+    director.ingest([reCursorMoment(singleMoment("C17", "speak"), 1)]);
+
+    expect(director.getSnapshot().utterances).toHaveLength(1);
+  });
+
+  it("keeps a held line ahead of the lines drained behind it", () => {
+    const staging = stubStaging({ delayMs: 2_000, stageCursors: [1] });
+    const { director, clock } = setup({ conversationStaging: staging });
+
+    director.ingest([
+      reCursorMoment(singleMoment("C17", "speak"), 1),
+      reCursorMoment(singleMoment("C17", "speak"), 2),
+      reCursorMoment(singleMoment("C17", "speak"), 3),
+    ]);
+
+    // Nothing jumps the queue: an ordered feed is worth a bounded lag.
+    expect(director.getSnapshot().utterances).toEqual([]);
+    clock.advanceBy(2_000);
+    expect(director.getSnapshot().utterances.map((utterance) => utterance.cursor))
+      .toEqual([1, 2, 3]);
+  });
+
+  it("raises every held word when a paused view resumes", () => {
+    const staging = stubStaging({ delayMs: 2_000 });
+    const { director, clock } = setup({ conversationStaging: staging });
+    director.ingest([reCursorMoment(singleMoment("C17", "speak"), 1)]);
+    director.setPaused(true);
+
+    clock.advanceBy(10_000);
+    // A paused view is frozen: the words must not appear behind its back.
+    expect(director.getSnapshot().utterances).toEqual([]);
+
+    director.setPaused(false);
+    expect(director.getSnapshot().utterances).toHaveLength(1);
+  });
+
+  it("tells staging which bodies the active scene already owns", () => {
+    const staging = stubStaging({ delayMs: 0 });
+    const moment = singleMoment("C12", "agent_born");
+    const base = buildStoryProgram(moment, 1);
+    const occupied = {
+      ...base,
+      id: "occupied:program",
+      phases: base.phases.map((phase) => ({
+        ...phase,
+        actorIntents: phase.phase === "recover"
+          ? [{ actorId: "wanderer_003", kind: "orient" as const, target: { x: 8, y: 8 }, marker: null }]
+          : [],
+      })),
+    };
+    const { director } = setup({
+      conversationStaging: staging,
+      programResolver: { resolve: () => occupied },
+    });
+
+    director.ingest([moment]);
+    expect(director.getSnapshot().activeMoment).not.toBeNull();
+    director.ingest([reCursorMoment(singleMoment("C17", "speak"), 2)]);
+
+    // Every phase counts, not merely the one on screen: a scene that will move
+    // a being in its recover phase owns that being now.
+    expect([...staging.seen.at(-1)!.busyBeingIds]).toEqual(["wanderer_003"]);
+  });
+
+  it("still raises the words when a staging decision throws", () => {
+    // Spatial truth can be mid-replacement. A lane that let that escape would
+    // reach the ingress isolation catch and take 93% of a run's beats with it.
+    const staging: ConversationStaging = {
+      reset: () => undefined,
+      stage: () => {
+        throw new Error("placement generation is being replaced");
+      },
+    };
+    const { director } = setup({ conversationStaging: staging });
+
+    director.ingest([reCursorMoment(singleMoment("C17", "speak"), 1)]);
+
+    expect(director.getSnapshot().utterances).toHaveLength(1);
+    expect(director.getSnapshot().staging).toEqual([]);
+    expect(director.getSnapshot().presentedCursor).toBe(1);
+  });
+
+  it("drops in-flight staging when the run is replaced", () => {
+    const staging = stubStaging({ delayMs: 5_000 });
+    const { director, clock, identity, manifest } = setup({ conversationStaging: staging });
+    director.ingest([reCursorMoment(singleMoment("C17", "speak"), 1)]);
+    expect(director.getSnapshot().staging).toHaveLength(1);
+
+    const model = new PresentedWorldModel(manifest.initialSnapshot, identity);
+    const settlement = new SceneSettlementCoordinator({
+      model,
+      runtime: new ClocklessRuntime(),
+      publishConsequenceFrame: () => 2,
+      onSettlementComplete: () => undefined,
+    });
+    director.reset({ ...identity, revision: identity.revision + 1 }, model, settlement);
+
+    expect(staging.resets).toBe(1);
+    expect(director.getSnapshot().staging).toEqual([]);
+    clock.advanceBy(10_000);
+    // Words belonging to a run this director no longer presents are gone with it.
+    expect(director.getSnapshot().utterances).toEqual([]);
+  });
+
   it("does not safe-cancel the running scene for a retryable checkpoint-poll fault", () => {
     const { director, runtime } = setup();
     director.ingest([stagedMoment(1)]);
@@ -1405,6 +1554,67 @@ function stagedMoment(cursor = 1) {
 /** A contiguous burst of stage-occupying moments — C13's shape, in the right lane. */
 function stagedBurst(count: number, startCursor = 1) {
   return Array.from({ length: count }, (_, index) => stagedMoment(startCursor + index));
+}
+
+/**
+ * A conversational-staging double that decides by cursor, not by geometry.
+ *
+ * The real rule is proven against real terrain in `conversationStaging.test.ts`.
+ * Here the director's own contract is what is under test, so the decision is
+ * made trivial and the timing is made exact.
+ */
+function stubStaging(options: {
+  readonly delayMs: number;
+  readonly stageCursors?: readonly number[];
+}): ConversationStaging & {
+  readonly seen: readonly ConversationStagingInput[];
+  readonly resets: number;
+} {
+  const seen: ConversationStagingInput[] = [];
+  let resets = 0;
+  return {
+    get seen() {
+      return seen;
+    },
+    get resets() {
+      return resets;
+    },
+    reset() {
+      resets += 1;
+    },
+    stage(input: ConversationStagingInput): ConversationStagingDecision {
+      seen.push(input);
+      const staged = options.stageCursors === undefined
+        || options.stageCursors.includes(input.utterance.cursor);
+      if (!staged || options.delayMs === 0) {
+        return Object.freeze({
+          beats: Object.freeze([]),
+          arrivalBeats: Object.freeze([]),
+          delayMs: 0,
+          outcome: "already-together" as const,
+        });
+      }
+      const listenerId = input.utterance.targetId ?? input.utterance.beingId;
+      return Object.freeze({
+        beats: Object.freeze([Object.freeze({
+          id: `stub:${input.utterance.cursor}:approach`,
+          kind: "approach" as const,
+          beingId: listenerId,
+          regionId: "spring",
+          waypoints: Object.freeze([{ x: 0, y: 0 }, { x: 32, y: 0 }]),
+        })]),
+        arrivalBeats: Object.freeze([Object.freeze({
+          id: `stub:${input.utterance.cursor}:face`,
+          kind: "face" as const,
+          beingId: listenerId,
+          regionId: "spring",
+          facing: "east" as const,
+        })]),
+        delayMs: options.delayMs,
+        outcome: "approach" as const,
+      });
+    },
+  };
 }
 
 function singleMoment(id: "C07" | "C11" | "C12" | "C17", type: string) {

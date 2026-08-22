@@ -548,6 +548,123 @@ describe("ProductionSceneCommandResolver", () => {
     }
   });
 
+  it("walks a conversational approach without a scene, and turns both beings at arrival", () => {
+    // The staging lane (`presentation/conversationStaging.ts`): a being spoken
+    // to from across the region comes over first. It is published exactly the
+    // way a bubble is -- no scene, no lease, no token bump -- because it must
+    // never delay or disturb whatever the stage is doing.
+    const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
+    const walked = resolver(namedFrame(null, {
+      staging: [{
+        id: "m-1:9:approach",
+        kind: "approach",
+        beingId: "briar",
+        regionId: "worn",
+        waypoints: [{ x: 320, y: 160 }, { x: 288, y: 160 }, { x: 256, y: 160 }],
+      }],
+    }, 4));
+
+    expect(walked?.sceneToken).toBe(0);
+    expect(walked?.commands).toEqual([{
+      kind: "actor",
+      commandId: "staging:m-1:9:approach:0",
+      actorId: "briar",
+      command: {
+        kind: "move",
+        waypoints: [{ x: 320, y: 160 }, { x: 288, y: 160 }, { x: 256, y: 160 }],
+        speedPixelsPerSecond: 48,
+        gait: "walk",
+      },
+    }]);
+
+    // Re-published frames carry a rolling window; the walk is raised once.
+    expect(resolver(namedFrame(null, {
+      staging: [{
+        id: "m-1:9:approach",
+        kind: "approach",
+        beingId: "briar",
+        regionId: "worn",
+        waypoints: [{ x: 320, y: 160 }, { x: 288, y: 160 }, { x: 256, y: 160 }],
+      }],
+    }, 5))).toBeNull();
+
+    const faced = resolver(namedFrame(null, {
+      staging: [
+        { id: "m-1:9:face-speaker", kind: "face", beingId: "briar", regionId: "worn", facing: "west" },
+        { id: "m-1:9:face-listener", kind: "face", beingId: "aster", regionId: "worn", facing: "east" },
+      ],
+    }, 6));
+    expect(faced?.commands).toEqual([
+      {
+        kind: "actor",
+        commandId: "staging:m-1:9:face-speaker:0",
+        actorId: "briar",
+        command: { kind: "orient", facing: "west" },
+      },
+      {
+        kind: "actor",
+        commandId: "staging:m-1:9:face-listener:0",
+        actorId: "aster",
+        command: { kind: "orient", facing: "east" },
+      },
+    ]);
+  });
+
+  it("repositions before it walks a truncated approach, exactly as the scene lane does", () => {
+    // The order is load-bearing, not cosmetic: the graph applies each command as
+    // it validates it, so the reposition must land before the move's route
+    // clearance reads the actor's position.
+    const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
+    const batch = resolver(namedFrame(null, {
+      staging: [{
+        id: "m-2:11:approach",
+        kind: "approach",
+        beingId: "briar",
+        regionId: "worn",
+        cutFrom: { x: 384, y: 160 },
+        waypoints: [{ x: 384, y: 160 }, { x: 352, y: 160 }],
+      }],
+    }, 4));
+
+    expect(batch?.commands.map((command) => (
+      (command as { command: { kind: string } }).command.kind
+    ))).toEqual(["reposition", "move"]);
+    expect(batch?.commands[0]).toMatchObject({
+      command: { kind: "reposition", position: { x: 384, y: 160 }, reason: "distance-cut" },
+    });
+  });
+
+  it("raises a conversational approach beside a running scene, and outlives the scene's clear", () => {
+    const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
+    const running = resolver(namedFrame(scene({}), {
+      staging: [{
+        id: "m-3:12:approach",
+        kind: "approach",
+        beingId: "briar",
+        regionId: "worn",
+        waypoints: [{ x: 320, y: 160 }, { x: 288, y: 160 }],
+      }],
+    }));
+    // The scene keeps its own token; the approach rides along without bumping it.
+    expect(running?.sceneToken).toBe(7);
+    expect(running?.commands).toContainEqual(expect.objectContaining({
+      commandId: "staging:m-3:12:approach:0",
+    }));
+
+    const closing = resolver(namedFrame(null, {
+      staging: [{
+        id: "m-3:13:face",
+        kind: "face",
+        beingId: "briar",
+        regionId: "worn",
+        facing: "north",
+      }],
+    }, 4));
+    // `clear-scene` cancels fallback repositions and offsets, never a route --
+    // so the turn is published after it and the walk under way is untouched.
+    expect(closing?.commands.map((command) => command.kind)).toEqual(["clear-scene", "actor"]);
+  });
+
   it("prints no tag rather than an opaque id when the addressee has no public name", () => {
     const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
     // `frame`'s world record carries no beings, so no name can be resolved.
@@ -1331,7 +1448,7 @@ function scene(overrides: Partial<PresentedSceneView>): PresentedSceneView {
 /** `frame`, with two named beings on the world record and optional overlay beats. */
 function namedFrame(
   sceneValue: PresentedSceneView | null,
-  overrides: Partial<Pick<PresentedObserverFrame, "utterances">> = {},
+  overrides: Partial<Pick<PresentedObserverFrame, "utterances" | "staging">> = {},
   revision = 3,
 ): PresentedObserverFrame {
   const base = frame(sceneValue, revision);

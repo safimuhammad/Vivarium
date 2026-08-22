@@ -67,6 +67,7 @@ import {
   type StoryDirectorSnapshot,
 } from "./StoryDirector";
 import type { PresentationClock } from "./storyClock";
+import { createConversationStaging } from "./conversationStaging";
 import type { PlacementLedgerSnapshot } from "../renderer2d/production/placement/PlacementLedger";
 import type { PlacementGenerationOwner } from "../renderer2d/production/placement/PlacementGeneration";
 import type { RegionMapRecipeV1 } from "../renderer2d/production/maps/RegionMapRecipe";
@@ -1062,6 +1063,21 @@ class OwnedPresentationSession implements PresentationSession {
         ? {}
         : { getNavigationGrid: (regionId: string) => this.placementOwner!.current().navigationGridFor(regionId) }),
     });
+    // Conversational staging needs the same spatial truth choreography does --
+    // where a being stands, and what the region's ground and structures allow --
+    // so it is wired from exactly the same getters, and is simply absent when a
+    // session has none. Without it the overlay lane behaves as it always has.
+    const conversationStaging = this.choreography === null
+      ? undefined
+      : createConversationStaging({
+        getPlacement: this.placementOwner === null
+          ? requireSpatialGetter(this.choreography.getPlacement, "placement")
+          : () => this.placementOwner!.snapshot(),
+        getRecipes: this.placementOwner === null
+          ? requireSpatialGetter(this.choreography.getRecipes, "recipes")
+          : () => this.placementOwner!.recipes(),
+        reducedMotion: this.choreography.reducedMotion ?? (() => false),
+      });
     director = new StoryDirector({
       clock: this.clock,
       identity,
@@ -1089,6 +1105,7 @@ class OwnedPresentationSession implements PresentationSession {
         });
       },
       ...(programResolver === undefined ? {} : { programResolver }),
+      ...(conversationStaging === undefined ? {} : { conversationStaging }),
     });
     if (this.speed !== 1) director.setSpeed(this.speed);
     if (this.hidden) director.setPaused(true);
@@ -1603,6 +1620,7 @@ class OwnedPresentationSession implements PresentationSession {
       world: model.getView(),
       scene,
       utterances: directorState.utterances,
+      staging: directorState.staging,
       checkpointFocus: directorState.checkpointHold?.focusTarget ?? null,
       selection: this.selection,
       backlog: directorState.backlog,
@@ -2191,6 +2209,11 @@ function semanticPublicationKey(frame: PresentedObserverFrame): string {
     // a being speaking while nothing holds the stage -- and a frame deduplicated
     // away is a bubble never raised.
     utterances: (frame.utterances ?? []).map((utterance) => `${utterance.momentId}:${utterance.cursor}`),
+    // Same argument as the overlay lane above: a conversational approach can be
+    // the ONLY thing that changed between two frames -- a being setting off
+    // toward whoever just addressed it, while the words themselves are still
+    // waiting for its feet -- and a frame deduplicated away is a walk never taken.
+    staging: (frame.staging ?? []).map((beat) => beat.id),
     checkpointFocus: frame.checkpointFocus ?? null,
     selection: frame.selection,
     backlog: frame.backlog,
