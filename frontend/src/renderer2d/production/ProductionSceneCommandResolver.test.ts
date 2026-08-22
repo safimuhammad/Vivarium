@@ -483,6 +483,85 @@ describe("ProductionSceneCommandResolver", () => {
     expect(request.tailLean).toBe(0);
   });
 
+  it("tags directed speech with the addressee's NAME on both ingestion paths, and tags nothing else", () => {
+    // The tag comes from the payload's target, resolved at the ONE choke point
+    // both bubble paths pass through -- the non-blocking utterance lane, and a
+    // `speak` chained into a physical moment, which reaches the same builder
+    // through the scene's own effect intents.
+    const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
+    const chained = resolver(namedFrame(scene({
+      effectIntents: [{
+        kind: "speech-bubble", sourceId: "aster", targetId: "briar",
+        text: "just us", variant: "whisper",
+      }],
+    })));
+    expect(chained?.commands).toEqual([expect.objectContaining({
+      request: expect.objectContaining({ targetId: "briar", targetName: "Joe" }),
+    })]);
+
+    const overlayLane = resolver(namedFrame(null, {
+      utterances: [{
+        momentId: "m-1",
+        cursor: 9,
+        beingId: "aster",
+        targetId: "briar",
+        regionId: "worn",
+        text: "Between us only.",
+        variant: "whisper",
+        eventType: "speak",
+      }],
+    }, 4));
+    // A null scene also closes the previous one, so assert on the bubble alone.
+    expect(overlayLane?.commands).toContainEqual(expect.objectContaining({
+      kind: "environment",
+      request: expect.objectContaining({ targetId: "briar", targetName: "Joe" }),
+    }));
+
+    // A line aimed across regions is variant "spoken" -- there is nobody on
+    // screen to whisper at -- and is still DIRECTED, so it still gets a tag.
+    const remote = resolver(namedFrame(null, {
+      utterances: [{
+        momentId: "m-2",
+        cursor: 10,
+        beingId: "aster",
+        targetId: "briar",
+        regionId: "worn",
+        text: "Come back to the springs.",
+        variant: "spoken",
+        eventType: "speak",
+      }],
+    }, 5));
+    expect(remote?.commands).toContainEqual(expect.objectContaining({
+      kind: "environment",
+      request: expect.objectContaining({ variant: "speech", targetName: "Joe" }),
+    }));
+
+    // Undirected speech and private self-talk name no audience at all.
+    for (const [index, intent] of [
+      { kind: "speech-bubble" as const, sourceId: "aster", targetId: null, text: "to everyone", variant: "spoken" as const },
+      { kind: "speech-bubble" as const, sourceId: "aster", targetId: null, text: "I drift, content.", variant: "thought" as const },
+    ].entries()) {
+      const batch = resolver(namedFrame(scene({ momentId: `1:${index + 7}:single`, effectIntents: [intent] })));
+      const request = (batch?.commands[0] as { request: Record<string, unknown> }).request;
+      expect(request.targetId).toBeUndefined();
+      expect(request.targetName).toBeUndefined();
+    }
+  });
+
+  it("prints no tag rather than an opaque id when the addressee has no public name", () => {
+    const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
+    // `frame`'s world record carries no beings, so no name can be resolved.
+    const batch = resolver(frame(scene({
+      effectIntents: [{
+        kind: "speech-bubble", sourceId: "aster", targetId: "briar",
+        text: "just us", variant: "whisper",
+      }],
+    })));
+    const request = (batch?.commands[0] as { request: Record<string, unknown> }).request;
+    expect(request.targetId).toBe("briar");
+    expect(request.targetName).toBeUndefined();
+  });
+
   it("SELF_TALK RENDERS OPENLY: a private thought renders for every being, with no selection gating", () => {
     const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
     const thought = {
@@ -1245,6 +1324,37 @@ function scene(overrides: Partial<PresentedSceneView>): PresentedSceneView {
     safeCancelMarkers: ["safe"],
     reducedMotion: false,
     execution: { sceneToken: 7, programId: "choreography:1:1:single:speak" },
+    ...overrides,
+  };
+}
+
+/** `frame`, with two named beings on the world record and optional overlay beats. */
+function namedFrame(
+  sceneValue: PresentedSceneView | null,
+  overrides: Partial<Pick<PresentedObserverFrame, "utterances">> = {},
+  revision = 3,
+): PresentedObserverFrame {
+  const base = frame(sceneValue, revision);
+  const agent = (id: string, name: string) => ({
+    completeness: "exact" as const,
+    value: {
+      id,
+      name,
+      persona: "patient",
+      position: "worn",
+      energy: 50,
+      materials: 20,
+      status: "alive" as const,
+      last_mated_at: null,
+      offspring_count: 0,
+      died_at: null,
+      home_id: null,
+      is_hoarding: false,
+    },
+  });
+  return {
+    ...base,
+    world: { ...base.world, agents: [agent("aster", "Mae"), agent("briar", "Joe")] },
     ...overrides,
   };
 }

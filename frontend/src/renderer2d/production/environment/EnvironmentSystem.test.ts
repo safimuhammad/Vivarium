@@ -24,9 +24,15 @@ import {
   buildBurst,
   buildPip,
   buildTextBubble,
+  hasFontGlyph,
   identityHue,
-  layoutExcerpt,
+  layoutMessage,
+  messageColumns,
   OVERLAY_GLYPH_NAMES,
+  TEXT_KIND_METRICS,
+  TEXT_SCALE_FLOOR,
+  textBubbleScale,
+  textScaleForLength,
 } from "./bubbleGrammar";
 import { createProductionRegionMapRecipe } from "../maps/ProductionRegionMapRecipe";
 import {
@@ -36,8 +42,10 @@ import {
   type EnvironmentEffectRequest,
 } from "./EnvironmentSystem";
 
+type SpeechRequest = Extract<EnvironmentEffectRequest, { kind: "speech-bubble" }>;
+
 /** One ordinary spoken line, with the grammar's own defaults filled in. */
-function speech(speakerId: string, text: string): EnvironmentEffectRequest {
+function speech(speakerId: string, text: string): SpeechRequest {
   return {
     kind: "speech-bubble",
     at: { x: 100, y: 100 },
@@ -537,50 +545,184 @@ describe("EnvironmentSystem", () => {
     system.dispose();
   });
 
-  it("excerpts a real 385-character payload to three lines that end on a sentence boundary, and reports the remainder as a fullness bar", () => {
-    const system = createSystem(recipeFor(world[0]!));
+  // -------------------------------------------------------------------------
+  // FULL MESSAGES (Safi, 2026-08-21) — "they should show full messages". The
+  // three-line excerpt + fullness bar this replaces is gone: a bubble carries
+  // the whole payload, the type steps down a bounded ladder to a legibility
+  // FLOOR, and past that floor the BUBBLE grows instead of the type shrinking.
+  // -------------------------------------------------------------------------
+
+  it("shows a real 385-character payload in full, with no ellipsis and nothing dropped", () => {
     // Verbatim shape of a real runs/*.jsonl self_talk payload.
     const real = "I drift, content. The world outside is a distant, flickering memory; "
       + "here, in the sanctuary of the warm springs, there is only the rhythmic pulse "
       + "of our breathing. I am held by the presence of my companions, and by the "
       + "quiet that has settled over this place since the morning.";
     expect(real.length).toBeGreaterThan(250);
-    const layout = layoutExcerpt(real, 18, 3);
+    const columns = messageColumns(
+      real.length,
+      TEXT_KIND_METRICS.speech.minColumns,
+      TEXT_KIND_METRICS.speech.maxColumns,
+    );
+    const layout = layoutMessage(real, columns);
 
-    expect(layout.lines.length).toBeLessThanOrEqual(3);
-    expect(layout.lines.every((line) => line.length <= 18)).toBe(true);
-    expect(layout.truncated).toBe(true);
+    expect(layout.lines.join(" ")).toBe(real);
+    expect(layout.lines.join("")).not.toContain("\u2026");
     expect(layout.total).toBe(real.length);
-    expect(layout.shown).toBeLessThan(layout.total);
-    // A clause that ENDS is more beautiful than a clause that stops, and a
-    // bubble never renders ".…".
-    expect(layout.lines.join(" ")).not.toContain(".…");
+    expect(layout.lines.every((line) => line.length <= columns)).toBe(true);
+    // The whole message needs many more than the old three lines, and the
+    // bubble is sized to hold every one of them.
+    expect(layout.lines.length).toBeGreaterThan(3);
 
-    system.emit(speech("aster", real), 0);
-    expect(system.diagnostics().truncatedBubbles).toBe(1);
-    // The bar's fill is the accent, drawn only because the excerpt is partial.
-    const canvas = recordingContext();
-    system.draw(canvas.context, "air");
-    expect(canvas.fills).toContain("#8a8270");
-    system.dispose();
+    const bubble = buildTextBubble({ kind: "speech", text: real, hue: "#9c4a33", accent: "#8a8270" });
+    expect(bubble.layout!.lines.join(" ")).toBe(real);
+    const brief = buildTextBubble({ kind: "speech", text: "Yes.", hue: "#9c4a33", accent: "#8a8270" });
+    expect(bubble.surface.height).toBeGreaterThan(brief.surface.height * 2);
+    expect(bubble.surface.width).toBeGreaterThan(brief.surface.width);
   });
 
-  it("never appends an ellipsis to a message that fits, and shows no fullness bar for it", () => {
-    const layout = layoutExcerpt("Yes.", 18, 3);
-    expect(layout.lines).toEqual(["Yes."]);
-    expect(layout.truncated).toBe(false);
-    expect(layout.shown).toBe(layout.total);
-
+  it("holds the whole message on screen long enough to read it", () => {
+    // 70ms/char is ~171 words per minute; the old 9s ceiling paid for 111
+    // characters, i.e. two thirds of a median message going unread.
     const system = createSystem(recipeFor(world[0]!));
-    system.emit(speech("aster", "Yes."), 0);
-    expect(system.diagnostics().truncatedBubbles).toBe(0);
+    system.emit(speech("aster", "a".repeat(380)), 0);
+    system.advanceTo(27_000);
+    expect(system.diagnostics().activeBubbles).toBe(1);
     system.dispose();
   });
 
-  it("hard-breaks a monster token instead of overflowing, and never cuts mid-word for the ellipsis", () => {
-    const layout = layoutExcerpt(`${"z".repeat(60)} tail`, 14, 3);
+  it("steps the type down a bounded ladder and stops at the legibility floor", () => {
+    // A remark can afford the camera's biggest type; a confession cannot.
+    expect(textScaleForLength(40)).toBe(4);
+    expect(textScaleForLength(200)).toBe(3);
+    expect(textScaleForLength(385)).toBe(TEXT_SCALE_FLOOR);
+    // Past the floor the type NEVER shrinks further, however long the message.
+    expect(textScaleForLength(1_153)).toBe(TEXT_SCALE_FLOOR);
+    expect(TEXT_SCALE_FLOOR).toBe(2);
+
+    const roomy = { width: 1_440, height: 900 };
+    const small = { width: 120, height: 80 };
+    // The camera's own scale still caps it: no bubble is bigger than its zoom.
+    expect(textBubbleScale(2, 40, { width: 100, height: 60 }, roomy)).toBe(2);
+    expect(textBubbleScale(4, 40, { width: 100, height: 60 }, roomy)).toBe(4);
+    expect(textBubbleScale(4, 385, { width: 100, height: 60 }, roomy)).toBe(TEXT_SCALE_FLOOR);
+    // ONLY a frame too small to hold the bubble may go below the floor — a
+    // narrow phone viewport — and never below the authored 1x face.
+    expect(textBubbleScale(4, 385, { width: 100, height: 60 }, small)).toBe(1);
+    expect(textBubbleScale(4, 385, { width: 400, height: 400 }, small)).toBe(1);
+  });
+
+  it("keeps a whole bubble inside the viewer's safe frame, however long the message", () => {
+    const system = createSystem(recipeFor(world[0]!));
+    // A speaker in the top-left corner: the bubble's natural home is off the
+    // canvas entirely, which is where the end of a long sentence used to go.
+    system.setAnchorPositions(new Map([["aster", { x: 30, y: 60 }]]));
+    const long = "Joe, Dick, Allen -- it is as I feared. Both the East and West are "
+      + "incredibly sparse, just like here. This region seems picked over, and pushing "
+      + "further into similar territory may not yield much.";
+    system.emit({ ...speech("aster", long), at: { x: 30, y: 60 } }, 0);
+
+    const canvas = recordingContext();
+    system.draw(canvas.context, "air", {
+      zoom: 2,
+      originX: 0,
+      originY: 0,
+      width: 1_440,
+      height: 900,
+      insets: { top: 60, right: 52, bottom: 109, left: 20 },
+    });
+
+    // The jsdom stub has no real canvas, so the surface paints run-length spans:
+    // `fillRects` IS the drawn extent, in screen px.
+    const box = paintedExtent(canvas.fillRects);
+    expect(box.right - box.x).toBeGreaterThan(200);
+    expect(box.x).toBeGreaterThanOrEqual(20);
+    expect(box.y).toBeGreaterThanOrEqual(60);
+    expect(box.right).toBeLessThanOrEqual(1_440 - 52);
+    expect(box.bottom).toBeLessThanOrEqual(900 - 109);
+    expect(system.diagnostics().overflowingBubbles).toBe(0);
+    system.dispose();
+  });
+
+  it("moves a bubble off the speaker and off the being it is addressed to", () => {
+    const system = createSystem(recipeFor(world[0]!));
+    // The addressee stands exactly where the bubble's first candidate lands.
+    const speaker = { x: 400, y: 400 };
+    const listener = { x: 400, y: 330 };
+    system.setAnchorPositions(new Map([["aster", speaker], ["briar", listener]]));
+    system.emit({
+      ...speech("aster", "Between us only -- I have been watching how you tend this place."),
+      at: speaker,
+      variant: "whisper",
+      targetId: "briar",
+      targetName: "Briar",
+    }, 0);
+
+    const canvas = recordingContext();
+    system.draw(canvas.context, "air", {
+      zoom: 2, originX: 0, originY: 0, width: 1_440, height: 900,
+      insets: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
+
+    const box = paintedExtent(canvas.fillRects);
+    // Still a real bubble, not a demotion to a stud.
+    expect(box.right - box.x).toBeGreaterThan(150);
+    // Chibi frames are 22x46 world px standing on the feet anchor.
+    for (const feet of [speaker, listener]) {
+      const body = {
+        x: (feet.x - 11) * 2,
+        y: (feet.y - 46) * 2,
+        right: (feet.x + 11) * 2,
+        bottom: feet.y * 2,
+      };
+      const overlaps = box.x < body.right && box.right > body.x
+        && box.y < body.bottom && box.bottom > body.y;
+      expect(overlaps).toBe(false);
+    }
+    system.dispose();
+  });
+
+  it("draws every character a real message actually contains", () => {
+    // Measured over 3,363 recorded `speak`/`self_talk` payloads: the ONLY
+    // characters outside the authored face were `_` (219), `[`/`]` (43 each) and
+    // a stray backtick. An unmapped character renders as `?`, which was
+    // invisible behind a three-line excerpt and is a defect in a full message.
+    for (const character of "_[]`") {
+      expect(hasFontGlyph(character)).toBe(true);
+    }
+  });
+
+  it("hard-breaks a monster token instead of overflowing the box", () => {
+    const layout = layoutMessage(`${"z".repeat(60)} tail`, 14);
     expect(layout.lines.every((line) => line.length <= 14)).toBe(true);
     expect(layout.lines[0]!.endsWith("-")).toBe(true);
+    expect(layout.lines.join("").replace(/-/gu, "")).toContain("tail");
+  });
+
+  it("tags directed speech with its addressee at the START, and tags nothing else", () => {
+    const text = "I have been watching how you tend this place.";
+    const plain = buildTextBubble({ kind: "whisper", text, hue: "#9c4a33", accent: "#8a8270" });
+    const tagged = buildTextBubble({ kind: "whisper", text, hue: "#9c4a33", accent: "#8a8270", tag: "to Joe" });
+    // The tag opens the bubble, so the box is exactly one type line taller.
+    expect(tagged.surface.height).toBeGreaterThan(plain.surface.height);
+    expect(tagged.layout!.lines.join(" ")).toBe(text);
+
+    // Undirected speech and private self-talk carry no addressee at all.
+    const system = createSystem(recipeFor(world[0]!));
+    system.emit({ ...speech("aster", text), targetId: "briar", targetName: "Joe" }, 0);
+    system.emit({ ...speech("briar", text), variant: "thought" }, 0);
+    const canvas = recordingContext();
+    system.draw(canvas.context, "air");
+    // Soft ink is used for the address line and nowhere else in the grammar.
+    expect(canvas.fills).toContain("#2f3a2b");
+    system.dispose();
+
+    const quiet = createSystem(recipeFor(world[0]!));
+    quiet.emit({ ...speech("briar", text), variant: "thought" }, 0);
+    const quietCanvas = recordingContext();
+    quiet.draw(quietCanvas.context, "air");
+    expect(quietCanvas.fills).not.toContain("#2f3a2b");
+    quiet.dispose();
   });
 
   it("makes a thought the quietest silhouette on screen: narrower than a whisper, which is narrower than speech", () => {
@@ -589,9 +731,9 @@ describe("EnvironmentSystem", () => {
     const whisperBubble = buildTextBubble({ kind: "whisper", text, hue: "#9c4a33", accent: "#8a8270" });
     const thoughtBubble = buildTextBubble({ kind: "thought", text, hue: "#9c4a33", accent: "#8a8270" });
 
-    expect(whisperBubble.excerpt!.lines.every((line) => line.length <= 16)).toBe(true);
-    expect(thoughtBubble.excerpt!.lines.every((line) => line.length <= 14)).toBe(true);
-    expect(speechBubble.excerpt!.lines.every((line) => line.length <= 18)).toBe(true);
+    expect(whisperBubble.layout!.lines.every((line) => line.length <= 16)).toBe(true);
+    expect(thoughtBubble.layout!.lines.every((line) => line.length <= 14)).toBe(true);
+    expect(speechBubble.layout!.lines.every((line) => line.length <= 18)).toBe(true);
     // A thought has no anchor stud: it is the one kind with no physical link to
     // the world. Its connector is three detached, shrinking puffs.
     expect(thoughtBubble.surface.height).toBeGreaterThan(speechBubble.surface.height);
@@ -608,12 +750,13 @@ describe("EnvironmentSystem", () => {
     expect(inkRun(solid, 0)).toBeGreaterThan(inkRun(dashed, 0));
   });
 
-  it("holds a bubble for at least its own scene, so words never vanish mid-conversation, and reduced motion EXTENDS that", () => {
-    // The design's reading budget (clamp(1200 + 70 x visibleChars, 2600, 9000))
-    // is a floor on READABILITY, not a ceiling on presence: a scene's length is
-    // driven by the FULL message (3s + 80ms/char, capped 14s), so a median
-    // 385-char line gives a 14s scene but only a ~4.7s reading budget. A bubble
-    // must outlast its own moment.
+  it("holds a bubble for at least its own scene AND long enough to read every word of it, and reduced motion EXTENDS that", () => {
+    // Two independent floors on presence: the scene's own length (3s + 80ms/char,
+    // capped 14s) and the reading budget (1.2s + 70ms/char, i.e. ~171 wpm,
+    // capped 30s). A bubble must outlast both -- since 2026-08-21 it carries the
+    // WHOLE message, so the reading budget is the one that binds for anything
+    // long, and the old 9s ceiling would have taken a median line away with two
+    // thirds of it unread.
     const brief = createSystem(recipeFor(world[0]!));
     brief.emit(speech("aster", "Yes."), 0);
     brief.advanceTo(3_299);
@@ -628,12 +771,23 @@ describe("EnvironmentSystem", () => {
       + "of our breathing. I am held by the presence of my companions, and by the "
       + "quiet that has settled over this place since the morning.";
     long.emit(speech("aster", real), 0);
-    // The reading budget alone would have expired it around 4.7s.
-    long.advanceTo(9_000);
-    expect(long.diagnostics().activeBubbles).toBe(1);
+    // Its 14s scene is over; its 385 characters are not read yet. 60ms/char is
+    // a deliberately generous 285 words per minute -- the budget must clear even
+    // that for the whole message.
     long.advanceTo(14_000);
+    expect(long.diagnostics().activeBubbles).toBe(1);
+    long.advanceTo(real.length * 60);
+    expect(long.diagnostics().activeBubbles).toBe(1);
+    long.advanceTo(30_001);
     expect(long.diagnostics().activeBubbles).toBe(0);
     long.dispose();
+
+    // The budget is bounded: an outlier cannot park itself over the world.
+    const outlier = createSystem(recipeFor(world[0]!));
+    outlier.emit(speech("aster", "a".repeat(1_153)), 0);
+    outlier.advanceTo(30_001);
+    expect(outlier.diagnostics().activeBubbles).toBe(0);
+    outlier.dispose();
 
     const calm = createSystem(recipeFor(world[0]!), undefined, true);
     calm.emit(speech("aster", "Yes."), 0);
@@ -1103,6 +1257,22 @@ function recordingContext(): {
     set fillStyle(value: string | CanvasGradient | CanvasPattern) { fillStyle = String(value); },
   } as unknown as CanvasRenderingContext2D;
   return { context, draws, fills, fillRects, fillTexts, fillTextStyles };
+}
+
+/** The drawn extent of one overlay pass, from the recording stub's span rects. */
+function paintedExtent(rectangles: readonly number[][]): Readonly<{
+  x: number;
+  y: number;
+  right: number;
+  bottom: number;
+}> {
+  if (rectangles.length === 0) throw new Error("nothing was painted");
+  return {
+    x: Math.min(...rectangles.map(([x]) => x!)),
+    y: Math.min(...rectangles.map(([, y]) => y!)),
+    right: Math.max(...rectangles.map(([x, , width]) => x! + width!)),
+    bottom: Math.max(...rectangles.map(([, y, , height]) => y! + height!)),
+  };
 }
 
 function _assertKitType(_kit: RegionKitId): void {

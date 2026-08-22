@@ -9,6 +9,7 @@ import type {
   Vec2,
 } from "../../presentation/contracts";
 import type { PresentedEventType } from "../../presentation/eventPayloads";
+import { frameEntityIdDenylist, safePublicCopy } from "../../app/observer2d/publicCopy";
 import {
   EVENT_LEGIBILITY_MAP,
   type OverlayAnchor,
@@ -133,6 +134,26 @@ export function createProductionSceneCommandResolver(
    * an utterance raised beside a running scene cannot disturb it.
    */
   let lastSceneToken = 0;
+  /**
+   * Public display names for every being in the newest accepted frame.
+   *
+   * Rebuilt once per frame and read by both bubble paths. Names are scrubbed
+   * through the same `publicCopy` guard every other observer surface uses, so a
+   * backend that ships an opaque id in the `name` field can never leak it into
+   * a bubble's address line — an unsafe name simply produces no tag.
+   */
+  let beingNames: ReadonlyMap<string, string> = new Map();
+  const refreshBeingNames = (frame: PresentedObserverFrame): void => {
+    const denied = frameEntityIdDenylist(frame);
+    const names = new Map<string, string>();
+    for (const record of frame.world.agents) {
+      const id = record.value.id;
+      if (typeof id !== "string" || typeof record.value.name !== "string") continue;
+      const safe = safePublicCopy(record.value.name, "", denied);
+      if (safe.length > 0) names.set(id, safe);
+    }
+    beingNames = names;
+  };
   const raisedUtterances = new Set<string>();
   const rememberUtterance = (key: string): void => {
     raisedUtterances.add(key);
@@ -178,6 +199,7 @@ export function createProductionSceneCommandResolver(
         placement,
         false,
         null,
+        beingNames,
       );
       // A being with no placement yet has nowhere to put the words; leaving the
       // beat unremembered lets a later frame raise it once they are on stage.
@@ -192,6 +214,7 @@ export function createProductionSceneCommandResolver(
   };
 
   return (frame) => {
+    refreshBeingNames(frame);
     const scene = frame.scene;
     const execution = scene?.execution;
     if (
@@ -332,7 +355,7 @@ export function createProductionSceneCommandResolver(
     });
     harvestOverlayFacts(executionState.overlay, scene, placement);
     scene.effectIntents.forEach((intent, index) => {
-      effectCommands(intent, placement, scene.reducedMotion, executionState).forEach((command, commandIndex) => {
+      effectCommands(intent, placement, scene.reducedMotion, executionState, beingNames).forEach((command, commandIndex) => {
         commands.push({
           ...command,
           commandId: commandId(
@@ -617,6 +640,16 @@ function effectCommands(
    * emits speech bubbles alone.
    */
   execution: ActiveExecution | null,
+  /**
+   * Public display names for the beings on stage, keyed by id.
+   *
+   * The single choke point for the bubble's `to <name>` tag: BOTH ingestion
+   * paths (the non-blocking utterance lane and a `speak` chained into a
+   * physical moment) reach the bubble through this function, so resolving the
+   * name here is the only way a mixed moment keeps its tag. A being missing
+   * from the map gets NO tag rather than a raw `wanderer_003`.
+   */
+  beingNames: ReadonlyMap<string, string>,
 ): readonly SceneCommandWithoutId[] {
   // DECISION (Safi, 2026-07-25) -- "SELF_TALK RENDERS OPENLY", recorded in
   // .superpowers/sdd/progress.md and in docs/frontend/BUBBLE_UI.md §11.1:
@@ -664,6 +697,12 @@ function effectCommands(
     const listener = intent.targetId === null ? null : placement.agents.get(intent.targetId) ?? null;
     const speaker = placement.agents.get(intent.sourceId) ?? null;
     const coLocated = listener !== null && speaker !== null && listener.regionId === speaker.regionId;
+    // The tag is derived from the PAYLOAD's target, never from the variant: a
+    // line aimed at a being in another region resolves to the "spoken" silhouette
+    // (there is nobody on screen to whisper at) and is still directed speech.
+    const targetName = intent.targetId === null
+      ? undefined
+      : beingNames.get(intent.targetId);
     const request: EnvironmentEffectRequest = {
       kind: "speech-bubble",
       at,
@@ -674,6 +713,8 @@ function effectCommands(
       hue: identityHue(intent.sourceId),
       accent: OVERLAY_FAMILY_ACCENT[mapping.family],
       tier: "murmur",
+      ...(intent.targetId === null ? {} : { targetId: intent.targetId }),
+      ...(targetName === undefined || targetName.length === 0 ? {} : { targetName }),
       // A whisper is a dashed balloon WITH a thread; a broadcast is a solid
       // balloon WITHOUT one -- the direct answer to the performance matrix's
       // "whisper and broadcast are visually identical" gap.

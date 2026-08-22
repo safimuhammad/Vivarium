@@ -166,6 +166,14 @@ const FONT_ROWS: Readonly<Record<string, string>> = {
   "-": "...../...../...../.###./...../...../...../.....",
   ":": "...../...../..#../...../...../..#../...../.....",
   ";": "...../...../..#../...../...../..#../..#../.#...",
+  // `_`, `[` and `]` earn their cells from the corpus: 219 underscores (region
+  // ids a being names aloud, e.g. `warm_springs`) and 43 bracket pairs across
+  // 3,363 real messages. They were rendering as `?` — invisible while a bubble
+  // showed a three-line excerpt, and a visible defect now that it shows all of it.
+  "_": "...../...../...../...../...../...../...../#####",
+  "[": ".###./.#.../.#.../.#.../.#.../.#.../.###./.....",
+  "]": ".###./...#./...#./...#./...#./...#./.###./.....",
+  "`": "..#../...#./...../...../...../...../...../.....",
   "(": "...#./..#../.#.../.#.../.#.../..#../...#./.....",
   ")": ".#.../..#../...#./...#./...#./..#../.#.../.....",
   "/": "....#/....#/...#./..#../.#.../#..../#..../.....",
@@ -609,106 +617,85 @@ export function pixelTextWidth(text: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// excerpting — the answer to 385-character messages
+// message layout — the answer to 385-character messages
 // ---------------------------------------------------------------------------
 
-export interface ExcerptLayout {
+export interface MessageLayout {
+  /** Every line of the WHOLE message. Never an excerpt, never an ellipsis. */
   readonly lines: readonly string[];
-  /** Characters actually shown, after sentence-boundary trimming. */
-  readonly shown: number;
+  /** Columns the message was wrapped to. */
+  readonly columns: number;
   /** Characters in the whitespace-normalised source message. */
   readonly total: number;
-  readonly truncated: boolean;
 }
 
 /**
- * Fit a real message into a bubble as an **opening excerpt**, preferring to end
- * on a sentence boundary.
+ * The text block's target width:height ratio, used to pick a column count.
+ *
+ * A message wrapped to a fixed narrow measure becomes a column of scraps as it
+ * grows; wrapped to one fixed wide measure a two-word line becomes a stripe.
+ * Choosing columns from the message's own length instead keeps every bubble
+ * roughly this shape, so a long line reads as a paragraph and a short one as a
+ * remark.
+ */
+const MESSAGE_ASPECT = 2.2;
+
+/**
+ * Columns for one message of `total` characters, inside a kind's own band.
+ *
+ * `FONT_LINE_HEIGHT / FONT_ADVANCE` converts the character grid into pixels:
+ * a block of `c` columns and `total / c` lines is `6c` wide and `9 total / c`
+ * tall, so `c = sqrt(1.5 x aspect x total)` hits {@link MESSAGE_ASPECT}. Past a
+ * kind's `maxColumns` the block stops widening and grows downward instead —
+ * a measure wider than ~44 characters is harder to read, not easier.
+ */
+export function messageColumns(total: number, minColumns: number, maxColumns: number): number {
+  if (!Number.isFinite(total) || total <= 0) return minColumns;
+  const ideal = Math.round(Math.sqrt((FONT_LINE_HEIGHT / FONT_ADVANCE) * MESSAGE_ASPECT * total));
+  return clamp(ideal, minColumns, maxColumns);
+}
+
+/**
+ * Wrap a real message into a bubble **in full**.
  *
  * Real payload messages measure a median of 385 characters (max 1153, over
- * 3,363 samples); a bubble above a 22px sprite cannot be a transcript, so it is
- * not one — it is a presence, and the fullness bar reports how much was left
- * unsaid. The complete text keeps its home in the DOM dialogue panel.
+ * 3,363 samples). The overlay used to answer that with a three-line excerpt
+ * plus a fullness bar; the owner's decision (2026-08-21) is that a bubble
+ * carries the whole thing — "they should show full messages" — so nothing here
+ * truncates, and no ellipsis is ever appended. The size of a being's inner life
+ * is still visible at a glance, but now because the bubble itself is that size.
  *
- * A sentence boundary is honoured only when it falls in the last 40% of the
- * filled text: a clause that *ends* is far more beautiful than a clause that
- * stops, but cutting at the first period would throw away most of the budget.
- * The ellipsis is never appended mid-word and never after a period.
+ * Wrapping is greedy over whitespace-normalised words at a fixed 6px advance
+ * (never `measureText`), so it is byte-identical in jsdom and in a browser. A
+ * single token longer than the measure is hard-broken with a hyphen rather than
+ * allowed to overflow the box.
  */
-export function layoutExcerpt(text: string, maxChars: number, maxLines: number): ExcerptLayout {
-  const clean = text.replace(/\s+/g, " ").trim();
-  if (clean.length === 0) return { lines: [""], shown: 0, total: 0, truncated: false };
+export function layoutMessage(text: string, columns: number): MessageLayout {
+  const width = Math.max(1, Math.floor(columns));
+  const clean = text.replace(/\s+/gu, " ").trim();
+  if (clean.length === 0) return { lines: [""], columns: width, total: 0 };
   const lines: string[] = [];
   let current = "";
-  let done = false;
   for (const rawWord of clean.split(" ")) {
     let word = rawWord;
-    while (word.length > maxChars) {
-      const head = `${word.slice(0, maxChars - 1)}-`;
+    while (word.length > width) {
       if (current.length > 0) {
         lines.push(current);
         current = "";
       }
-      if (lines.length >= maxLines) {
-        done = true;
-        break;
-      }
-      lines.push(head);
-      word = word.slice(maxChars - 1);
+      lines.push(`${word.slice(0, width - 1)}-`);
+      word = word.slice(width - 1);
     }
-    if (done) break;
     const candidate = current.length === 0 ? word : `${current} ${word}`;
-    if (candidate.length <= maxChars) {
+    if (candidate.length <= width) {
       current = candidate;
       continue;
     }
-    lines.push(current);
+    if (current.length > 0) lines.push(current);
     current = word;
-    if (lines.length >= maxLines) {
-      done = true;
-      break;
-    }
   }
-  if (!done && current.length > 0) lines.push(current);
-  let shown = lines.join(" ").length;
-  const truncated = shown < clean.length;
-
-  if (truncated) {
-    const flat = lines.join(" ");
-    const boundaries = [...flat.matchAll(/[.!?…](?=\s|$)/g)];
-    const last = boundaries.length > 0
-      ? boundaries[boundaries.length - 1]!.index + 1
-      : -1;
-    if (last > 0 && last >= flat.length * 0.6) {
-      const kept = flat.slice(0, last);
-      const rewrapped: string[] = [];
-      let line = "";
-      for (const word of kept.split(" ")) {
-        const candidate = line.length === 0 ? word : `${line} ${word}`;
-        if (candidate.length <= maxChars) line = candidate;
-        else {
-          rewrapped.push(line);
-          line = word;
-        }
-      }
-      if (line.length > 0) rewrapped.push(line);
-      lines.length = 0;
-      lines.push(...rewrapped);
-      shown = kept.length;
-    }
-  }
-  if (truncated && lines.length > 0) {
-    const index = lines.length - 1;
-    const line = lines[index]!;
-    if (!/[.!?…]$/.test(line)) {
-      if (line.length + 1 <= maxChars) lines[index] = `${line}…`;
-      else {
-        const cut = line.lastIndexOf(" ");
-        lines[index] = `${cut > 0 ? line.slice(0, cut) : line.slice(0, maxChars - 1)}…`;
-      }
-    }
-  }
-  return { lines, shown, total: clean.length, truncated };
+  if (current.length > 0) lines.push(current);
+  return { lines, columns: width, total: clean.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -726,63 +713,146 @@ const THOUGHT_CONNECTOR = 22;
 /** Tail lean is clamped to this many world px toward the addressee. */
 export const MAX_TAIL_LEAN = 14;
 
-/** Line budget per text kind. Thought is deliberately the narrowest. */
+/**
+ * Measure band and padding per text kind. Thought is deliberately the narrowest.
+ *
+ * `minColumns` is the measure a short remark is wrapped to; `maxColumns` is the
+ * widest a long one ever grows before it starts growing downward instead. The
+ * ordering thought < whisper < speech is what keeps a private thought the
+ * quietest silhouette on screen at every message length.
+ */
 export const TEXT_KIND_METRICS = Object.freeze({
-  speech: { maxChars: 18, padX: 5, padY: 4, alpha: 1 },
-  whisper: { maxChars: 16, padX: 5, padY: 4, alpha: 1 },
-  thought: { maxChars: 14, padX: 8, padY: 7, alpha: 0.88 },
+  speech: { minColumns: 18, maxColumns: 44, padX: 5, padY: 4, alpha: 1 },
+  whisper: { minColumns: 16, maxColumns: 40, padX: 5, padY: 4, alpha: 1 },
+  thought: { minColumns: 14, maxColumns: 38, padX: 8, padY: 7, alpha: 0.88 },
 });
 
 export type TextBubbleKind = keyof typeof TEXT_KIND_METRICS;
 
-export const TEXT_MAX_LINES = 3;
+/**
+ * The smallest blit scale a message's own LENGTH may drive the type down to.
+ *
+ * The authored face is 5x8 world px, so scale 2 puts a glyph cell at 10x16
+ * screen px (the canvas is CSS-px 1:1, no device-pixel scaling). That is
+ * exactly the size {@link TEXT_ZOOM_THRESHOLD} already certifies as the first
+ * legible one — below it the grammar shows no words at all — which makes it the
+ * honest floor. Past this floor a longer message grows the BUBBLE; it never
+ * shrinks the type further. Only a viewport too small to hold the bubble at
+ * this scale may go lower (see `textBubbleScale`).
+ */
+export const TEXT_SCALE_FLOOR = 2;
+
+/** Message lengths at which the type steps down one blit scale. */
+const TEXT_SCALE_STEP_CHARS = Object.freeze([110, 260]);
+
+/**
+ * The largest blit scale a message of `total` characters may be typed at.
+ *
+ * A remark can afford the biggest type the camera offers; a 385-character
+ * confession cannot, or the bubble would cover the world it belongs to. The
+ * ladder steps 4 -> 3 -> 2 and stops: {@link TEXT_SCALE_FLOOR} is a floor, not
+ * a waypoint.
+ */
+export function textScaleForLength(total: number): number {
+  if (!Number.isFinite(total) || total <= TEXT_SCALE_STEP_CHARS[0]!) return 4;
+  return total <= TEXT_SCALE_STEP_CHARS[1]! ? 3 : TEXT_SCALE_FLOOR;
+}
+
+/**
+ * The blit scale one text bubble is drawn at.
+ *
+ * Three limits, smallest wins: the camera's own integer chrome scale, the
+ * length ladder, and — only when the built surface cannot fit the viewer's safe
+ * frame at that scale — a step down far enough that it does. The last one is
+ * what a phone viewport uses, and it is the ONLY thing allowed below
+ * {@link TEXT_SCALE_FLOOR}, because a bubble taller than the screen is less
+ * readable than a small one that fits.
+ */
+export function textBubbleScale(
+  zoom: number,
+  total: number,
+  surface: Readonly<{ width: number; height: number }>,
+  frame: Readonly<{ width: number; height: number }>,
+): number {
+  let scale = Math.min(bubbleScale(zoom), textScaleForLength(total));
+  while (
+    scale > 1
+    && (surface.width * scale > frame.width || surface.height * scale > frame.height)
+  ) scale -= 1;
+  return scale;
+}
+
+/** Gap in world px between the addressee tag and the first line of the message. */
+const TAG_GAP = 3;
+/** A tag longer than this is not a name — it is a payload; keep the bubble sane. */
+const MAX_TAG_CHARS = 24;
 
 export interface TextBubbleSpec {
   readonly kind: TextBubbleKind;
   readonly text: string;
   /** Identity hue of the speaker; fills the tail. Thought has no tail. */
   readonly hue: string;
-  /** Fullness-bar fill colour. */
+  /** Accent for this bubble's family; reserved for future edge detail. */
   readonly accent: string;
   /** World px of tail lean toward the addressee, clamped to ±14. */
   readonly lean?: number;
+  /**
+   * The addressee line drawn above the message, e.g. `"to Joe"`.
+   *
+   * Present only when the event payload actually named a target. Undirected
+   * speech and private self-talk carry no tag — a thought addressed to nobody
+   * must not be captioned as if it were.
+   */
+  readonly tag?: string;
 }
 
 export interface BuiltSurface {
   readonly surface: PixelSurface;
-  /** Excerpt metadata, when the surface carries type. */
-  readonly excerpt?: ExcerptLayout;
+  /** Message metadata, when the surface carries type. */
+  readonly layout?: MessageLayout;
 }
 
 /**
- * Build one speech / whisper / thought bubble.
+ * Build one speech / whisper / thought bubble around the WHOLE message.
  *
  * The **connector** is what proves ownership and is the direct fix for the
  * rejected overlay's disappearing tail: a fat tapering wedge filled with the
  * speaker's own identity hue, terminated by a hard 3px stud pinned on the crown
  * of the head. A thought has no stud and no tail — three detached shrinking
  * puffs instead. It is the one kind with no physical link to the world.
+ *
+ * The box is sized to whatever {@link layoutMessage} produced, so a long message
+ * makes a large bubble. Nothing is clipped or excerpted here; the draw pass
+ * chooses the blit scale ({@link textBubbleScale}) and keeps the result inside
+ * the viewer's safe frame.
  */
 export function buildTextBubble(spec: TextBubbleSpec): BuiltSurface {
   const metrics = TEXT_KIND_METRICS[spec.kind];
   const isThought = spec.kind === "thought";
   const isDashed = spec.kind !== "speech";
-  const excerpt = layoutExcerpt(spec.text, metrics.maxChars, TEXT_MAX_LINES);
+  const normalisedTotal = spec.text.replace(/\s+/gu, " ").trim().length;
+  const layout = layoutMessage(
+    spec.text,
+    messageColumns(normalisedTotal, metrics.minColumns, metrics.maxColumns),
+  );
+  const tag = spec.tag === undefined ? null : spec.tag.slice(0, MAX_TAG_CHARS);
 
-  const longest = excerpt.lines.reduce((max, line) => Math.max(max, line.length), 0);
-  const contentWidth = Math.max(28, pixelTextWidth("".padEnd(longest, "x")));
-  const contentHeight = excerpt.lines.length * FONT_LINE_HEIGHT - 1;
-  const barHeight = 2;
-  const barGap = 2;
-  const extra = excerpt.truncated ? barHeight + barGap : 0;
+  const longest = layout.lines.reduce((max, line) => Math.max(max, line.length), 0);
+  const contentWidth = Math.max(
+    28,
+    pixelTextWidth("".padEnd(longest, "x")),
+    tag === null ? 0 : pixelTextWidth(tag),
+  );
+  const tagHeight = tag === null ? 0 : FONT_HEIGHT + TAG_GAP;
+  const contentHeight = tagHeight + layout.lines.length * FONT_LINE_HEIGHT - 1;
   // A cloud is an inscribed ellipse, so the text rect must fit INSIDE it: grow
   // the box on each axis or the corners clip the words.
   const boxWidth = isThought
     ? Math.round((contentWidth + metrics.padX * 2) * 1.3) + 2
     : contentWidth + metrics.padX * 2 + 2;
   const boxHeight = isThought
-    ? Math.round((contentHeight + extra + metrics.padY * 2) * 1.42) + 2
-    : contentHeight + metrics.padY * 2 + 2 + extra;
+    ? Math.round((contentHeight + metrics.padY * 2) * 1.42) + 2
+    : contentHeight + metrics.padY * 2 + 2;
 
   const lean = clamp(Math.round(spec.lean ?? 0), -MAX_TAIL_LEAN, MAX_TAIL_LEAN);
   const connector = isThought ? THOUGHT_CONNECTOR : TAIL_HEIGHT;
@@ -838,25 +908,16 @@ export function buildTextBubble(spec: TextBubbleSpec): BuiltSurface {
   }
 
   const textX = originX + Math.round((boxWidth - contentWidth) / 2);
-  let textY = Math.round((boxHeight - (contentHeight + extra)) / 2);
-  for (const line of excerpt.lines) {
+  let textY = Math.round((boxHeight - contentHeight) / 2);
+  // The addressee tag opens the bubble, in soft ink so it reads as an address
+  // line rather than as the first words spoken.
+  if (tag !== null) {
+    drawPixelText(surface, tag, textX, textY, OVERLAY_PALETTE.inkSoft);
+    textY += tagHeight;
+  }
+  for (const line of layout.lines) {
     drawPixelText(surface, line, textX, textY, OVERLAY_PALETTE.ink);
     textY += FONT_LINE_HEIGHT;
-  }
-
-  // The fullness bar: how much of a real message this excerpt represents.
-  // Derived only from payload length; it invents nothing, and it means the
-  // *size* of a being's inner life is visible without reading a word.
-  if (excerpt.truncated) {
-    const barY = Math.round((boxHeight - (contentHeight + extra)) / 2) + contentHeight + barGap;
-    for (let i = 0; i < contentWidth; i += 1) {
-      surface.set(textX + i, barY, OVERLAY_PALETTE.vellumLow);
-    }
-    const fill = Math.max(1, Math.round(contentWidth * (excerpt.shown / Math.max(1, excerpt.total))));
-    for (let i = 0; i < fill; i += 1) {
-      surface.set(textX + i, barY, spec.accent);
-      surface.set(textX + i, barY + 1, spec.accent);
-    }
   }
 
   const studX = tailX + lean;
@@ -868,7 +929,7 @@ export function buildTextBubble(spec: TextBubbleSpec): BuiltSurface {
 
   surface.ax = studX;
   surface.ay = totalHeight - 1;
-  return { surface, excerpt };
+  return { surface, layout };
 }
 
 export interface MarkSpec {

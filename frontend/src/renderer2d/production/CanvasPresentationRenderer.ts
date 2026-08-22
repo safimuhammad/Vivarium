@@ -3096,6 +3096,9 @@ export async function createCanvasPresentationRenderer(
           zoom: cameraSnapshot.zoom,
           originX: Math.round(rasterOrigin.x + offset.x * cameraSnapshot.zoom),
           originY: Math.round(rasterOrigin.y + offset.y * cameraSnapshot.zoom),
+          width: canvas.width,
+          height: canvas.height,
+          insets: { ...safeFrameInsets },
         });
       }
       context.restore();
@@ -3180,10 +3183,16 @@ export async function createCanvasPresentationRenderer(
       if (sheetActive && acceptedFrame !== null) {
         drawWorldSheetForeground(context, acceptedFrame, cameraSnapshot.zoom, nowMs);
       }
+      // The overlay's own bounds: a bubble now carries a WHOLE message, so it can
+      // be large, and it must stay inside the canvas and clear of the HUD chrome
+      // rather than running off the edge with the end of a sentence on it.
       graph.draw(context, {
         zoom: cameraSnapshot.zoom,
         originX: rasterOrigin.x,
         originY: rasterOrigin.y,
+        width: canvas.width,
+        height: canvas.height,
+        insets: { ...safeFrameInsets },
       });
       // BEING-ONLY seam continuation. The camera stays bounded (that is the whole point of
       // the observer's retired toroidal wrap), so the terrain does not repeat and the

@@ -31,14 +31,15 @@ import {
   buildPip,
   buildStud,
   buildTextBubble,
-  layoutExcerpt,
+  layoutMessage,
+  messageColumns,
   OVERLAY_FAMILY_ACCENT,
   OVERLAY_PALETTE,
   PixelSurface,
   TEXT_KIND_METRICS,
-  TEXT_MAX_LINES,
   TEXT_ZOOM_THRESHOLD,
-  type ExcerptLayout,
+  textBubbleScale,
+  type MessageLayout,
   type TextBubbleKind,
 } from "./bubbleGrammar";
 
@@ -83,17 +84,27 @@ export type EnvironmentEffectRequest =
       /** The speaking being; a new bubble for the same being replaces their prior one. */
       speakerId: string;
       variant: SpeechBubbleVariant;
-      /** Verbatim event-payload `message`. Excerpted for display, never rewritten. */
+      /** Verbatim event-payload `message`. Shown in FULL, never rewritten. */
       text: string;
       /** Tail lean in world px toward the addressee; clamped to ±14 at build time. */
       tailLean: number;
       /** The speaker's identity hue, which fills the tail. */
       hue: string;
-      /** Fullness-bar fill colour. */
+      /** This bubble's family accent. */
       accent: string;
       tier: OverlayTier;
       /** Aim-thread + receiver cap, for a whisper or any addressed line. */
       thread?: OverlayThread;
+      /**
+       * The being this line was addressed to, when the payload named one.
+       *
+       * Drives the bubble's opening `to <name>` tag and keeps the bubble off the
+       * addressee's own body. Undirected speech and private self-talk leave both
+       * undefined — nothing about an audience is ever inferred.
+       */
+      targetId?: string;
+      /** Public display name of {@link targetId}, already scrubbed for public copy. */
+      targetName?: string;
     }>
   | Readonly<{
       kind: "event-mark";
@@ -149,6 +160,11 @@ export interface OverlayViewport {
   readonly zoom: number;
   readonly originX: number;
   readonly originY: number;
+  /** Canvas size in CSS px. Bounds every bubble; omitted means "unbounded". */
+  readonly width?: number;
+  readonly height?: number;
+  /** HUD chrome the overlay must stay clear of, in CSS px. */
+  readonly insets?: Readonly<{ top: number; right: number; bottom: number; left: number }>;
 }
 
 export interface EnvironmentDiagnostics {
@@ -178,8 +194,16 @@ export interface EnvironmentDiagnostics {
   readonly suppressedEffects: number;
   readonly neutralDiagnostics: number;
   readonly activeBubbles: number;
-  /** Bubbles whose excerpt is shorter than the real message (they show a fullness bar). */
-  readonly truncatedBubbles: number;
+  /**
+   * Frame-draws of a bubble too large for the viewer's safe frame even at blit
+   * scale 1, which is pinned to the frame's corner rather than cropped.
+   *
+   * Counted per draw, not per bubble, so it is a "how much of the run looked
+   * like this" number rather than a bubble count. It is the one remaining way a
+   * message can go partly unread, and it should stay at zero on any viewport a
+   * human actually uses.
+   */
+  readonly overflowingBubbles: number;
   readonly activeMarkers: number;
   readonly activeBursts: number;
   readonly activeGathers: number;
@@ -292,10 +316,12 @@ interface TextOverlaySlot extends OverlaySlotBase {
   readonly ownerId: string;
   readonly variant: SpeechBubbleVariant;
   readonly built: PixelSurface;
-  readonly excerpt: ExcerptLayout;
+  readonly layout: MessageLayout;
   readonly accent: string;
   readonly hue: string;
   readonly thread: OverlayThread | null;
+  /** Whoever this line was addressed to, so the bubble never lands on them. */
+  readonly targetId: string | null;
   /** Low-zoom form: a quote mark for speech/whisper, an ellipsis for thought. */
   readonly studGlyph: OverlayGlyph;
 }
@@ -393,7 +419,18 @@ const FLYING_ITEM_POOL_CAPACITY = 12;
 const TEXT_LIFETIME_BASE_MS = 1_200;
 const TEXT_LIFETIME_PER_CHAR_MS = 70;
 const TEXT_LIFETIME_MIN_MS = 2_600;
-const TEXT_LIFETIME_MAX_MS = 9_000;
+/**
+ * Ceiling on the reading budget.
+ *
+ * It was 9s, which at 70ms/char pays for about 111 characters — fine while a
+ * bubble showed a three-line excerpt, and a guaranteed half-read message now
+ * that it shows the whole thing. 30s pays for ~410 characters, so the measured
+ * MEDIAN message (385 chars, 28.2s) is covered end to end; the p90 (580 chars,
+ * 41.8s) is not, and is deliberately cut short. This is a bound on how long one
+ * bubble may park itself over the world, not a claim about every message: raise
+ * it if a viewer says the long ones vanish early.
+ */
+const TEXT_LIFETIME_MAX_MS = 30_000;
 /**
  * Mirrors `speechDuration()` in
  * `presentation/choreography/lifecycleMovementCommunicationResource.ts` so a
@@ -413,9 +450,30 @@ const GATHER_LIFETIME_MS = 2_400;
 /** How long the three gather dots take to fill left to right. */
 const GATHER_FILL_MS = 620;
 
+/**
+ * The chibi being frame in world px, standing on its feet anchor.
+ *
+ * Mirrors the sprite the actors draw (`docs/frontend/BUBBLE_UI.md` §5: "the
+ * chibi frame is 46px tall"). Used only to keep a bubble off the speaker's and
+ * the addressee's own bodies.
+ */
+const BEING_BODY_WIDTH = 22;
+const BEING_BODY_HEIGHT = 46;
+
 /** Crowd solver: candidate rects snap to this screen lattice. */
 const CROWD_LATTICE_PX = 8;
 const CROWD_MAX_LIFTS = 5;
+/**
+ * Lift budget for a TEXT bubble, which since 2026-08-21 carries a whole message
+ * and is therefore tall.
+ *
+ * A being is 46 world px; five 8px lifts cannot clear one, so a bubble aimed at
+ * someone standing just above its speaker had nowhere to go. Lifting is the
+ * right escape for text (the tail keeps its column, so the bubble reads as
+ * floating higher, not as belonging to someone else) — it just needs enough
+ * rungs to clear a body.
+ */
+const CROWD_MAX_TEXT_LIFTS = 14;
 const CROWD_LATERAL_SHIFT_PX = 12;
 /** Global budget of live *text* bubbles on screen; the rest demote to pips. */
 const CROWD_TEXT_BUDGET = 6;
@@ -461,7 +519,7 @@ export class EnvironmentSystem {
   private droppedEffects = 0;
   private suppressedEffects = 0;
   private neutralDiagnostics = 0;
-  private truncatedBubbles = 0;
+  private overflowingBubbles = 0;
   private disposed = false;
 
   constructor(options: Readonly<{
@@ -627,19 +685,25 @@ export class EnvironmentSystem {
    */
   private emitText(request: Extract<EnvironmentEffectRequest, { kind: "speech-bubble" }>): void {
     const at = snapPoint(request.at);
-    const { surface, excerpt } = buildTextBubble({
+    const metrics = TEXT_KIND_METRICS[request.variant];
+    // The addressee tag is a fact from the payload, never prose parsing: it
+    // exists exactly when the event named a target, and it is the addressee's
+    // public display name, already scrubbed upstream.
+    const tag = request.targetName === undefined || request.targetName.trim().length === 0
+      ? undefined
+      : `to ${request.targetName.trim()}`;
+    const { surface, layout: built } = buildTextBubble({
       kind: request.variant,
       text: request.text,
       hue: request.hue,
       accent: request.accent,
       lean: request.tailLean,
+      ...(tag === undefined ? {} : { tag }),
     });
-    const layout = excerpt ?? layoutExcerpt(
+    const layout = built ?? layoutMessage(
       request.text,
-      TEXT_KIND_METRICS[request.variant].maxChars,
-      TEXT_MAX_LINES,
+      messageColumns(request.text.length, metrics.minColumns, metrics.maxColumns),
     );
-    if (layout.truncated) this.truncatedBubbles += 1;
     this.resolveGather(request.speakerId);
     this.retireOwnedOverlays(request.speakerId);
     const availableIndex = this.texts.indexOf(null);
@@ -655,10 +719,11 @@ export class EnvironmentSystem {
       tier: request.tier,
       variant: request.variant,
       built: surface,
-      excerpt: layout,
+      layout,
       accent: request.accent,
       hue: request.hue,
       thread: request.thread === undefined ? null : copyThread(request.thread),
+      targetId: request.targetId ?? null,
       studGlyph: request.variant === "thought" ? "ellipsis" : "quote",
       startedAtMs: this.nowMs,
       expiresAtMs: this.nowMs + this.textLifetimeMs(layout),
@@ -841,10 +906,12 @@ export class EnvironmentSystem {
   /**
    * How long a bubble stays readable.
    *
-   * The design's reading budget is `clamp(1200 + 70 x visibleChars, 2600, 9000)`
-   * — wall-clock, and deliberately NOT divided by the simulation speed
-   * multiplier, because text you cannot finish reading is worse than a world
-   * that runs slightly ahead of its captions.
+   * The reading budget is `clamp(1200 + 70 x visibleChars, 2600, 30000)` — 70ms
+   * a character is about 171 words per minute — wall-clock, and deliberately NOT
+   * divided by the simulation speed multiplier, because text you cannot finish
+   * reading is worse than a world that runs slightly ahead of its captions. The
+   * ceiling was 9s while a bubble held a three-line excerpt; a bubble now holds
+   * the whole message, so it must be paid for in full.
    *
    * That budget is a **floor on readability, not a ceiling on presence**. A
    * scene's own length is driven by the *full* message (`speechDuration` in
@@ -857,7 +924,7 @@ export class EnvironmentSystem {
    * convention, not by import, so the renderer never depends upward on the
    * choreography layer.
    */
-  private textLifetimeMs(layout: ExcerptLayout): number {
+  private textLifetimeMs(layout: MessageLayout): number {
     const visible = layout.lines.reduce((total, line) => total + line.length, 0);
     const reading = Math.min(
       TEXT_LIFETIME_MAX_MS,
@@ -1066,7 +1133,7 @@ export class EnvironmentSystem {
       suppressedEffects: this.suppressedEffects,
       neutralDiagnostics: this.neutralDiagnostics,
       activeBubbles: countActive(this.texts),
-      truncatedBubbles: this.truncatedBubbles,
+      overflowingBubbles: this.overflowingBubbles,
       activeMarkers: countActive(this.marks),
       activeBursts: countActive(this.bursts),
       activeGathers: countActive(this.gathers),
@@ -1278,7 +1345,17 @@ export class EnvironmentSystem {
     }
 
     // 5. text + marks, deterministically de-collided.
-    this.drawPlacedOverlays(context, live, scale, withText, toScreenX, toScreenY);
+    this.drawPlacedOverlays(
+      context,
+      live,
+      scale,
+      withText,
+      zoom,
+      safeFrame(view),
+      canvasRect(view),
+      toScreenX,
+      toScreenY,
+    );
 
     if (screenSpace) context.restore();
     else context.restore();
@@ -1318,6 +1395,9 @@ export class EnvironmentSystem {
     live: readonly (TextOverlaySlot | MarkOverlaySlot)[],
     scale: number,
     withText: boolean,
+    zoom: number,
+    frame: Rect | null,
+    canvas: Rect | null,
     toScreenX: (worldX: number) => number,
     toScreenY: (worldY: number) => number,
   ): void {
@@ -1342,49 +1422,108 @@ export class EnvironmentSystem {
         this.drawDemoted(context, slot, anchorX, anchorY, scale);
         continue;
       }
-      const width = surface.width * scale;
-      const height = surface.height * scale;
+      // A text bubble carries the whole message, so its own scale is a separate
+      // decision from the chrome's: the length ladder steps the type down to the
+      // legibility floor, and a frame too small for the result steps it down
+      // further rather than letting words fall off the screen.
+      const blitScale = isText && withText
+        ? textBubbleScale(zoom, slot.layout.total, surface, frame ?? { width: Infinity, height: Infinity })
+        : scale;
+      const width = surface.width * blitScale;
+      const height = surface.height * blitScale;
       // The connector must stay exactly on its being's crown, so the anchor is
       // never snapped: a lattice applied to a screen x makes every bubble jitter
       // sideways under a panning camera. The 8px lattice governs the LIFT steps
       // (below), which is where it buys the deterministic, non-overlapping layout
       // replay needs.
-      const baseX = anchorX - surface.ax * scale;
-      const baseY = anchorY - (surface.height - surface.ay) * scale - height;
-      let chosen: Rect | null = null;
+      const baseX = anchorX - surface.ax * blitScale;
+      const baseY = anchorY - (surface.height - surface.ay) * blitScale - height;
+      // A bubble is only pulled back on screen when its OWNER is on screen. For a
+      // being outside the view there is no crown for the connector to sit on, and
+      // dragging its words into the middle of the map would attribute them to
+      // nobody — the grammar's one hard rule.
+      const anchored = frame !== null && canvas !== null
+        && anchorX >= canvas.x && anchorX <= canvas.x + canvas.width
+        && anchorY >= canvas.y && anchorY <= canvas.y + canvas.height
+        ? frame
+        : null;
+      // The two beings this bubble is ABOUT are blockers for this slot alone --
+      // never for the whole crowd, or a busy region would mass-demote. Words
+      // must not land on the mouth that said them, nor on the ear they were
+      // said into.
+      const bodies = isText
+        ? [slot.ownerId, slot.targetId]
+            .filter((id): id is string => id !== null)
+            .map((id) => this.bodyRect(id, toScreenX, toScreenY, zoom))
+            .filter((rect): rect is Rect => rect !== null)
+        : [];
       const lateralSteps = [0, CROWD_LATERAL_SHIFT_PX, -CROWD_LATERAL_SHIFT_PX];
-      outer: for (const lateral of lateralSteps) {
-        for (let lift = 0; lift <= CROWD_MAX_LIFTS; lift += 1) {
-          const candidate: Rect = {
-            x: baseX + lateral * scale,
-            y: baseY - lift * CROWD_LATTICE_PX * scale,
-            width,
-            height,
-          };
-          if (!placed.some((other) => rectanglesIntersect(candidate, other))) {
-            chosen = candidate;
-            break outer;
+      const maxLifts = isText ? CROWD_MAX_TEXT_LIFTS : CROWD_MAX_LIFTS;
+      const search = (avoidBodies: boolean): Rect | null => {
+        for (const lateral of lateralSteps) {
+          for (let lift = 0; lift <= maxLifts; lift += 1) {
+            const settled = clampIntoFrame({
+              x: baseX + lateral * blitScale,
+              y: baseY - lift * CROWD_LATTICE_PX * blitScale,
+              width,
+              height,
+            }, anchored);
+            if (placed.some((other) => rectanglesIntersect(settled, other))) continue;
+            if (avoidBodies && bodies.some((body) => rectanglesIntersect(settled, body))) continue;
+            return settled;
           }
         }
-      }
-      if (chosen === null) {
+        return null;
+      };
+      // Two passes, and the order IS the priority: keeping the words off the two
+      // bodies is a strong preference, but a message nobody can read is worse
+      // than one drawn across the speaker's shoulder, so a corner with nowhere
+      // clear left still gets its bubble rather than a demotion to a stud.
+      const chosen = search(true) ?? search(false);
+      let settled = chosen;
+      if (settled === null) {
         if (slot.tier !== "knell") {
           this.drawDemoted(context, slot, anchorX, anchorY, scale);
           continue;
         }
-        chosen = { x: baseX, y: baseY, width, height };
+        settled = clampIntoFrame({ x: baseX, y: baseY, width, height }, anchored);
       }
-      placed.push(chosen);
+      if (isText && frame !== null && (width > frame.width || height > frame.height)) {
+        this.overflowingBubbles += 1;
+      }
+      placed.push(settled);
       if (isText) textsPlaced += 1;
       const alpha = slot.kind === "text" ? TEXT_KIND_METRICS[slot.variant].alpha : 1;
       surface.blit(
         context,
-        chosen.x + surface.ax * scale,
-        chosen.y + surface.ay * scale,
-        scale,
+        settled.x + surface.ax * blitScale,
+        settled.y + surface.ay * blitScale,
+        blitScale,
         alpha,
       );
     }
+  }
+
+  /**
+   * One being's drawn body in screen px, or `null` when it is not on stage.
+   *
+   * The chibi frame is 22x46 world px standing on the placement ledger's feet
+   * point, which is the same anchor {@link CONNECTOR_TIP_OFFSET_Y} measures from.
+   */
+  private bodyRect(
+    id: string,
+    toScreenX: (worldX: number) => number,
+    toScreenY: (worldY: number) => number,
+    zoom: number,
+  ): Rect | null {
+    const at = this.anchorPositions.get(id);
+    if (at === undefined) return null;
+    return {
+      x: toScreenX(at.x - BEING_BODY_WIDTH / 2),
+      y: toScreenY(at.y - BEING_BODY_HEIGHT),
+      width: Math.max(1, BEING_BODY_WIDTH * zoom),
+      height: Math.max(1, BEING_BODY_HEIGHT * zoom),
+    };
   }
 
   /** A demoted overlay still says *something*: its glyph stud, on a short stem. */
@@ -1463,6 +1602,47 @@ export class EnvironmentSystem {
   private intersectsExclusion(rect: Rect): boolean {
     return this.exclusionZones.some((zone) => rectanglesIntersect(rect, zone));
   }
+}
+
+/**
+ * The rectangle the overlay may draw into: the canvas minus the viewer's HUD
+ * insets, or `null` when the caller supplied no bounds (unit tests, and the
+ * ambient 1x path that has no camera to reason about).
+ */
+function safeFrame(view: OverlayViewport | undefined): Rect | null {
+  if (view === undefined || view.width === undefined || view.height === undefined) return null;
+  const insets = view.insets ?? { top: 0, right: 0, bottom: 0, left: 0 };
+  const width = view.width - insets.left - insets.right;
+  const height = view.height - insets.top - insets.bottom;
+  if (!(width > 0) || !(height > 0)) return null;
+  return { x: insets.left, y: insets.top, width, height };
+}
+
+/**
+ * Slide a candidate rect back inside the safe frame.
+ *
+ * A TRANSLATION, never a crop and never a resize: a message that had to move to
+ * stay on screen is still whole. When the bubble is larger than the frame in an
+ * axis it pins to that edge, so the reader still starts at the first word —
+ * `textBubbleScale` is what makes that essentially unreachable.
+ */
+/** The whole canvas in screen px, or `null` when the caller supplied no bounds. */
+function canvasRect(view: OverlayViewport | undefined): Rect | null {
+  if (view === undefined || view.width === undefined || view.height === undefined) return null;
+  if (!(view.width > 0) || !(view.height > 0)) return null;
+  return { x: 0, y: 0, width: view.width, height: view.height };
+}
+
+function clampIntoFrame(rect: Rect, frame: Rect | null): Rect {
+  if (frame === null) return rect;
+  const maxX = frame.x + Math.max(0, frame.width - rect.width);
+  const maxY = frame.y + Math.max(0, frame.height - rect.height);
+  return {
+    x: Math.round(Math.min(Math.max(rect.x, frame.x), maxX)),
+    y: Math.round(Math.min(Math.max(rect.y, frame.y), maxY)),
+    width: rect.width,
+    height: rect.height,
+  };
 }
 
 function copyThread(thread: OverlayThread): OverlayThread {
