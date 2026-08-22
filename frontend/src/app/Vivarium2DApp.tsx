@@ -24,6 +24,21 @@ import {
 } from "../renderer2d/production/PresentationWorldStage";
 import { ArchiveDrawer } from "./observer2d/ArchiveDrawer";
 import { CameraFramingControl } from "./observer2d/CameraFramingControl";
+import { FollowSubjectControl } from "./observer2d/FollowSubjectControl";
+import {
+  advanceFollow,
+  followableAgentKeys,
+  FOLLOW_OFF,
+  FOLLOW_RELEASED,
+  projectFollowRoster,
+  readFollowSubject,
+  requestFollow,
+  type FollowOutcome,
+  type FollowRosterView,
+  type FollowSubjectReading,
+  type FollowState,
+  type FollowTickInput,
+} from "./observer2d/followSubject";
 import { RunStopControl } from "./observer2d/RunStopControl";
 import { resolveObserverLiveness } from "./observer2d/observerLiveness";
 import { resolveRunStatus, useRunStopController } from "./observer2d/runStopController";
@@ -142,6 +157,38 @@ interface FocusReturnRequest {
   readonly fallbackId: string | null;
 }
 
+/**
+ * Everything the follow machine reads from one render of the shell.
+ *
+ * The two fields it does NOT hold — which beings the renderer is currently able
+ * to follow, and the clock — are gathered at tick time instead: the first lives
+ * in the semantic store, which publishes on its own schedule rather than React's,
+ * and the second must be read when the tick runs, not when the render did.
+ */
+type FollowShellInputs = Omit<FollowTickInput, "followableKeys" | "nowMs">;
+
+/** How long an ended pursuit keeps saying why, before the status line is clean again. */
+const FOLLOW_NOTICE_MS = 9_000;
+
+/**
+ * What the camera is following when the follow control did not choose it.
+ *
+ * `follow` predates this control: clicking a being (or a standing home) on the
+ * canvas and pressing `F`, or the World drawer's Follow button, both reach it
+ * without going through a pursuit. A home cannot be offered in a roster of
+ * BEINGS, so naming it here is what stops the control from reading `Automatic`
+ * while the camera is demonstrably locked onto something.
+ */
+function heldCameraSubjectName(
+  cameraMode: CameraMode,
+  reading: FollowSubjectReading,
+  selection: SelectionView | null,
+): string | null {
+  if (cameraMode !== "follow" || reading.key !== null) return null;
+  if (selection === null || (selection.kind !== "home" && selection.kind !== "agent")) return null;
+  return selection.title;
+}
+
 /** Full-viewport, single-frame production observer for the autonomous world. */
 export function Vivarium2DApp({
   createRuntime = createObserverShellRuntime,
@@ -201,6 +248,38 @@ export function Vivarium2DApp({
    */
   const [viewerControlsCamera, setViewerControlsCamera] = useState(false);
   const [resumeStorySerial, setResumeStorySerial] = useState(0);
+  /**
+   * WHO the camera is on — the viewer's own choice, and the pursuit that serves it.
+   *
+   * Kept here rather than in the renderer because the choice spans the whole
+   * world while the renderer only ever holds one region: reaching a being in
+   * another region means observing that region, waiting for its art, and only
+   * then asking the camera for `follow`. `followStateRef` mirrors the state so
+   * the tick can read it without being re-created on every transition, and
+   * `followNotice` is the VISIBLE half of an ending — the polite announcer is
+   * screen-reader-only, and "the being you were following died" is exactly the
+   * kind of thing a watcher must be able to see.
+   */
+  const [followState, setFollowState] = useState<FollowState>(FOLLOW_OFF);
+  const [followNotice, setFollowNotice] = useState<LiveAnnouncement | null>(null);
+  const followStateRef = useRef<FollowState>(FOLLOW_OFF);
+  const followInputsRef = useRef<FollowShellInputs | null>(null);
+  const followNoticeSerialRef = useRef(0);
+  const [, setFollowPulse] = useState(0);
+  /**
+   * The latch request handed to the stage, and the selection it will announce back.
+   *
+   * A serial because a re-latch cannot be said as a camera mode — see
+   * `followRequest` on `PresentationWorldStage`. The ref remembers which
+   * selection this shell asked for, so the announcement it provokes is not
+   * mistaken for a viewer clicking the world and does not pop the Selection
+   * drawer over the being they just asked to watch.
+   */
+  const [followRequest, setFollowRequest] = useState<Readonly<{
+    serial: number;
+    selection: Exclude<ObserverSelection, null>;
+  }> | null>(null);
+  const followSelectionRef = useRef<string | null>(null);
   const snapshotLineage = snapshot?.frame === null || snapshot?.frame === undefined
     ? null
     : `${snapshot.frame.runId}\u0000${snapshot.frame.sourceKey}`;
@@ -290,6 +369,12 @@ export function Vivarium2DApp({
     setCameraControl(Object.freeze({ accepted: "story", requested: "story" }));
     setViewerControlsCamera(false);
     setShellAnnouncement(null);
+    // A new run's HUD must not still be naming the previous run's being.
+    followStateRef.current = FOLLOW_OFF;
+    setFollowState(FOLLOW_OFF);
+    setFollowNotice(null);
+    setFollowRequest(null);
+    followSelectionRef.current = null;
   }, [snapshotLineage]);
 
   useEffect(() => {
@@ -373,6 +458,123 @@ export function Vivarium2DApp({
     semanticStore.clear();
   }, [semanticStore, snapshot?.frame]);
 
+  /**
+   * The world as the follow machine must see it, right now.
+   *
+   * Null before the shell is ready. The two fields that are not carried on the
+   * render's own `followInputsRef` are gathered here: who the renderer can
+   * actually follow (the semantic store publishes on its own schedule, not
+   * React's) and the clock (read when the tick runs, not when the render did).
+   *
+   * Side effects: none.
+   */
+  const followTickInput = useCallback((): FollowTickInput | null => {
+    const inputs = followInputsRef.current;
+    if (inputs === null) return null;
+    return {
+      ...inputs,
+      followableKeys: followableAgentKeys(
+        semanticStore.getCurrent()?.subjects ?? [],
+        (token) => semanticTokensRef.current.selectionFor(token),
+      ),
+      nowMs: Date.now(),
+    };
+  }, [semanticStore]);
+
+  /**
+   * Do the one thing a transition asks for, and record where the pursuit now is.
+   *
+   * Side effects: may observe a region, may select/focus a being and request the
+   * `follow` camera mode, or may hand framing back to the director with a notice.
+   */
+  const applyFollowOutcome = useCallback((outcome: FollowOutcome): void => {
+    const currentRuntime = debugRuntimeRef.current;
+    if (currentRuntime === null) return;
+    if (outcome.state !== followStateRef.current) {
+      followStateRef.current = outcome.state;
+      setFollowState(outcome.state);
+    }
+    switch (outcome.effect.kind) {
+      case "observe-region":
+        // Deliberately NOT the shell's own `observeRegion`, which also requests
+        // Free framing: that is what an Atlas click MEANS ("I chose a place").
+        // Here the viewer chose a BEING, and handing the camera to themselves on
+        // the way to that being would defeat the pursuit.
+        currentRuntime.observeRegion(outcome.effect.regionKey);
+        break;
+      case "engage": {
+        // NOT `runtime.select` + a camera-mode request. That reaches the renderer
+        // as a frame-borne selection, which never re-aims a camera that is
+        // already following somebody else, and as a `follow` request that every
+        // dedup drops as unchanged. The stage's latch does both jobs in one call
+        // and announces the selection back the way a canvas click does.
+        const agentKey = outcome.effect.agentKey;
+        followSelectionRef.current = agentKey;
+        setFollowRequest((current) => Object.freeze({
+          serial: (current?.serial ?? 0) + 1,
+          selection: { kind: "agent" as const, id: agentKey },
+        }));
+        break;
+      }
+      case "abandon": {
+        followNoticeSerialRef.current += 1;
+        const ending = Object.freeze({
+          key: `follow-ended:${followNoticeSerialRef.current}`,
+          message: outcome.effect.notice,
+        });
+        setFollowNotice(ending);
+        setShellAnnouncement(ending);
+        // The serial, never a mode request: a viewer who took the camera by
+        // zooming is still nominally in `follow`, and every mode-based dedup
+        // between here and the renderer would swallow a plain `story` request.
+        setResumeStorySerial((serial) => serial + 1);
+        break;
+      }
+      default:
+        break;
+    }
+  }, []);
+
+  /**
+   * Advance the pursuit against the world as it now is, and do the one thing it asks.
+   *
+   * Called after EVERY render (the machine is idempotent, so an unchanged world
+   * returns the identical state and no effect), plus once more when a pursuit's
+   * arrival deadline falls due. Never called straight from the renderer's own
+   * semantic callback: `select()` republishes the observer frame synchronously,
+   * which would re-enter the renderer mid-publication. That path bumps a pulse
+   * and lets this run in the ordinary effect instead.
+   *
+   * Side effects: see {@link applyFollowOutcome}.
+   */
+  const runFollowTick = useCallback((): void => {
+    const input = followTickInput();
+    if (input === null) return;
+    applyFollowOutcome(advanceFollow(followStateRef.current, input));
+  }, [applyFollowOutcome, followTickInput]);
+
+  // Idempotent, and cheap: one map lookup against a machine that returns its own
+  // state object when nothing moved. Running it unconditionally is what lets a
+  // death, a border crossing, and a hand-driven Follow all be noticed by one path.
+  useEffect(() => {
+    runFollowTick();
+  });
+
+  useEffect(() => {
+    if (followState.kind !== "waiting") return undefined;
+    const handle = window.setTimeout(
+      () => runFollowTick(),
+      Math.max(0, followState.deadlineMs - Date.now()) + 1,
+    );
+    return () => window.clearTimeout(handle);
+  }, [followState, runFollowTick]);
+
+  useEffect(() => {
+    if (followNotice === null) return undefined;
+    const handle = window.setTimeout(() => setFollowNotice(null), FOLLOW_NOTICE_MS);
+    return () => window.clearTimeout(handle);
+  }, [followNotice]);
+
   const acceptSemanticSnapshot = useCallback((next: RendererSemanticSnapshot): void => {
     const currentRuntime = debugRuntimeRef.current;
     if (currentRuntime === null) return;
@@ -408,6 +610,10 @@ export function Vivarium2DApp({
       }));
     }
     semanticStore.publish(projected);
+    // A pursuit waiting for its being to come into view is waiting for exactly
+    // this publication. Bumping a pulse re-runs the tick from an ordinary effect
+    // rather than from inside the renderer's own callback.
+    if (followStateRef.current.kind !== "off") setFollowPulse((pulse) => pulse + 1);
   }, [semanticStore]);
 
   const selectSemanticSubject = useCallback((token: string): void => {
@@ -471,6 +677,28 @@ export function Vivarium2DApp({
   // the difference between watching and reloading.
   const liveness = resolveObserverLiveness(frame, runStatus);
   const atlas = projectLivingAtlas(frame, chronicle, snapshot.observedRegionId);
+  /**
+   * The whole world's living beings, offered as the camera's possible subjects.
+   *
+   * Region names come from the Atlas so both surfaces call a place the same
+   * thing, and a being is only offered when this build has art mounted for where
+   * they are — the dropdown must not contain a destination the camera cannot go.
+   */
+  const mountedRecipes = snapshot.recipes;
+  const followRoster: FollowRosterView = projectFollowRoster(
+    frame,
+    new Map(atlas.regions.map((region) => [region.key, region.displayName] as const)),
+    (regionKey) => mountedRecipes.has(regionKey),
+  );
+  followInputsRef.current = {
+    roster: followRoster,
+    observedRegionKey: snapshot.observedRegionId,
+    cameraMode: presentedCameraControl.accepted,
+    selectedSubject: frame.selection?.kind === "agent" || frame.selection?.kind === "home"
+      ? { kind: frame.selection.kind, id: frame.selection.id }
+      : null,
+  };
+  const followReading = readFollowSubject(followState);
   const dialogue = projectDialogueNow(frame, chronicle);
   const chronicleView = projectChronicle(frame, chronicle);
   const storyNow = projectStoryNow(frame, chronicleView);
@@ -543,14 +771,64 @@ export function Vivarium2DApp({
     setCameraControl((current) => current.requested !== mode
       ? current
       : Object.freeze({ ...current, requested: current.accepted }));
-    if (mode === "follow") setShellAnnouncement(Object.freeze({
+    if (mode !== "follow") return;
+    // The renderer refused: whatever the shell asked for is not something the
+    // camera can latch onto. A pursuit that stayed named here would be claiming
+    // to follow a being the camera never reached.
+    const pursued = followStateRef.current;
+    if (pursued.kind !== "off") {
+      followStateRef.current = FOLLOW_RELEASED;
+      setFollowState(FOLLOW_RELEASED);
+      followNoticeSerialRef.current += 1;
+      setFollowNotice(Object.freeze({
+        key: `follow-refused:${followNoticeSerialRef.current}`,
+        message: `${pursued.name} could not be followed. Story framing resumed.`,
+      }));
+      setResumeStorySerial((serial) => serial + 1);
+    }
+    setShellAnnouncement(Object.freeze({
       key: `follow-rejected:${snapshot.frame!.sourceKey}:${snapshot.frame!.presentedCursor}`,
       message: "Follow requires a visible being or standing home.",
     }));
   };
 
+  /**
+   * The viewer picked a being to follow.
+   *
+   * Begins a pursuit rather than a camera request: the chosen being may be in a
+   * region whose art is not up yet, and the renderer resolves `follow` only
+   * against what it is currently rendering.
+   */
+  const chooseFollowSubject = (agentKey: string): void => {
+    const input = followTickInput();
+    if (input === null) return;
+    setFollowNotice(null);
+    applyFollowOutcome(requestFollow(agentKey, input));
+  };
+  /**
+   * The viewer chose Automatic. Ends the pursuit and hands framing back.
+   *
+   * The same serial the framing control drives, for the same reason: a viewer
+   * who took the camera by zooming is still nominally in whatever mode they
+   * were in, so only the serial is guaranteed to arrive.
+   */
+  const releaseFollowSubject = (): void => {
+    // RELEASED, not merely off: the camera is still nominally in `follow` until
+    // the renderer accepts the story request below, and a plain `off` would let
+    // the machine re-adopt the very being this press walked away from.
+    followStateRef.current = FOLLOW_RELEASED;
+    setFollowState(FOLLOW_RELEASED);
+    setFollowNotice(null);
+    setResumeStorySerial((serial) => serial + 1);
+  };
+
   const selectFromCanvas = (next: ObserverSelection): void => {
     runtime.select(next);
+    // A follow the viewer asked for from the HUD announces a selection too, and
+    // it must not throw the Selection drawer over the being they chose to watch.
+    const asked = followSelectionRef.current;
+    followSelectionRef.current = null;
+    if (asked !== null && next?.kind === "agent" && next.id === asked) return;
     if (next !== null) openSurface({ kind: "selection" }, worldCanvasElement());
   };
   const inspectRegion = (regionId: string): void => {
@@ -592,6 +870,7 @@ export function Vivarium2DApp({
             onCameraAuthorityChange: setViewerControlsCamera,
             onSemanticSnapshot: acceptSemanticSnapshot,
           }}
+          followRequest={followRequest}
           resumeStorySerial={resumeStorySerial}
           onCameraModeRequestRejected={rejectCameraMode}
           regionOrder={atlas.regions.map((region) => region.key)}
@@ -614,6 +893,18 @@ export function Vivarium2DApp({
             mode={presentedCameraControl.accepted}
             viewerControlled={viewerControlsCamera}
             onResumeStory={resumeStoryFraming}
+          />
+          <FollowSubjectControl
+            candidates={followRoster.candidates}
+            subject={followReading}
+            heldSubjectName={heldCameraSubjectName(
+              presentedCameraControl.accepted,
+              followReading,
+              selection,
+            )}
+            notice={followNotice?.message ?? null}
+            onFollow={chooseFollowSubject}
+            onRelease={releaseFollowSubject}
           />
           {frame.source === "live" && runLifecycle !== undefined && <RunStopControl
             status={runStatus}
@@ -1167,7 +1458,14 @@ function viewCursor(
   const row = rows.find(
     (candidate) => candidate.firstCursor <= cursor && cursor <= candidate.lastCursor,
   );
-  if (row === undefined) return;
+  // No row means the moment has already left the rows this shell was given. The
+  // presentation is the only layer that still knows what it keeps, so the click
+  // falls through to it -- which either finds the moment or SAYS it cannot,
+  // instead of the silent return that made an evicted card a dead click.
+  if (row === undefined) {
+    runtime.viewCursor(cursor);
+    return;
+  }
   viewMoment(runtime, chronicle, row.key);
 }
 

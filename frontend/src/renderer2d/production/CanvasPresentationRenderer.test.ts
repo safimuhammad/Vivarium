@@ -13,7 +13,7 @@ import type {
   SafeFrameInsets,
 } from "../../presentation/contracts";
 import type { FrameDriver, WakeScheduler } from "../contracts";
-import { createCamera, MIN_ZOOM, type CameraSnapshot } from "../camera/Camera2D";
+import { createCamera, MIN_ZOOM, STORY_FIT_MAX_ZOOM, type CameraSnapshot } from "../camera/Camera2D";
 import { FOCUS_FOLLOW_DWELL_MS } from "./world/regionFocusFollow";
 import {
   PRODUCTION_ASSET_MANIFEST,
@@ -5530,6 +5530,168 @@ describe("CanvasPresentationRenderer", () => {
     fixture.renderer.setSelection({ kind: "agent", id: "shared" });
     fixture.renderer.setCameraMode("follow");
     expect(fixture.debug().camera.followEntityId).toBe("agent:shared");
+    fixture.renderer.dispose();
+  });
+
+  it("travels to a past moment's anchor: takes framing, pins the region, and flies there", async () => {
+    // THE REGRESSION. Clicking any Chronicle card except the one on stage published a moment focus
+    // that the renderer could only resolve against the scene it was already playing, so it
+    // resolved to nothing: no camera move, no region change, no message. A dead click.
+    const onCameraAuthorityChange = vi.fn();
+    const fixture = await harness({ callbacks: { onCameraAuthorityChange } });
+    fixture.graph.debugValue.hitTargets = [{
+      selection: { kind: "agent", id: "agent-a" },
+      worldBounds: { x: 100, y: 200, width: 20, height: 40 },
+      feetY: 240,
+      selectionKey: "agent:agent-a",
+    }];
+    fixture.renderer.updatePresentation(frame({ revision: 4 }));
+    await settle();
+    const before = fixture.debug().camera;
+
+    fixture.renderer.focusSelection({
+      kind: "moment",
+      id: "moment-1",
+      firstCursor: 1,
+      lastCursor: 1,
+      anchor: {
+        entity: { kind: "agent", id: "agent-a" },
+        regionId: "worn",
+        atLiveEdge: false,
+      },
+    });
+
+    // The journey is a FLIGHT, so it lands over the following frames rather than cutting.
+    expect(fixture.debug().camera.flying).toBe(true);
+    for (let elapsed = 16; elapsed <= 800; elapsed += 32) fixture.driver.fire(elapsed);
+    const after = fixture.debug().camera;
+    expect(after.center).not.toEqual(before.center);
+    expect(after).toMatchObject({ center: { x: 110, y: 220 }, zoom: STORY_FIT_MAX_ZOOM });
+    // Framing must move to the VIEWER, or the story director re-aims the camera on the next beat
+    // and the visible region snaps back to wherever the story is.
+    expect(after.viewerControlled).toBe(true);
+    expect(after.mode).toBe("free");
+    expect(onCameraAuthorityChange).toHaveBeenLastCalledWith(true);
+    fixture.renderer.dispose();
+  });
+
+  it("holds a cross-region journey until that region is mounted, then lands", async () => {
+    const springAtlas = PRODUCTION_ASSET_MANIFEST.regions["spring-terraces"].atlasIds[0]!;
+    const pending = deferred<ProductionAssetLease>();
+    const fixture = await harness({ pendingAtlas: [springAtlas, pending] });
+    fixture.graph.debugValue.hitTargets = [{
+      selection: { kind: "region", id: "spring" },
+      worldBounds: { x: 0, y: 0, width: 800, height: 600 },
+      feetY: 600,
+      selectionKey: "region:spring",
+    }];
+    fixture.renderer.updatePresentation(frame({ revision: 4 }));
+    await settle();
+    expect(fixture.debug().visibleRegionId).toBe("worn");
+
+    fixture.renderer.focusSelection({
+      kind: "moment",
+      id: "moment-1",
+      firstCursor: 1,
+      lastCursor: 1,
+      anchor: { entity: null, regionId: "spring", atLiveEdge: false },
+    });
+    // The anchor's bounds live in the scene graph, and the graph only holds the region on screen,
+    // so the journey parks rather than framing the wrong region's coordinates.
+    expect(fixture.debug().momentTravel).toMatchObject({ regionId: "spring", entityId: null });
+    expect(fixture.debug().loadingRegionId).toBe("spring");
+
+    pending.resolve(lease(springAtlas));
+    await settle();
+    fixture.driver.fire(16);
+    expect(fixture.debug().visibleRegionId).toBe("spring");
+    expect(fixture.debug().momentTravel).toBeNull();
+    for (let elapsed = 32; elapsed <= 900; elapsed += 32) fixture.driver.fire(elapsed);
+    // A bare region anchor is framed WHOLE -- there is no being to read, only a place.
+    expect(fixture.debug().camera.zoom)
+      .toBeCloseTo(fixture.debug().worldNavigation.minimumZoom, 12);
+    fixture.renderer.dispose();
+  });
+
+  it("frames the live-edge moment without taking framing from the director", async () => {
+    // 91a92d5's rule, extended to the camera: viewing NOW must not knock the view off live.
+    const fixture = await harness();
+    fixture.graph.debugValue.hitTargets = [{
+      selection: { kind: "agent", id: "agent-a" },
+      worldBounds: { x: 100, y: 200, width: 20, height: 40 },
+      feetY: 240,
+      selectionKey: "agent:agent-a",
+    }];
+    fixture.renderer.updatePresentation(frame({ revision: 4, settled: true }));
+    await settle();
+
+    fixture.renderer.focusSelection({
+      kind: "moment",
+      id: "moment-4",
+      firstCursor: 4,
+      lastCursor: 4,
+      anchor: {
+        entity: { kind: "agent", id: "agent-a" },
+        regionId: "worn",
+        atLiveEdge: true,
+      },
+    });
+
+    expect(fixture.debug().camera).toMatchObject({
+      viewerControlled: false,
+      mode: "story",
+      storyTarget: { x: 100, y: 200, width: 20, height: 40 },
+    });
+    expect(fixture.debug().momentTravel).toBeNull();
+    fixture.renderer.dispose();
+  });
+
+  it("leaves the view alone for a moment that happened nowhere", async () => {
+    // "The world wakes" belongs to the whole world, not to a place. The presentation has already
+    // told the viewer that; seizing the camera to show them somewhere arbitrary on top of it
+    // would be a second wrong answer.
+    const onCameraAuthorityChange = vi.fn();
+    const fixture = await harness({ callbacks: { onCameraAuthorityChange } });
+    fixture.renderer.updatePresentation(frame({ revision: 4 }));
+    await settle();
+    const before = fixture.debug().camera;
+
+    fixture.renderer.focusSelection({
+      kind: "moment",
+      id: "moment-1",
+      firstCursor: 1,
+      lastCursor: 1,
+      anchor: { entity: null, regionId: null, atLiveEdge: false },
+    });
+
+    expect(fixture.debug().camera).toMatchObject({
+      center: before.center,
+      viewerControlled: false,
+      mode: before.mode,
+    });
+    expect(fixture.debug().momentTravel).toBeNull();
+    expect(onCameraAuthorityChange).not.toHaveBeenCalled();
+    fixture.renderer.dispose();
+  });
+
+  it("abandons a parked journey when the viewer moves the camera themselves", async () => {
+    const springAtlas = PRODUCTION_ASSET_MANIFEST.regions["spring-terraces"].atlasIds[0]!;
+    const pending = deferred<ProductionAssetLease>();
+    const fixture = await harness({ pendingAtlas: [springAtlas, pending] });
+    fixture.renderer.updatePresentation(frame({ revision: 4 }));
+    await settle();
+    fixture.renderer.focusSelection({
+      kind: "moment",
+      id: "moment-1",
+      firstCursor: 1,
+      lastCursor: 1,
+      anchor: { entity: null, regionId: "spring", atLiveEdge: false },
+    });
+    expect(fixture.debug().momentTravel).not.toBeNull();
+    fixture.renderer.panCamera({ x: 12, y: 0 });
+    expect(fixture.debug().momentTravel).toBeNull();
+    pending.resolve(lease(springAtlas));
+    await settle();
     fixture.renderer.dispose();
   });
 

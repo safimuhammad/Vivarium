@@ -79,6 +79,29 @@ export interface PresentationWorldStageProps {
    * Increase it to ask; never decrease it.
    */
   readonly resumeStorySerial?: number;
+  /**
+   * Monotonic "latch the camera onto this subject" request.
+   *
+   * A serial and a selection rather than a camera mode, because a mode cannot
+   * express a RE-latch: while the camera is already following, every dedup
+   * between a shell and the renderer — this file's `requestCameraMode`, and
+   * `CanvasPresentationRenderer.setCameraMode` itself — drops an unchanged
+   * `follow`, and a frame-borne selection change never re-aims the camera
+   * (`applyFrame` assigns the selection; only `setSelection` applies the follow
+   * intent). Without this, choosing a second being while following a first left
+   * the camera parked on the first one's last known bounds.
+   *
+   * `setSelection` is the single call that does both jobs: it re-latches a live
+   * follow on the spot, and it is what a first `follow` request then resolves
+   * against. It publishes `onSelectionChange`, so the shell owns the selection
+   * exactly as it does for a canvas click.
+   *
+   * Increase it to ask; never decrease it.
+   */
+  readonly followRequest?: Readonly<{
+    serial: number;
+    selection: Exclude<ObserverSelection, null>;
+  }> | null;
   readonly onCameraModeRequestRejected?: (mode: CameraMode) => void;
   readonly regionOrder?: readonly string[];
   readonly activeMomentId?: string | null;
@@ -128,6 +151,7 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
   const onObserveRegionRef = useRef(props.onObserveRegion);
   const onSemanticSnapshotRef = useRef(props.onSemanticSnapshot);
   const resumeStorySerialRef = useRef(props.resumeStorySerial ?? 0);
+  const followSerialRef = useRef(props.followRequest?.serial ?? 0);
   const restoreCanvasFocusRef = useRef(false);
   const highestFocusSerialRef = useRef(props.focusRequest?.serial ?? Number.NEGATIVE_INFINITY);
   const controlsRef = useRef<StageObserverControls | null>(null);
@@ -216,6 +240,18 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
     controls.renderer.observeRegion(regionId);
     controls.observedRegionId = regionId;
   }, [props.observedRegionId]);
+
+  useEffect(() => {
+    const controls = controlsRef.current;
+    const request = props.followRequest ?? null;
+    if (controls === null || !controls.frameAccepted || request === null
+      || request.serial <= followSerialRef.current) return;
+    followSerialRef.current = request.serial;
+    // Selection first: it re-latches a follow that is already running, and it is
+    // what the mode request below resolves against when one is not.
+    controls.renderer.setSelection(request.selection);
+    requestCameraMode(controls, "follow", cameraModeRequestRejectedRef.current);
+  }, [props.followRequest]);
 
   useEffect(() => {
     const controls = controlsRef.current;

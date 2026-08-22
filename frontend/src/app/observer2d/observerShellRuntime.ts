@@ -132,6 +132,15 @@ export interface ObserverShellRuntime {
   setSpeed(speed: 0.5 | 1 | 1.5 | 2): void;
   holdCurrentMoment(hold: boolean): void;
   viewMoment(momentId: string): void;
+  /**
+   * Views the moment carrying one event cursor, when the shell's own Chronicle
+   * rows no longer cover it.
+   *
+   * The last resort behind a Chronicle card click: the presentation is the only
+   * layer that still knows which moments it keeps, so it either finds the
+   * moment or says, on the frame, that it cannot.
+   */
+  viewCursor(cursor: number): void;
   retryRecovery(): Promise<void>;
   reconnectStream(): void;
   setCameraMode(mode: CameraMode): void;
@@ -143,6 +152,29 @@ export interface ObserverShellRuntime {
   enterArchive(window: ReplayPresentationWindow): Promise<void>;
   returnToLive(): void;
   dispose(): void;
+}
+
+/**
+ * Re-attaches the anchor the presentation resolved for a moment.
+ *
+ * The shell names a moment by id and cursor range; WHERE that moment happened is
+ * presentation knowledge, and it rides on the selection `viewMoment` published a
+ * moment earlier on the very same click. Without it the renderer can only
+ * resolve a moment focus against the scene it is playing right now, which is
+ * exactly what made every past Chronicle card a silent dead click.
+ *
+ * Pure: takes the request and the frame's current selection, returns the request
+ * to publish. Never widens a request the caller already anchored, and never
+ * borrows an anchor from a DIFFERENT moment.
+ */
+export function anchoredSelection(
+  selection: Exclude<ObserverSelection, null>,
+  presented: ObserverSelection,
+): Exclude<ObserverSelection, null> {
+  if (selection.kind !== "moment" || selection.anchor !== undefined) return selection;
+  if (presented === null || presented.kind !== "moment"
+    || presented.id !== selection.id || presented.anchor === undefined) return selection;
+  return Object.freeze({ ...selection, anchor: presented.anchor });
 }
 
 interface ActiveArchive {
@@ -546,6 +578,9 @@ export function createObserverShellRuntime(
     viewMoment(momentId): void {
       currentControls(binding, archive, live)?.viewMoment(momentId);
     },
+    viewCursor(cursor): void {
+      currentControls(binding, archive, live)?.viewCursor(cursor);
+    },
     retryRecovery(): Promise<void> {
       if (binding === null || disposed) return Promise.resolve();
       return selectedSession(binding.getFrame()).retryRecovery();
@@ -562,7 +597,13 @@ export function createObserverShellRuntime(
     requestFocus(selection): void {
       if (disposed) return;
       focusSerial += 1;
-      focusRequest = Object.freeze({ serial: focusSerial, selection: structuredClone(selection) });
+      focusRequest = Object.freeze({
+        serial: focusSerial,
+        selection: structuredClone(anchoredSelection(
+          selection,
+          binding === null ? null : binding.getFrame().selection,
+        )),
+      });
       publishLocalState();
     },
     observeRegion(regionId): void {

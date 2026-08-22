@@ -298,6 +298,7 @@ function borrowObserverRuntime(raw: ObserverShellRuntime): ObserverShellRuntime 
     setSpeed: (speed) => raw.setSpeed(speed),
     holdCurrentMoment: (hold) => raw.holdCurrentMoment(hold),
     viewMoment: (momentId) => raw.viewMoment(momentId),
+    viewCursor: (cursor) => raw.viewCursor(cursor),
     retryRecovery: () => raw.retryRecovery(),
     reconnectStream: () => raw.reconnectStream(),
     setCameraMode: (mode) => raw.setCameraMode(mode),

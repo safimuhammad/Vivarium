@@ -7,6 +7,7 @@ import type { PresentedObserverFrame } from "../presentation/contracts";
 import type { PresentedChronicleWindow } from "../presentation/selectors";
 import type { PresentationWorldStageProps } from "../renderer2d/production/PresentationWorldStage";
 import type { RendererSemanticSnapshot } from "../renderer2d/production/semantics";
+import type { AgentStatus } from "./schemas";
 import type { ObserverShellRuntime, ObserverShellSnapshot } from "./observer2d/observerShellRuntime";
 import { observerSafeFrameFromRects, Vivarium2DApp } from "./Vivarium2DApp";
 import { getProductionStageDebugProbe } from "../renderer2d/production/debug";
@@ -21,6 +22,9 @@ vi.mock("../renderer2d/production/PresentationWorldStage", () => ({
     return <section className="presentation-world-stage" aria-label="Production world" tabIndex={0} data-presented-cursor={frame.presentedCursor}
       data-requested-camera={props.cameraMode}
       data-resume-serial={props.resumeStorySerial}
+      data-follow-serial={props.followRequest?.serial ?? 0}
+      data-follow-subject={props.followRequest === null || props.followRequest === undefined
+        ? "" : props.followRequest.selection.id}
       data-safe-frame={JSON.stringify(props.safeFrame)}>
       <button type="button" onClick={() => props.callbacks?.onCameraAuthorityChange?.(true)}>
         Viewer takes the camera
@@ -34,12 +38,28 @@ vi.mock("../renderer2d/production/PresentationWorldStage", () => ({
       <button type="button" onClick={() => props.callbacks?.onSelectionChange?.({ kind: "agent", id: "aster" })}>
         Select world being
       </button>
+      <button type="button" onClick={() => props.callbacks?.onSelectionChange?.({ kind: "agent", id: "rhea" })}>
+        Select another world being
+      </button>
       <button type="button" onClick={() => props.callbacks?.onCameraModeChange?.(props.cameraMode ?? "story")}>
         Accept camera request
       </button>
       <button type="button" onClick={() => props.onCameraModeRequestRejected?.(props.cameraMode ?? "story")}>
         Reject camera request
       </button>
+      {/* What the renderer does when a resume-story SERIAL arrives: it releases
+          viewer authority and reports `story`, whatever mode was requested. */}
+      <button type="button" onClick={() => props.callbacks?.onCameraModeChange?.("story")}>
+        Report story framing
+      </button>
+      {/* What the renderer does with a follow LATCH: `setSelection` announces the
+          new selection, and the accepted camera mode comes back as `follow`. */}
+      <button type="button" onClick={() => {
+        const request = props.followRequest;
+        if (request === null || request === undefined) return;
+        props.callbacks?.onSelectionChange?.(request.selection);
+        props.callbacks?.onCameraModeChange?.("follow");
+      }}>Report follow latched</button>
       <button type="button" onClick={() => props.onObserveRegion?.("meadow")}>
         Announce observed region
       </button>
@@ -234,11 +254,15 @@ describe("Vivarium2DApp", () => {
     await act(async () => fixture.runtime.ready);
 
     expect(required<HTMLElement>(".observer-hud").textContent?.replace(/\s+/g, " ").trim())
-      .toBe("Meadow · Day 1, 12:00 AM · World totals: 1 living · 0 dead · 0 homes · 0 ruinsFramingStory");
+      .toBe("Meadow · Day 1, 12:00 AM · World totals: 1 living · 0 dead · 0 homes"
+        + " · 0 ruinsFramingStoryFollowAutomatic");
     // Framing is a PERSISTENT control on the status line, not a badge that
     // materialises over the art once the viewer has already been stranded. It is
     // present and inert while the story owns the camera.
     expect(required<HTMLButtonElement>(".observer-hud__framing").disabled).toBe(true);
+    // WHO the camera is on is the other half of that sentence, and equally
+    // persistent: a viewer learns where the control lives before they need it.
+    expect(required<HTMLSelectElement>(".observer-hud__follow-select").value).toBe("");
     // No run-lifecycle capability was granted to this fixture, so no way to end
     // a run is offered. The observer cannot reach a server by itself.
     expect(container.querySelector(".observer-hud__stop")).toBeNull();
@@ -340,6 +364,42 @@ describe("Vivarium2DApp", () => {
     expect(fixture.runtime.viewMoment).toHaveBeenCalledOnce();
     expect(fixture.runtime.viewMoment).toHaveBeenCalledWith(now.id);
     expect(container.innerHTML).not.toContain(now.id);
+  });
+
+  it("hands a card whose moment the shell no longer holds to the presentation, instead of dropping it", async () => {
+    // The second dead-click path: the Chronicle keeps a bounded window of moments while the feed's
+    // own event buffer outlives it, so a rewound feed can offer a card the shell cannot resolve.
+    // That used to be a bare `return` -- click, nothing, no reason given.
+    const forgotten = storyMoment("5:5:single", "home_built", { builder_id: "aster", region: "meadow" });
+    const kept = storyMoment("9:9:single", "self_talk", { agent_id: "aster" });
+    const fixture = runtimeFixture({ chronicle: chronicleWindow({ previous: [forgotten] }) });
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+
+    // The feed's own buffer retains 90s of events while the Chronicle keeps a bounded number of
+    // MOMENTS, so a busy world drops the moment out from under a card that is still on screen.
+    await act(async () => fixture.replaceChronicle(chronicleWindow({ previous: [kept] })));
+    const card = required<HTMLElement>("[data-event-cursor='5']");
+    await act(async () => card.click());
+    const cursor = 5;
+
+    expect(fixture.runtime.viewMoment).not.toHaveBeenCalled();
+    expect(fixture.runtime.viewCursor).toHaveBeenCalledWith(cursor);
+
+    // ...and what the presentation answers with is SHOWN. A navigation that cannot be satisfied
+    // has to say so; silence is the defect.
+    await act(async () => fixture.replaceFrame(Object.freeze({
+      ...presentedFrame(),
+      notices: Object.freeze([Object.freeze({
+        kind: "unreachable-moment" as const,
+        detail: "That moment has left the Chronicle. The Archive still holds it.",
+        firstCursor: cursor,
+        lastCursor: cursor,
+        count: 1,
+      })]),
+    })));
+    expect(required<HTMLElement>(".chronicle-killfeed__notices").textContent)
+      .toContain("That moment has left the Chronicle.");
   });
 
   it("keeps the latest settled moment visible after its scene completes", async () => {
@@ -568,6 +628,129 @@ describe("Vivarium2DApp", () => {
     expect(required<HTMLElement>(".vivarium-2d-app").getAttribute("data-camera-mode")).toBe("follow");
     expect(button("Follow")?.getAttribute("aria-pressed")).toBe("true");
     expect(fixture.runtime.setCameraMode).toHaveBeenCalledWith("follow");
+  });
+
+  it("names the being the viewer chose, after steering the view to where they are", async () => {
+    // The complaint this control exists for: `follow` worked, and told nobody
+    // who it was on. Choosing from the HUD must (1) bring that being's region up,
+    // (2) select them, and only THEN (3) ask the camera to follow -- the renderer
+    // resolves `follow` against the region it currently has mounted.
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+
+    expect([...followSelect().options].map((option) => option.textContent))
+      .toEqual(["Automatic", "Aster", "Rhea"]);
+
+    await chooseFollowSubject("aster");
+    expect(fixture.runtime.observeRegion).toHaveBeenCalledWith("meadow");
+    const stage = required<HTMLElement>('[aria-label="Production world"]');
+    expect(stage.getAttribute("data-follow-subject")).toBe("aster");
+    expect(Number(stage.getAttribute("data-follow-serial"))).toBe(1);
+
+    await click("Report follow latched");
+    expect(fixture.runtime.select).toHaveBeenCalledWith({ kind: "agent", id: "aster" });
+    expect(followSelect().value).toBe("aster");
+    expect(followSelect().selectedOptions[0]?.textContent).toBe("Aster");
+    expect(required<HTMLElement>(".observer-hud__follow").getAttribute("data-follow"))
+      .toBe("following");
+  });
+
+  it("keeps following a being across a border by re-observing the region they entered", async () => {
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+    await chooseFollowSubject("aster");
+    await click("Report follow latched");
+    vi.mocked(fixture.runtime.observeRegion).mockClear();
+
+    await act(async () => fixture.replaceWorld(twoRegionFrame({ asterRegion: "willow" })));
+
+    expect(fixture.runtime.observeRegion).toHaveBeenCalledWith("willow");
+    // Still theirs: a border crossing steers the view, it does not end a pursuit
+    // and it never silently swaps the subject for somebody else.
+    expect(followSelect().value).toBe("aster");
+    expect(followSelect().selectedOptions[0]?.textContent).toBe("Aster");
+    expect(container.querySelector(".observer-hud__follow-notice")).toBeNull();
+  });
+
+  it("says the followed being died and returns framing — it never re-aims in silence", async () => {
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+    await chooseFollowSubject("aster");
+    await click("Report follow latched");
+    const serialBefore = Number(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-resume-serial"));
+
+    await act(async () => fixture.replaceWorld(twoRegionFrame({ asterStatus: "dead" })));
+
+    expect(required<HTMLElement>(".observer-hud__follow-notice").textContent)
+      .toBe("Aster has died. Story framing resumed.");
+    expect(followSelect().value).toBe("");
+    expect(Number(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-resume-serial"))).toBe(serialBefore + 1);
+  });
+
+  it("offers the way back out of following as the first option, so it is never a trap", async () => {
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+    await chooseFollowSubject("aster");
+    await click("Report follow latched");
+    const serialBefore = Number(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-resume-serial"));
+
+    await chooseFollowSubject("");
+
+    // A serial, not a mode: the one request the renderer cannot deduplicate away.
+    expect(Number(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-resume-serial"))).toBe(serialBefore + 1);
+    // Until the renderer answers, the camera IS still latched to Aster, and the
+    // control says so rather than claiming an Automatic that has not happened.
+    expect(required<HTMLElement>(".observer-hud__follow").getAttribute("data-follow"))
+      .toBe("held");
+
+    await click("Report story framing");
+    expect(followSelect().value).toBe("");
+    expect(required<HTMLElement>(".observer-hud__follow").getAttribute("data-follow"))
+      .toBe("automatic");
+  });
+
+  it("adopts a being followed by hand, so the HUD's reading is true either way", async () => {
+    // Click a being on the canvas, then Follow in the World drawer: the path that
+    // existed before this control, and the one Safi could not read.
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+    await click("Select world being");
+    await click("World");
+    await click("Follow");
+    await click("Accept camera request");
+
+    expect(followSelect().selectedOptions[0]?.textContent).toBe("Aster");
+  });
+
+  it("re-names the subject when the viewer clicks somebody else mid-follow", async () => {
+    // The renderer re-latches a live follow on the spot; a HUD that kept naming
+    // the being the camera walked away from would be the original complaint back.
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+    await chooseFollowSubject("aster");
+    await click("Report follow latched");
+    expect(followSelect().selectedOptions[0]?.textContent).toBe("Aster");
+
+    await click("Select another world being");
+
+    expect(followSelect().value).toBe("rhea");
+    expect(followSelect().selectedOptions[0]?.textContent).toBe("Rhea");
   });
 
   it("drops a pending camera request before presenting the first frame of a replacement run", async () => {
@@ -1156,18 +1339,92 @@ function required<T extends Element>(selector: string): T {
   return value;
 }
 
+function followSelect(): HTMLSelectElement {
+  return required<HTMLSelectElement>(".observer-hud__follow-select");
+}
+
+async function chooseFollowSubject(value: string): Promise<void> {
+  const select = followSelect();
+  await act(async () => {
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+/** A world with art for two regions and a being in each, so a pursuit can happen. */
+function followRuntimeFixture(): ReturnType<typeof runtimeFixture> {
+  return runtimeFixture({
+    frame: twoRegionFrame(),
+    recipes: new Map([
+      ["meadow", {} as never],
+      ["willow", {} as never],
+    ]) as unknown as ObserverShellSnapshot["recipes"],
+  });
+}
+
+function twoRegionFrame(options: Readonly<{
+  asterRegion?: string;
+  asterStatus?: AgentStatus;
+}> = {}): PresentedObserverFrame {
+  const base = presentedFrame();
+  return Object.freeze({
+    ...base,
+    world: Object.freeze({
+      ...base.world,
+      agents: Object.freeze([
+        Object.freeze({
+          completeness: "exact" as const,
+          value: Object.freeze({
+            id: "aster",
+            name: "Aster",
+            status: options.asterStatus ?? "alive",
+            position: options.asterRegion ?? "meadow",
+          }),
+        }),
+        Object.freeze({
+          completeness: "exact" as const,
+          value: Object.freeze({
+            id: "rhea", name: "Rhea", status: "alive", position: "willow",
+          }),
+        }),
+      ]),
+      regions: Object.freeze([
+        Object.freeze({
+          completeness: "exact" as const,
+          value: Object.freeze({ name: "meadow", description: "A quiet green place", connections: [] }),
+        }),
+        Object.freeze({
+          completeness: "exact" as const,
+          value: Object.freeze({ name: "willow", description: "A shaded bend", connections: [] }),
+        }),
+      ]),
+    }),
+  });
+}
+
 function runtimeFixture(options: Readonly<{
   frame?: PresentedObserverFrame;
   chronicle?: PresentedChronicleWindow;
+  /**
+   * Region art this build can mount.
+   *
+   * Empty by default, which is what every case that predates the follow control
+   * assumed: with no art mounted anywhere there is nowhere for a camera to be
+   * sent, so the follow roster is empty and the HUD reads `Automatic`.
+   */
+  recipes?: ObserverShellSnapshot["recipes"];
 }> = {}): {
   readonly runtime: ObserverShellRuntime & Record<string, ReturnType<typeof vi.fn> | unknown>;
   readonly unsubscribe: ReturnType<typeof vi.fn>;
   readonly publish: () => void;
   readonly replaceFrame: (frame: PresentedObserverFrame) => void;
+  readonly replaceChronicle: (chronicle: PresentedChronicleWindow) => void;
+  /** A new world state on the SAME camera: what a live run publishes every tick. */
+  readonly replaceWorld: (frame: PresentedObserverFrame) => void;
   readonly advancePreviewBy: (deltaMs: number) => void;
 } {
   let frame = options.frame ?? presentedFrame();
-  const chronicle: PresentedChronicleWindow = options.chronicle ?? Object.freeze({
+  let chronicle: PresentedChronicleWindow = options.chronicle ?? Object.freeze({
     now: null,
     previous: Object.freeze([]),
     upcoming: Object.freeze([{ sequence: 1, regionId: "meadow", urgency: "ambient" as const }]),
@@ -1244,7 +1501,7 @@ function runtimeFixture(options: Readonly<{
     controls: null,
     diagnostics: initialDiagnostics,
     placement: {} as NonNullable<ObserverShellSnapshot["placement"]>,
-    recipes: new Map(),
+    recipes: options.recipes ?? new Map(),
     placementOwnerId: Symbol("test-placement"),
     placementGeneration: 1,
     cameraMode: "story",
@@ -1274,17 +1531,32 @@ function runtimeFixture(options: Readonly<{
     }),
     getSnapshot: vi.fn(() => snapshot),
     diagnostics: vi.fn(() => liveDiagnostics),
-    select: vi.fn(),
+    // The real session stores the selection ON the frame and republishes; the
+    // renderer resolves `follow` from exactly that, so a fixture that dropped it
+    // could not express a viewer following a being by hand.
+    select: vi.fn((next: PresentedObserverFrame["selection"]) => {
+      frame = Object.freeze({ ...frame, selection: next });
+      snapshot = Object.freeze({ ...snapshot, frame });
+      listener?.();
+    }),
     pause: vi.fn(),
     resume: vi.fn(),
     setSpeed: vi.fn(),
     holdCurrentMoment: vi.fn(),
     viewMoment: vi.fn(),
+    viewCursor: vi.fn(),
     retryRecovery: vi.fn(async () => undefined),
     reconnectStream: vi.fn(),
     setCameraMode: vi.fn(),
     requestFocus: vi.fn(),
-    observeRegion: vi.fn(),
+    // The real runtime records the observed region and republishes; the follow
+    // pursuit steers exactly this, so a fixture that dropped it could never show
+    // a pursuit completing.
+    observeRegion: vi.fn((regionId: string) => {
+      if (snapshot.observedRegionId === regionId) return;
+      snapshot = Object.freeze({ ...snapshot, observedRegionId: regionId });
+      listener?.();
+    }),
     openArchiveCatalogue: vi.fn(async () => undefined),
     loadOlderArchive: vi.fn(async () => undefined),
     enterArchiveCheckpoint: vi.fn(async () => undefined),
@@ -1299,6 +1571,16 @@ function runtimeFixture(options: Readonly<{
     replaceFrame: (next) => {
       frame = next;
       snapshot = Object.freeze({ ...snapshot, frame: next, cameraMode: "story" });
+      listener?.();
+    },
+    replaceChronicle: (next) => {
+      chronicle = next;
+      snapshot = Object.freeze({ ...snapshot, chronicle: next });
+      listener?.();
+    },
+    replaceWorld: (next) => {
+      frame = next;
+      snapshot = Object.freeze({ ...snapshot, frame: next });
       listener?.();
     },
     advancePreviewBy: (deltaMs) => {

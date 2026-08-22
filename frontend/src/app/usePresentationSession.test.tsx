@@ -168,6 +168,7 @@ class FakeSession implements PresentationSession {
       setSpeed: vi.fn(),
       holdCurrentMoment: vi.fn(),
       viewMoment: vi.fn(),
+      viewCursor: vi.fn(),
   };
   controls(): PresentationControls {
     return this.sessionControls;

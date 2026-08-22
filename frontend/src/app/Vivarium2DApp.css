@@ -133,6 +133,59 @@ body:has(.vivarium-2d-app) {
   cursor: default;
 }
 
+/*
+ * WHO the camera is on — the same label/value pair as FRAMING beside it, because
+ * the two readings are halves of one sentence: who holds the camera, and what it
+ * is pointed at. The select IS the reading, so the control is never a label the
+ * viewer has to open something to interpret.
+ */
+.observer-hud__follow {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.observer-hud__follow > span[aria-hidden] {
+  color: var(--observer-muted);
+  font-size: 0.55rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.observer-hud .observer-hud__follow-select {
+  max-width: 9.5rem;
+  padding: 2px 4px 2px 7px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+}
+
+/* Following is a state with somewhere to go back to, so it is the lit one. */
+.observer-hud__follow[data-follow="following"] .observer-hud__follow-select,
+.observer-hud__follow[data-follow="held"] .observer-hud__follow-select {
+  border-color: var(--observer-accent);
+  color: #ffe49b;
+}
+
+/* On the way to them, not with them yet: named, but not yet claimed. */
+.observer-hud__follow[data-follow="pending"] .observer-hud__follow-select {
+  border-color: #8a8e63;
+  color: #ded4a6;
+}
+
+/*
+ * Why a pursuit ended, said where the viewer is already looking. The polite
+ * announcer is screen-reader-only, and "the being you were following died" is
+ * exactly the kind of thing a watcher must be able to SEE.
+ */
+.observer-hud__follow-notice {
+  max-width: 18rem;
+  color: #f0d9a0;
+  font-size: 0.62rem;
+  line-height: 1.2;
+}
+
 .observer-hud__run {
   position: relative;
   display: inline-flex;
@@ -779,6 +832,9 @@ body:has(.vivarium-2d-app) {
     padding-left: 0;
     border-left: 0;
   }
+  /* A phone has no room for a reading and a reason on one line, so they stack. */
+  .observer-hud__follow { flex-wrap: wrap; }
+  .observer-hud__follow-notice { max-width: 100%; }
   /* A phone anchors the question to the screen, not to a control 300px wide. */
   .observer-run-confirm {
     position: fixed;

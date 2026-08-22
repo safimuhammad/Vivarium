@@ -10,6 +10,7 @@ import { claimObserverRendererSurface } from "../../presentation/rendererSurface
 import {
   type CameraMode,
   type FrameIdentity,
+  type MomentAnchor,
   type ObserverSelection,
   type PresentedObserverFrame,
   type SafeFrameInsets,
@@ -20,6 +21,7 @@ import type { FrameDriver, Rect, WakeScheduler } from "../contracts";
 import {
   createCamera,
   deriveSheetZoomBounds,
+  STORY_FIT_MAX_ZOOM,
   type CameraCheckpoint,
   type CameraRegionSheet,
   type CameraSnapshot,
@@ -262,6 +264,15 @@ export interface CanvasPresentationRendererDebug {
     holdUntilMs: number | null;
     holdRemainingMs: number | null;
   }> | null;
+  /**
+   * A journey to a past Chronicle moment that is still waiting for its region to mount, and how
+   * long it has left before it is abandoned. `null` whenever nothing is parked.
+   */
+  readonly momentTravel: Readonly<{
+    entityId: string | null;
+    regionId: string | null;
+    remainingMs: number;
+  }> | null;
   /** Exact integer origin used by the most recent Canvas draw transform. */
   readonly renderRasterOrigin: Vec2 | null;
   readonly postCommit: Readonly<{
@@ -439,6 +450,23 @@ function pulseKindFor(eventType: string | null): string {
   return "speech";
 }
 const DRAW_SAMPLE_COUNT = 120;
+/**
+ * How long the journey to a past Chronicle moment takes.
+ *
+ * The same order as the world-sheet descent, and for the same reason recorded there: a place you
+ * FALL toward reads as somewhere you went, while a cut reads as the view breaking. `Camera2D`
+ * arrives instantly when this is zero, which is what reduced motion passes.
+ */
+const MOMENT_TRAVEL_MS = 520;
+
+/**
+ * How long a parked journey waits for its region to arrive before giving up.
+ *
+ * Long enough for a cold atlas load on a slow machine; short enough that a viewer who has moved on
+ * is never hijacked by a journey they had forgotten asking for.
+ */
+const MOMENT_TRAVEL_ARRIVAL_MS = 8_000;
+
 const DIAGNOSTICS_INTERVAL_MS = 500;
 const MAX_STATIC_ART_DIAGNOSTICS = 16;
 const POST_COMMIT_RETRY_MS = 250;
@@ -840,6 +868,15 @@ export async function createCanvasPresentationRenderer(
   let viewerControlsCamera = false;
   /** Why the beat director last declined to frame -- diagnostics only, never behaviour. */
   let beatFramingSkip: string | null = "no-frame";
+  /**
+   * A journey to a past moment that is waiting for its region to arrive.
+   *
+   * Travel cannot frame what is not mounted: the anchor's bounds come from the scene graph, and
+   * the graph only holds the region on screen. So a cross-region journey starts the region load
+   * and parks here; every draw retries, and the deadline gives up quietly rather than leaving a
+   * stale journey armed to hijack the camera minutes later.
+   */
+  let pendingMomentTravel: Readonly<{ anchor: MomentAnchor; deadlineMs: number }> | null = null;
   /** The beat currently framed by the director, and the overlay clock its hold is bound to. */
   let beatFraming: Readonly<{
     momentId: string;
@@ -3049,6 +3086,7 @@ export async function createCanvasPresentationRenderer(
     if (acceptedFrame !== null && directorMayFrame()
       && !beatFramingIsHeld(acceptedFrame.scene?.momentId ?? null)) frameBeat(acceptedFrame);
     syncRegionSheet(nowMs);
+    settlePendingMomentTravel(nowMs);
     camera.update(deltaMs);
     if (cameraImpulse !== null && nowMs >= cameraImpulse.untilMs) cameraImpulse = null;
     context.imageSmoothingEnabled = false;
@@ -4952,6 +4990,148 @@ export async function createCanvasPresentationRenderer(
     loadRegion(frame, regionId, true, batch, regionId);
   };
 
+  /**
+   * The bounds a moment anchor points the camera at, if the world can show them.
+   *
+   * Ladder, most specific first: the being or structure the moment was about, then the region it
+   * happened in. Both are read from the scene graph, so both are `null` until that region is
+   * mounted -- which is why a cross-region journey has to wait (see
+   * {@link settlePendingMomentTravel}).
+   */
+  const momentAnchorTarget = (anchor: MomentAnchor): ProductionSceneHitTarget | null => {
+    const entity = anchor.entity;
+    const direct = entity === null
+      ? null
+      : graph.focusTarget({ kind: entity.kind, id: entity.id });
+    if (direct !== null) return direct;
+    return anchor.regionId === null
+      ? null
+      : graph.focusTarget({ kind: "region", id: anchor.regionId });
+  };
+
+  /**
+   * Frames a moment anchor the way the director frames a beat, leaving framing with the director.
+   *
+   * For the moment that IS the present tense: the camera moves to it, but authority stays where it
+   * was, so the next beat is not stranded behind a seizure the viewer never asked for. Viewing
+   * "now" must not knock the view off live -- the same rule the Chronicle feed applies to its own
+   * playhead when its leading card is clicked.
+   *
+   * Returns whether a target could be resolved; mutates the story focus and the camera.
+   */
+  const frameMomentAnchorForDirector = (anchor: MomentAnchor): boolean => {
+    const target = momentAnchorTarget(anchor);
+    if (target === null) return false;
+    storyFocusSelection = target.selection;
+    storyFocusOwnedByInteraction = true;
+    releaseViewerCameraControl();
+    camera.apply({
+      type: "story-target",
+      entityId: target.selectionKey,
+      target: target.worldBounds,
+    });
+    markDirty();
+    return true;
+  };
+
+  /**
+   * Flies the camera to a moment anchor as a VIEWER movement.
+   *
+   * `fly-to` is the one camera intent honoured while the viewer holds authority, precisely because
+   * it only ever exists because the viewer asked for it -- the same intent the world-sheet descent
+   * uses. A being or a shelter is framed at reading distance; a bare region is framed whole.
+   *
+   * Returns whether a target could be resolved; mutates the story focus and the camera.
+   */
+  const flyToMomentAnchor = (anchor: MomentAnchor): boolean => {
+    const target = momentAnchorTarget(anchor);
+    if (target === null) return false;
+    storyFocusSelection = target.selection;
+    storyFocusOwnedByInteraction = true;
+    const bounds = target.worldBounds;
+    camera.apply({
+      type: "fly-to",
+      center: { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 },
+      zoom: target.selection.kind === "region"
+        ? camera.minimumZoom()
+        : Math.max(camera.minimumZoom(), STORY_FIT_MAX_ZOOM),
+      durationMs: options.reducedMotion === true ? 0 : MOMENT_TRAVEL_MS,
+    });
+    markDirty();
+    return true;
+  };
+
+  /** Abandons a parked journey. Every newer viewer intent supersedes one. */
+  const clearPendingMomentTravel = (): void => {
+    pendingMomentTravel = null;
+  };
+
+  const parkMomentTravel = (anchor: MomentAnchor): void => {
+    pendingMomentTravel = Object.freeze({
+      anchor,
+      deadlineMs: frameDriver.now() + MOMENT_TRAVEL_ARRIVAL_MS,
+    });
+    markDirty();
+  };
+
+  /**
+   * Takes the viewer to a moment that is no longer the one on stage.
+   *
+   * THE FIX for the dead Chronicle click. A moment focus could previously only be resolved against
+   * the scene the renderer happened to be playing, so every card except the leading one published
+   * a focus request that resolved to nothing at all: no camera move, no message, no clue.
+   *
+   * Built from the world-sheet descent's recipe, because it is the same act. Authority first: the
+   * story director has to stop re-aiming the camera AND the visible region has to stop following
+   * the story, and both of those are gated on story mode, so the journey enters free mode exactly
+   * the way `setCameraMode("free")` does. Then the region, then the flight. The way back is the
+   * one that already exists on screen -- FRAMING Story, or `S`.
+   *
+   * Mutates camera authority, camera mode, the visible region and the story focus.
+   */
+  const travelToMoment = (anchor: MomentAnchor): void => {
+    clearPendingMomentTravel();
+    if (anchor.atLiveEdge) {
+      frameMomentAnchorForDirector(anchor);
+      return;
+    }
+    // Guarded on a frame being available because `beginObserveRegion` reports "not ready yet" as
+    // a retryable path failure, and the stage treats that as fatal enough to blank itself.
+    const arrivalRegionId = anchor.regionId !== null && anchor.regionId !== visibleRegionId
+      && recipes.has(anchor.regionId) && (acceptedFrame !== null || loading !== null)
+      ? anchor.regionId
+      : null;
+    // A moment with nowhere to be -- a world-scale beat, "the world wakes" -- must not move the
+    // view at all. The presentation has already told the viewer why it cannot be travelled to,
+    // and seizing the camera to show them somewhere arbitrary would be a second wrong answer.
+    if (arrivalRegionId === null && momentAnchorTarget(anchor) === null) return;
+    takeViewerCameraControl();
+    camera.apply({ type: "free-pan", deltaCss: { x: 0, y: 0 } });
+    if (arrivalRegionId !== null) {
+      parkMomentTravel(anchor);
+      beginObserveRegion(arrivalRegionId);
+      return;
+    }
+    flyToMomentAnchor(anchor);
+  };
+
+  /**
+   * Completes a parked journey once its region is on screen, or abandons it at its deadline.
+   *
+   * Runs on the draw clock, which is the clock every region commit ends on via `markDirty`.
+   */
+  const settlePendingMomentTravel = (nowMs: number): void => {
+    const parked = pendingMomentTravel;
+    if (parked === null) return;
+    const regionId = parked.anchor.regionId;
+    if ((regionId === null || visibleRegionId === regionId)
+      && flyToMomentAnchor(parked.anchor)) {
+      pendingMomentTravel = null;
+      return;
+    }
+    if (nowMs >= parked.deadlineMs) pendingMomentTravel = null;
+  };
+
   const reconcileLoadingIntentForCameraMode = (): void => {
     const generation = loading;
     if (generation === null) return;
@@ -5164,9 +5344,14 @@ export async function createCanvasPresentationRenderer(
     },
     focusSelection(next): void {
       if (disposed) return;
+      clearPendingMomentTravel();
       const resolved = next.kind === "moment"
         ? selectionForAcceptedMoment(next, acceptedFrame)
         : next;
+      if (resolved === null && next.kind === "moment" && next.anchor !== undefined) {
+        travelToMoment(next.anchor);
+        return;
+      }
       const target = resolved === null ? null : graph.focusTarget(resolved);
       if (target !== null) {
         storyFocusSelection = resolved;
@@ -5185,6 +5370,7 @@ export async function createCanvasPresentationRenderer(
       markDirty();
     },
     observeRegion(regionId): void {
+      clearPendingMomentTravel();
       beginObserveRegion(regionId);
     },
     setSafeFrame(insets): void {
@@ -5195,6 +5381,7 @@ export async function createCanvasPresentationRenderer(
     },
     setCameraMode(mode): void {
       if (disposed) return;
+      clearPendingMomentTravel();
       // Story and Follow are DIRECTOR modes; choosing either is the explicit request that ends
       // viewer authority. That request must be honoured even when the camera is nominally
       // already in that mode, because a viewer zoom takes authority WITHOUT changing the mode --
@@ -5245,6 +5432,7 @@ export async function createCanvasPresentationRenderer(
     },
     panCamera(deltaCss): void {
       if (disposed) return;
+      clearPendingMomentTravel();
       const was = camera.snapshot().mode;
       // Viewer intent: a pan is the plainest statement of "I am driving now".
       takeViewerCameraControl();
@@ -5257,6 +5445,7 @@ export async function createCanvasPresentationRenderer(
     },
     zoomCamera(factor, anchorCss): void {
       if (disposed) return;
+      clearPendingMomentTravel();
       // Viewer intent. Note a zoom deliberately does NOT change the camera mode, which is why
       // the release affordance has to work while the mode is unchanged (see `setCameraMode`).
       takeViewerCameraControl();
@@ -5503,6 +5692,13 @@ export async function createCanvasPresentationRenderer(
                 : Math.max(0, beatFraming.holdUntilMs - frameDriver.now()),
             },
         beatFramingSkip,
+        momentTravel: pendingMomentTravel === null
+          ? null
+          : {
+              entityId: pendingMomentTravel.anchor.entity?.id ?? null,
+              regionId: pendingMomentTravel.anchor.regionId,
+              remainingMs: Math.max(0, pendingMomentTravel.deadlineMs - frameDriver.now()),
+            },
         renderRasterOrigin: renderRasterOrigin === null ? null : { ...renderRasterOrigin },
         postCommit: {
           acceptancePending: pendingFrameAcceptance !== null,

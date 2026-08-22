@@ -19,6 +19,7 @@ import type {
 } from "./CheckpointFeed";
 import {
   type FrameIdentity,
+  type MomentAnchor,
   type ObserverSelection,
   type PresentedObserverFrame,
   type PresentationGap,
@@ -77,6 +78,16 @@ export interface PresentationControls {
   setSpeed(speed: PresentationSpeed): void;
   holdCurrentMoment(hold: boolean): void;
   viewMoment(momentId: string): void;
+  /**
+   * Views the moment that carries one event cursor.
+   *
+   * The Chronicle feed is an EVENT-level surface while navigation is
+   * moment-level, so the shell resolves a clicked card against the rows it was
+   * given and falls through to here when it finds none. Only the session still
+   * knows which moments it keeps, so it is the one layer that can tell a viewer
+   * honestly that the moment they clicked is gone rather than doing nothing.
+   */
+  viewCursor(cursor: number): void;
 }
 
 export interface PresentationSessionReset {
@@ -279,6 +290,27 @@ const MAX_GAPS = 32;
 const MAX_CONSEQUENCE_RECEIPT_OFFERS = 8;
 /** Bounded, so a forever-running session cannot accumulate notices without limit. */
 const MAX_RETAINED_NOTICES = 8;
+
+/**
+ * What a viewer is told when the moment they clicked has left the Chronicle.
+ *
+ * The Chronicle keeps {@link MAX_PREVIOUS_MOMENTS} settled moments; the feed's
+ * own event buffer outlives that, so a rewound feed can offer a card whose
+ * moment is already gone. Naming the Archive matters -- the run still has it,
+ * this view simply no longer does.
+ */
+const FORGOTTEN_MOMENT_NOTICE
+  = "That moment has left the Chronicle. The Archive still holds it.";
+
+/**
+ * What a viewer is told when the moment they clicked happened nowhere.
+ *
+ * A system beat with no region -- "the world wakes" -- is about the whole world
+ * rather than a place in it, so there is no view to fly to. Saying so beats a
+ * click that appears to do nothing.
+ */
+const PLACELESS_MOMENT_NOTICE
+  = "That moment belongs to the whole world, not to a place the view can travel to.";
 /**
  * Backoff for reopening a dropped stream and for un-latching a frozen recovery.
  *
@@ -570,6 +602,9 @@ class OwnedPresentationSession implements PresentationSession {
       },
       viewMoment: (momentId: string) => {
         if (!this.recoveryLocked) this.viewMoment(momentId);
+      },
+      viewCursor: (cursor: number) => {
+        if (!this.recoveryLocked) this.viewCursor(cursor);
       },
     });
   }
@@ -1614,16 +1649,95 @@ class OwnedPresentationSession implements PresentationSession {
     };
   }
 
+  /**
+   * Takes the viewer to one moment: selects it, and anchors it in the world.
+   *
+   * Selecting used to be ALL this did, which is why every Chronicle card that
+   * was not the moment on stage was a dead click -- the renderer's only way to
+   * resolve a moment focus was against the scene it was playing right then. The
+   * selection now carries a {@link MomentAnchor}: where the moment happened, and
+   * whether it is still the live edge. That is presentation knowledge (only this
+   * object still holds the moment), so this is where it is resolved.
+   *
+   * Mutates the selection and, when the moment cannot be reached, `notices`.
+   * Publishes an observer frame either way -- a viewer who clicked and got
+   * nothing is the exact defect this path exists to end.
+   */
   private viewMoment(momentId: string): void {
-    const moment = [this.owners?.director.getSnapshot().activeMoment ?? null, ...this.previous]
+    const active = this.owners?.director.getSnapshot().activeMoment ?? null;
+    const moment = [active, ...this.previous]
       .find((candidate) => candidate?.id === momentId) ?? null;
-    if (moment === null) return;
+    if (moment === null) {
+      this.publishUnreachableMoment(FORGOTTEN_MOMENT_NOTICE, null, null);
+      return;
+    }
+    const anchor = momentAnchor(moment, active, this.previous);
+    if (!anchor.atLiveEdge && anchor.entity === null && anchor.regionId === null) {
+      this.publishUnreachableMoment(
+        PLACELESS_MOMENT_NOTICE,
+        moment.firstCursor,
+        moment.lastCursor,
+      );
+    } else if (this.retireUnreachableMoment()) {
+      // The retirement has to reach the viewer even when the selection itself
+      // does not change -- clicking the same card twice -- which `select`
+      // deduplicates away before it would publish anything.
+      this.publishObserverFrame();
+    }
     this.select({
       kind: "moment",
       id: moment.id,
       firstCursor: moment.firstCursor,
       lastCursor: moment.lastCursor,
+      anchor,
     });
+  }
+
+  /**
+   * Resolves one event cursor to the moment that carries it, and views it.
+   *
+   * Reached only when the shell's own Chronicle rows did not cover the cursor --
+   * a card whose moment has already been evicted. Says so rather than returning
+   * silently, because a dead click with no explanation is indistinguishable from
+   * a broken one.
+   *
+   * Mutates the selection or `notices`; publishes an observer frame.
+   */
+  private viewCursor(cursor: number): void {
+    const active = this.owners?.director.getSnapshot().activeMoment ?? null;
+    const moment = [active, ...this.previous].find((candidate) => candidate !== null
+      && candidate.firstCursor <= cursor && cursor <= candidate.lastCursor) ?? null;
+    if (moment === null) {
+      this.publishUnreachableMoment(FORGOTTEN_MOMENT_NOTICE, cursor, cursor);
+      return;
+    }
+    this.viewMoment(moment.id);
+  }
+
+  /** Retains the unreachable-moment notice and publishes it on its own frame. */
+  private publishUnreachableMoment(
+    detail: string,
+    firstCursor: number | null,
+    lastCursor: number | null,
+  ): void {
+    if (this.disposed) return;
+    this.retainNotice({ kind: "unreachable-moment", detail, firstCursor, lastCursor, count: 1 });
+    this.publishObserverFrame();
+  }
+
+  /**
+   * Drops the unreachable-moment notice once a later request has succeeded.
+   *
+   * The other two notice kinds count faults the run absorbed and are meant to
+   * accumulate; this one describes the click a viewer just made, so leaving it
+   * standing over a navigation that worked would be its own small lie.
+   */
+  private retireUnreachableMoment(): boolean {
+    if (!this.notices.some((notice) => notice.kind === "unreachable-moment")) return false;
+    this.notices = Object.freeze(
+      this.notices.filter((notice) => notice.kind !== "unreachable-moment"),
+    );
+    return true;
   }
 
   private publishWhileAwayGap(): void {
@@ -1978,6 +2092,46 @@ function syntheticRun(snapshot: WorldSnapshot): RunMetadata {
       memory_root: "",
     },
   };
+}
+
+/**
+ * Where a moment happened and whether it is still the present tense.
+ *
+ * `focus` is the moment's own subject as the director resolved it, so an agent
+ * / home / ruin focus gives an exact anchor and a region or system focus gives
+ * only the place. `regionFor` already knows how to read a place out of every
+ * focus kind and out of the representative event, so it is reused verbatim.
+ */
+function momentAnchor(
+  moment: StoryMoment,
+  activeMoment: StoryMoment | null,
+  previous: readonly StoryMoment[],
+): MomentAnchor {
+  const focus = moment.focus;
+  const entity = focus.kind === "agent" || focus.kind === "home" || focus.kind === "ruin"
+    ? Object.freeze({ kind: focus.kind, id: focus.id })
+    : null;
+  return Object.freeze({
+    entity,
+    regionId: regionFor(moment),
+    atLiveEdge: activeMoment === null
+      ? newestMomentId(previous) === moment.id
+      : activeMoment.id === moment.id,
+  });
+}
+
+/**
+ * The newest moment the Chronicle still keeps, by the same ordering the shell's
+ * own "latest" cue uses: furthest cursor first, then time, then start.
+ */
+function newestMomentId(previous: readonly StoryMoment[]): string | null {
+  return previous.reduce<StoryMoment | null>((current, moment) => {
+    if (current === null) return moment;
+    if (moment.lastCursor !== current.lastCursor) {
+      return moment.lastCursor > current.lastCursor ? moment : current;
+    }
+    return moment.firstCursor > current.firstCursor ? moment : current;
+  }, null)?.id ?? null;
 }
 
 function regionFor(moment: StoryMoment): string | null {

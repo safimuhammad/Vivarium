@@ -2082,6 +2082,74 @@ describe("PresentationSession", () => {
     harness.session.dispose();
   });
 
+  it("anchors a viewed moment in the world, and says so when one cannot be reached", async () => {
+    // THE REGRESSION. Selecting was all `viewMoment` ever did, so the renderer had nothing to
+    // resolve a past moment's focus against and every Chronicle card but the live one was a
+    // silent dead click. And a card whose moment has been evicted said nothing at all.
+    const client = new FakeClient(
+      makeRun({ run_id: "run-a", event_cursor: 5 }),
+      [makeWorld({ run_id: "run-a", event_cursor: 5 })],
+    );
+    const harness = liveHarness(client);
+    await harness.session.ready;
+    await client.streams[0].emit(envelope([speak(6, "one"), speak(7, "two")], {
+      cursor: 5,
+      next_cursor: 7,
+    }));
+    harness.clock.advanceTo(200_000);
+    const controls = harness.session.controls();
+    const moment = harness.session.getChronicle().previous[0]!;
+
+    controls.viewMoment(moment.id);
+    expect(harness.session.getFrame().selection).toMatchObject({
+      kind: "moment",
+      id: moment.id,
+      anchor: { entity: { kind: "agent", id: "agent_001" }, regionId: "meadow" },
+    });
+    expect(harness.session.getFrame().notices ?? []).toEqual([]);
+
+    // A cursor no retained moment covers: the Chronicle keeps a bounded window while the feed's
+    // own event buffer outlives it, so a rewound feed can offer a card whose moment is gone.
+    controls.viewCursor(99_999);
+    expect(harness.session.getFrame().notices).toEqual([
+      expect.objectContaining({ kind: "unreachable-moment", count: 1 }),
+    ]);
+
+    // ...and the notice is retired the moment a later request succeeds, because unlike the other
+    // two notice kinds this one describes the click a viewer just made.
+    controls.viewCursor(moment.firstCursor);
+    expect(harness.session.getFrame().notices ?? []).toEqual([]);
+    expect(harness.session.getFrame().selection).toMatchObject({ kind: "moment", id: moment.id });
+    harness.session.dispose();
+  });
+
+  it("says a world-scale moment has no place to travel to, rather than doing nothing", async () => {
+    const client = new FakeClient(
+      makeRun({ run_id: "run-a", event_cursor: 5 }),
+      [makeWorld({ run_id: "run-a", event_cursor: 5 })],
+    );
+    const harness = liveHarness(client);
+    await harness.session.ready;
+    await client.streams[0].emit(envelope([worldBeat(6), speak(7, "after")], {
+      cursor: 5,
+      next_cursor: 7,
+    }));
+    harness.clock.advanceTo(200_000);
+    const worldMoment = harness.session.getChronicle().previous
+      .find((candidate) => candidate.focus.kind === "system");
+    expect(worldMoment).toBeDefined();
+
+    harness.session.controls().viewMoment(worldMoment!.id);
+    expect(harness.session.getFrame().selection).toMatchObject({
+      kind: "moment",
+      anchor: { entity: null, regionId: null },
+    });
+    expect(harness.session.getFrame().notices).toEqual([
+      expect.objectContaining({ kind: "unreachable-moment" }),
+    ]);
+    harness.session.dispose();
+  });
+
   it("honors snap-to-live as an explicit bounded recovery choice instead of replaying queued moments", async () => {
     const client = new FakeClient(
       makeRun({ run_id: "run-a", event_cursor: 4 }),
@@ -3303,6 +3371,34 @@ function envelope(
     overflow: false,
     snapshot_required: false,
     ...overrides,
+  };
+}
+
+/**
+ * A world-scale beat that belongs to no place -- "the world wakes".
+ *
+ * `focusFor` gives a system focus with no region for exactly this shape, which is the one moment
+ * kind the view genuinely cannot travel to.
+ */
+function worldBeat(cursor: number): EventEnvelopeEntry {
+  return {
+    cursor,
+    event: {
+      type: "simulation_started",
+      source: "system",
+      payload: {
+        message: "The world wakes.",
+        run_id: "run-a",
+        agent_count: 4,
+        world_time: cursor,
+      },
+      scope: "global",
+      region: null,
+      target: null,
+      timestamp: cursor,
+    },
+    resolved: {},
+    snapshot_after: null,
   };
 }
 

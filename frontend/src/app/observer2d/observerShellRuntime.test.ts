@@ -27,11 +27,51 @@ import type {
   ProductionArchiveObserverSessionBundle,
   ProductionObserverSessionBundle,
 } from "./createProductionObserverSession";
-import { createObserverShellRuntime } from "./observerShellRuntime";
+import { anchoredSelection, createObserverShellRuntime } from "./observerShellRuntime";
 import {
   createProductionCaptureClockFactoryForTest,
   registerProductionMountedRunReplacementForTest,
 } from "./productionCaptureTestSeam";
+
+describe("anchoredSelection", () => {
+  const anchor = Object.freeze({
+    entity: Object.freeze({ kind: "agent" as const, id: "aster" }),
+    regionId: "meadow",
+    atLiveEdge: false,
+  });
+
+  it("re-attaches the anchor the presentation resolved for the same moment", () => {
+    // Without this the renderer receives a moment it can only resolve against the scene it is
+    // playing right now, which is what made every past Chronicle card a dead click.
+    expect(anchoredSelection(
+      { kind: "moment", id: "5:5:single", firstCursor: 5, lastCursor: 5 },
+      { kind: "moment", id: "5:5:single", firstCursor: 5, lastCursor: 5, anchor },
+    )).toEqual({ kind: "moment", id: "5:5:single", firstCursor: 5, lastCursor: 5, anchor });
+  });
+
+  it("never borrows an anchor from a different moment, a non-moment, or nothing at all", () => {
+    const request = { kind: "moment", id: "5:5:single", firstCursor: 5, lastCursor: 5 } as const;
+    expect(anchoredSelection(request, {
+      kind: "moment", id: "9:9:single", firstCursor: 9, lastCursor: 9, anchor,
+    })).toBe(request);
+    expect(anchoredSelection(request, { kind: "agent", id: "aster" })).toBe(request);
+    expect(anchoredSelection(request, null)).toBe(request);
+  });
+
+  it("leaves an already-anchored request and every non-moment request untouched", () => {
+    const anchored = {
+      kind: "moment", id: "5:5:single", firstCursor: 5, lastCursor: 5, anchor,
+    } as const;
+    expect(anchoredSelection(anchored, {
+      kind: "moment", id: "5:5:single", firstCursor: 5, lastCursor: 5,
+      anchor: { entity: null, regionId: "grove", atLiveEdge: true },
+    })).toBe(anchored);
+    const agent = { kind: "agent", id: "aster" } as const;
+    expect(anchoredSelection(agent, {
+      kind: "moment", id: "5:5:single", firstCursor: 5, lastCursor: 5, anchor,
+    })).toBe(agent);
+  });
+});
 
 describe("ObserverShellRuntime", () => {
   afterEach(() => {
@@ -1009,6 +1049,7 @@ class FakeSession implements PresentationSession {
     setSpeed: vi.fn(),
     holdCurrentMoment: vi.fn(),
     viewMoment: vi.fn(),
+    viewCursor: vi.fn(),
   };
   readonly select = vi.fn((selection: ObserverSelection) => {
     this.current = { ...this.current, selection };

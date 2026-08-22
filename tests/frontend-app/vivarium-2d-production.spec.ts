@@ -157,7 +157,7 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
-test("mobile atlas and three- or four-trigger observer strips stay disjoint and own their hit targets", async ({ browser }) => {
+test("mobile atlas and the four-trigger observer strip stay disjoint and own their hit targets", async ({ browser }) => {
   test.setTimeout(60_000);
   for (const viewport of [
     { width: 390, height: 844 },
@@ -174,12 +174,14 @@ test("mobile atlas and three- or four-trigger observer strips stay disjoint and 
       ACTIVE_MOBILE_CHRONICLE_PATH,
     );
     try {
-      const viewShownMoment = page.locator("[data-story-now]")
-        .getByRole("button", { name: /^View shown moment / });
+      // The retired NOW card's "View shown moment" button now lives on the
+      // Chronicle's own leading entry, marked as the moment happening now.
+      const viewShownMoment = page.locator("[data-chronicle-now]")
+        .getByRole("button", { name: /^View shown moment/ });
       await expect(viewShownMoment).toHaveCount(0);
       assertMobileObserverChrome(
         await auditMobileObserverChrome(page),
-        3,
+        4,
         `${viewport.width}x${viewport.height} terminal`,
       );
 
@@ -362,10 +364,11 @@ async function auditMobileObserverChrome(page: Page): Promise<MobileObserverChro
     const edgeTriggers = Array.from(document.querySelectorAll<HTMLButtonElement>(
       ".observer-edge-triggers button",
     ));
-    const momentTrigger = document.querySelector<HTMLButtonElement>(".story-now > button");
-    const triggers = momentTrigger === null
-      ? edgeTriggers
-      : [...edgeTriggers, momentTrigger];
+    // The panel rail is the only thing audited for 44px ownership here. The
+    // Chronicle's own cards deliberately re-scope their tap targets for a dense
+    // overlay (see `ChronicleKillfeed.css`) and are covered by their own tests;
+    // folding them in would audit the overlay against the drawer's rule.
+    const triggers = edgeTriggers;
     const atlasControls = Array.from(document.querySelectorAll<HTMLButtonElement>(
       ".living-atlas-2d button",
     )).filter((control) => {
@@ -440,7 +443,7 @@ async function auditMobileObserverChrome(page: Page): Promise<MobileObserverChro
 
 function assertMobileObserverChrome(
   audit: MobileObserverChromeAudit,
-  expectedTriggerCount: 3 | 4,
+  expectedTriggerCount: number,
   label: string,
 ): void {
   expect(audit.atlasPresent, `${label} atlas`).toBe(true);

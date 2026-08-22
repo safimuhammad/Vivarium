@@ -37,6 +37,42 @@ export type StoryFocus =
   | { readonly kind: "agent" | "home" | "ruin" | "region"; readonly id: string }
   | { readonly kind: "system"; readonly regionId: string | null };
 
+/**
+ * WHERE a moment happened, carried with the moment so it can be navigated to
+ * after it has left the stage.
+ *
+ * A moment focus request used to be resolvable only against the scene the
+ * renderer happened to be playing at that instant, so every Chronicle card
+ * except the one on stage was a silent dead click: the handler fired, the focus
+ * request was published, and the renderer resolved it to nothing. The anchor is
+ * the moment's own place -- the being or structure its story focus named, and
+ * the region its evidence happened in -- resolved once by the presentation (the
+ * only layer that still holds the moment) and carried on the selection so the
+ * renderer can travel there long afterwards.
+ *
+ * Optional on the selection so every seam that predates it, and every caller
+ * that only means "select this moment", is unaffected.
+ */
+export interface MomentAnchor {
+  /** The being or structure the moment's story focus named, when it named one. */
+  readonly entity: Readonly<{
+    readonly kind: "agent" | "home" | "ruin";
+    readonly id: string;
+  }> | null;
+  /** The region the moment happened in, when its evidence named one. */
+  readonly regionId: string | null;
+  /**
+   * True while this moment is the world's present tense: the moment on stage,
+   * or -- between beats -- the newest one the Chronicle still keeps.
+   *
+   * Viewing the present must not take the camera away from the director, which
+   * is the same rule the Chronicle feed already applies to its own playhead when
+   * its leading card is clicked. Every other moment is a journey away from the
+   * live edge, and takes framing with it.
+   */
+  readonly atLiveEdge: boolean;
+}
+
 export type ObserverSelection =
   | { readonly kind: "agent" | "home" | "ruin" | "region"; readonly id: string }
   | {
@@ -44,6 +80,7 @@ export type ObserverSelection =
       readonly id: string;
       readonly firstCursor: number;
       readonly lastCursor: number;
+      readonly anchor?: MomentAnchor;
     }
   | null;
 
@@ -278,7 +315,16 @@ export interface PresentationNotice {
     /** Canvas never signed the receipt for a consequence frame; the barrier gave up. */
     | "canvas-receipt"
     /** A moment could not be resolved into a scene and was dropped, not performed. */
-    | "unpresentable-moment";
+    | "unpresentable-moment"
+    /**
+     * The viewer asked to be taken to a moment that cannot be reached: it has
+     * left what the Chronicle keeps, or it happened nowhere the world can show.
+     *
+     * Retired the instant a later request succeeds, because unlike the two
+     * faults above this one is about the click a viewer just made, not about a
+     * fault the run absorbed. A dead click IS the complaint this exists for.
+     */
+    | "unreachable-moment";
   /** One short, watcher-safe sentence. Never raw payload text. */
   readonly detail: string;
   readonly firstCursor: number | null;

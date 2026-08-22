@@ -67,6 +67,21 @@ describe("Vivarium 2D observer chrome visual contract", () => {
     expect(rule(".observer-hud .observer-hud__stop")).toMatch(/color:\s*#f0b49d/);
   });
 
+  it("names the camera's subject in the same label/value language as the framing", () => {
+    // Two halves of one sentence -- who holds the camera, and what it is on --
+    // so they must not read as two unrelated widgets.
+    expect(rule(".observer-hud__follow")).toMatch(/display:\s*inline-flex/);
+    expect(rule(".observer-hud__follow > span[aria-hidden]"))
+      .toMatch(/letter-spacing:\s*0\.14em/);
+    // Bounded: one long name must not push the status line off the world.
+    expect(rule(".observer-hud .observer-hud__follow-select")).toMatch(/max-width:\s*9\.5rem/);
+    expect(css).toMatch(
+      /\.observer-hud__follow\[data-follow="following"\][\s\S]*?border-color:\s*var\(--observer-accent\)/,
+    );
+    // Why a pursuit ended has to be SEEN; the polite announcer is invisible.
+    expect(rule(".observer-hud__follow-notice")).toMatch(/color:\s*#f0d9a0/);
+  });
+
   it("asks the irreversible question on a panel anchored to the control that opened it", () => {
     expect(rule(".observer-run-confirm")).toMatch(/position:\s*absolute/);
     expect(rule(".observer-run-confirm")).toMatch(/top:\s*calc\(100% \+ 8px\)/);
