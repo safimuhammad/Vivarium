@@ -40,6 +40,11 @@ function block(selectorFragment: string): string {
   return bodyFrom(CSS.indexOf("{", index), selectorFragment);
 }
 
+/** The same, with the comments stripped: what the browser will actually read. */
+function declarations(selectorFragment: string): string {
+  return block(selectorFragment).replace(/\/\*[\s\S]*?\*\//gu, "");
+}
+
 /** The declaration block that *contains* a given declaration. */
 function blockDeclaring(declaration: string): string {
   const index = CSS.indexOf(declaration);
@@ -51,7 +56,9 @@ describe("killfeed band geometry", () => {
   it("declares the rail, the band and the gap once, and derives the reserve from them", () => {
     const declared = blockDeclaring("--killfeed-reserve:");
     expect(declared).toMatch(/--killfeed-rail:\s*52px/u);
-    expect(declared).toMatch(/--killfeed-band:\s*min\(20rem, 26vw\)/u);
+    // Owner direction: the band is 10-20% of the viewport. The clamp bounds are a
+    // legibility floor and a restraint ceiling; 18vw is the width itself.
+    expect(declared).toMatch(/--killfeed-band:\s*clamp\(15rem, 18vw, 22rem\)/u);
     // A gap of zero would put the yielding surface flush against the band; the
     // defect was a NEGATIVE gap, so this is the invariant that broke.
     const gap = /--killfeed-gap:\s*(\d+)px/u.exec(declared);
@@ -70,15 +77,40 @@ describe("killfeed band geometry", () => {
   });
 
   it("makes every surface that yields to the band reserve the WHOLE band", () => {
-    const yielding = block(":is(.dialogue-now, .story-now)");
+    const yielding = block(".vivarium-2d-app:has(.chronicle-killfeed) .dialogue-now");
     expect(yielding).toMatch(/right:\s*calc\(var\(--killfeed-reserve\)/u);
     expect(yielding).toContain("var(--killfeed-reserve)");
     // The 23rem that put "View moment" under the feed must not come back.
     expect(yielding).not.toMatch(/right:\s*\d+(\.\d+)?rem/u);
   });
+
+  it("no longer reserves anything for the retired NOW card", () => {
+    // The card that used to share the narrative slot was removed, so nothing in
+    // this stylesheet may still be tuned against it.
+    expect(CSS).not.toContain(".story-now");
+  });
 });
 
 describe("killfeed flow sizing", () => {
+  it("gives the flow the WHOLE column rather than a hand-tuned viewport fraction", () => {
+    const flow = declarations(".chronicle-killfeed .chronicle-killfeed__flow {");
+    // Growth, not a fraction: the drawer's own height is definite (it is inset
+    // top and bottom), so `flex: 1 1 auto` still resolves a definite box for
+    // `fittingCount` to measure -- it is simply the room actually available.
+    expect(flow).toMatch(/flex:\s*1 1 auto/u);
+    expect(flow).not.toMatch(/height:\s*\d+vh/u);
+    // Its parent zone has to grow too, or the flow grows into nothing.
+    expect(CSS).toMatch(
+      /\.chronicle-killfeed\.observer-drawer > \.chronicle-killfeed__bottom \{\s*flex:\s*1 1 auto;/u,
+    );
+  });
+
+  it("keeps a phone's band bounded so the drawer cannot eat the world", () => {
+    const mobile = CSS.slice(CSS.indexOf("@media (max-width: 760px)"));
+    expect(mobile).toMatch(/\.chronicle-killfeed__flow \{[^}]*flex:\s*none/u);
+    expect(mobile).toMatch(/\.chronicle-killfeed__flow \{[^}]*height:\s*34vh/u);
+  });
+
   it("never shrinks a card below its own content", () => {
     const flowChildren = block(".chronicle-killfeed__flow > *");
     expect(flowChildren).toMatch(/flex:\s*none/u);

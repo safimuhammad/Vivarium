@@ -136,6 +136,94 @@ function button(label: string): HTMLButtonElement {
   return found;
 }
 
+describe("ChronicleKillfeed leading edge", () => {
+  // The Chronicle absorbed the retired bottom-right NOW card (owner direction,
+  // Safi, 2026-08-22: one UI, not two). These cases are that card's contract,
+  // re-proved on the surface that took it over.
+  const twoEvents = () => makeStream([
+    [0, [entry(1, "speak", {}, { actor_id: "wanderer_001", region: "nirvana" })]],
+    [4_000, [entry(2, "home_built", {}, { actor_id: "wanderer_003", region: "nirvana" })]],
+  ]);
+
+  it("marks the newest entry NOW while it belongs to the moment still playing", async () => {
+    const stream = twoEvents();
+    await render({
+      ...defaultProps(stream),
+      activeMomentRange: { firstCursor: 2, lastCursor: 2 },
+    });
+
+    const marked = [...container.querySelectorAll("[data-chronicle-now]")];
+    expect(marked).toHaveLength(1);
+    expect(marked[0]!.getAttribute("data-event-cursor")).toBe("2");
+    expect(marked[0]!.getAttribute("data-chronicle-now")).toBe("Now");
+    expect(marked[0]!.getAttribute("aria-current")).toBe("true");
+    expect(marked[0]!.textContent).toContain("Now");
+  });
+
+  it("calls the newest entry LATEST when no moment is playing", async () => {
+    await render({ ...defaultProps(twoEvents()), activeMomentRange: null });
+    const marked = container.querySelector("[data-chronicle-now]");
+    expect(marked?.getAttribute("data-chronicle-now")).toBe("Latest");
+  });
+
+  it("calls it LATEST when the newest entry is outside the playing moment", async () => {
+    await render({
+      ...defaultProps(twoEvents()),
+      activeMomentRange: { firstCursor: 1, lastCursor: 1 },
+    });
+    expect(container.querySelector("[data-chronicle-now]")?.getAttribute("data-chronicle-now"))
+      .toBe("Latest");
+  });
+
+  it("views the leading moment WITHOUT rewinding off live", async () => {
+    // Every other card seeks back a beat so the viewer sees the event arrive.
+    // Doing that to the present tense would drop the feed behind live and hang a
+    // "Behind live" banner over a viewer who only asked to look at now.
+    const stream = twoEvents();
+    const props = defaultProps(stream);
+    await render({ ...props, activeMomentRange: { firstCursor: 2, lastCursor: 2 } });
+
+    const leading = container.querySelector<HTMLElement>("[data-chronicle-now]")!;
+    await act(async () => leading.querySelector<HTMLButtonElement>(
+      ".chronicle-killfeed__replay",
+    )!.click());
+
+    expect(props.onViewCursor).toHaveBeenCalledOnce();
+    expect(props.onViewCursor).toHaveBeenCalledWith(2);
+    expect(container.querySelector(".chronicle-killfeed__behind")).toBeNull();
+    expect(container.querySelector(".chronicle-killfeed__live")?.getAttribute("aria-pressed"))
+      .toBe("true");
+  });
+
+  it("still rewinds for an older card, and then marks nothing as now", async () => {
+    const stream = twoEvents();
+    const props = defaultProps(stream);
+    await render({ ...props, activeMomentRange: { firstCursor: 2, lastCursor: 2 } });
+
+    const older = container.querySelector<HTMLElement>("[data-event-cursor='1']")!;
+    await act(async () => older.querySelector<HTMLButtonElement>(
+      ".chronicle-killfeed__replay",
+    )!.click());
+
+    expect(props.onViewCursor).toHaveBeenCalledWith(1);
+    // Rewound: the newest card on screen is one the viewer chose to look at, not
+    // the world's current moment, so nothing may claim to be the present tense.
+    expect(container.querySelector(".chronicle-killfeed__behind")).not.toBeNull();
+    expect(container.querySelector("[data-chronicle-now]")).toBeNull();
+  });
+
+  it("navigates the world exactly once per press, not once per nested handler", async () => {
+    const stream = twoEvents();
+    const props = defaultProps(stream);
+    await render({ ...props, activeMomentRange: null });
+    const leading = container.querySelector<HTMLElement>("[data-chronicle-now]")!;
+    await act(async () => leading.querySelector<HTMLButtonElement>(
+      ".chronicle-killfeed__replay",
+    )!.click());
+    expect(props.onViewCursor).toHaveBeenCalledOnce();
+  });
+});
+
 describe("ChronicleKillfeed", () => {
   // The pill used to read only `playhead.atLive` — a position in the buffer — so it
   // said LIVE over a finished run, a dead socket and a frozen stage alike. That is

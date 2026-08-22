@@ -12,15 +12,28 @@ afterEach(() => {
 });
 
 describe("chronicle surface preference", () => {
-  it("starts closed for a viewer who has never touched it", () => {
-    expect(readChronicleSurfacePreference()).toBe(false);
+  it("starts OPEN for a viewer who has never touched it", () => {
+    expect(readChronicleSurfacePreference()).toBe(true);
   });
 
   it("round-trips the viewer's own choice", () => {
-    writeChronicleSurfacePreference(true);
-    expect(readChronicleSurfacePreference()).toBe(true);
     writeChronicleSurfacePreference(false);
     expect(readChronicleSurfacePreference()).toBe(false);
+    writeChronicleSurfacePreference(true);
+    expect(readChronicleSurfacePreference()).toBe(true);
+  });
+
+  it("never inherits the retired default from a stale pre-v2 value", () => {
+    // Every viewer who closed the old feed left `"false"` behind under the old
+    // key. Reading it would hand them the retired closed-by-default forever,
+    // because "closed" and "chose closed" are the same three characters.
+    localStorage.setItem("vivarium.observer.chronicle-open", "false");
+    expect(readChronicleSurfacePreference()).toBe(true);
+  });
+
+  it("treats an unrecognised stored value as the default rather than as closed", () => {
+    localStorage.setItem("vivarium.observer.chronicle-open.v2", "yes");
+    expect(readChronicleSurfacePreference()).toBe(true);
   });
 
   it("degrades to the default rather than throwing when storage is unavailable", () => {
@@ -31,7 +44,7 @@ describe("chronicle surface preference", () => {
       throw new Error("quota exceeded");
     });
     expect(() => writeChronicleSurfacePreference(true)).not.toThrow();
-    expect(readChronicleSurfacePreference()).toBe(false);
+    expect(readChronicleSurfacePreference()).toBe(true);
   });
 });
 

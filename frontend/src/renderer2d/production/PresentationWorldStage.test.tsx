@@ -361,6 +361,94 @@ describe("PresentationWorldStage", () => {
     expect(disposed.dispose).not.toHaveBeenCalled();
   });
 
+  it("hands the camera back from a ZOOM, where no mode ever changed", async () => {
+    // The defect the retired "Resume story framing" badge died of. A viewer zoom
+    // takes framing authority WITHOUT changing the camera mode, so a shell that
+    // mirrors the mode still reads `story` -- and every dedup on the way here
+    // (the shell's, and this file's own `requestCameraMode`) swallowed the
+    // `story` request. The renderer's `setCameraMode("story")` is the one entry
+    // point that knows a same-mode request still releases, and the serial is
+    // what reaches it. Without this the viewer is stranded with no way back.
+    const renderer = makeRenderer();
+    createRenderer.mockResolvedValue(renderer);
+    const source = makeSource(frame(1));
+    givenCanvasBounds();
+
+    await act(async () => root?.render(stage(source, {
+      cameraMode: "story",
+      resumeStorySerial: 0,
+    })));
+    await settle();
+    expect(renderer.setCameraMode).not.toHaveBeenCalled();
+
+    // The zoom. No mode change follows it, exactly as in production.
+    await act(async () => {
+      const canvas = container.querySelector("canvas")!;
+      canvas.dispatchEvent(new WheelEvent("wheel", {
+        deltaY: -240, ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(renderer.zoomCamera).toHaveBeenCalled();
+    expect(renderer.setCameraMode).not.toHaveBeenCalled();
+
+    await act(async () => root?.render(stage(source, {
+      cameraMode: "story",
+      resumeStorySerial: 1,
+    })));
+    expect(renderer.setCameraMode).toHaveBeenCalledWith("story");
+  });
+
+  it("asks once per serial, and never for a serial it has already served", async () => {
+    const renderer = makeRenderer();
+    createRenderer.mockResolvedValue(renderer);
+    const source = makeSource(frame(1));
+    await act(async () => root?.render(stage(source, { resumeStorySerial: 3 })));
+    await settle();
+    // The serial a stage MOUNTS with is history, not a request.
+    expect(renderer.setCameraMode).not.toHaveBeenCalled();
+
+    await act(async () => root?.render(stage(source, { resumeStorySerial: 4 })));
+    expect(renderer.setCameraMode).toHaveBeenCalledTimes(1);
+    await act(async () => root?.render(stage(source, { resumeStorySerial: 4 })));
+    expect(renderer.setCameraMode).toHaveBeenCalledTimes(1);
+    await act(async () => root?.render(stage(source, { resumeStorySerial: 5 })));
+    expect(renderer.setCameraMode).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(renderer.setCameraMode).mock.calls).toEqual([["story"], ["story"]]);
+  });
+
+  it("keeps the S key on the same release path, not on the deduplicating one", async () => {
+    const renderer = makeRenderer();
+    createRenderer.mockResolvedValue(renderer);
+    await mount(makeSource(frame(1)));
+
+    await act(async () => {
+      container.querySelector("canvas")!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", bubbles: true, cancelable: true }),
+      );
+    });
+    expect(renderer.setCameraMode).toHaveBeenCalledWith("story");
+  });
+
+  it("offers no camera badge of its own over the world", async () => {
+    // Owner direction (Safi, asked twice, decided 2026-08-22): the cream
+    // "You are steering the view." pill is gone from the art. The reading lives
+    // in the persistent HUD instead, and the way back is proved above.
+    const renderer = makeRenderer();
+    createRenderer.mockResolvedValue(renderer);
+    givenCanvasBounds();
+    await mount(makeSource(frame(1)));
+    await act(async () => {
+      const canvas = container.querySelector("canvas")!;
+      canvas.dispatchEvent(new WheelEvent("wheel", {
+        deltaY: -240, ctrlKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(renderer.zoomCamera).toHaveBeenCalled();
+    expect(container.textContent).not.toContain("You are steering the view.");
+    expect(container.textContent).not.toContain("Resume story framing");
+    expect(container.querySelector(".presentation-world-stage__camera-release")).toBeNull();
+  });
+
   it("does not install a cast-only visibility listener; the concrete renderer remains its sole owner", async () => {
     const add = vi.spyOn(document, "addEventListener");
     await mount(makeSource(frame(1)));
@@ -1131,6 +1219,7 @@ function stage(
     focusRequest?: Readonly<{ serial: number; selection: Exclude<ObserverSelection, null> }> | null;
     observedRegionId?: string | null;
     onCameraModeRequestRejected?: (mode: CameraMode) => void;
+    resumeStorySerial?: number;
     regionOrder?: readonly string[];
     activeMomentId?: string | null;
     onViewMoment?: (momentId: string) => void;
@@ -1153,6 +1242,7 @@ function stage(
       focusRequest={options.focusRequest}
       observedRegionId={options.observedRegionId}
       onCameraModeRequestRejected={options.onCameraModeRequestRejected}
+      resumeStorySerial={options.resumeStorySerial}
       regionOrder={options.regionOrder}
       activeMomentId={options.activeMomentId}
       onViewMoment={options.onViewMoment}
@@ -1188,6 +1278,20 @@ function makeSource(initial: PresentedObserverFrame, order?: string[]) {
     },
   };
   return source;
+}
+
+/**
+ * Gives the canvas a real box, because jsdom lays nothing out.
+ *
+ * `wheelNavigationIntent` refuses an input whose viewport is zero-sized, so
+ * without this a dispatched wheel event is silently inert and a test that
+ * believes it zoomed proves nothing.
+ */
+function givenCanvasBounds(width = 1_200, height = 800): void {
+  vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue({
+    x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height,
+    toJSON: () => ({}),
+  } as DOMRect);
 }
 
 function makeRenderer(order?: string[]): ObserverRendererPort {

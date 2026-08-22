@@ -23,7 +23,10 @@ afterEach(async () => {
   vi.resetModules();
 });
 
+let productionProps: { readonly runLifecycle?: unknown }[] = [];
+
 async function renderApp(search: string) {
+  productionProps = [];
   window.history.replaceState({}, "", `/${search}`);
   const livingImport = vi.fn();
   const sliceImport = vi.fn();
@@ -39,7 +42,12 @@ async function renderApp(search: string) {
   });
   vi.doMock("./Vivarium2DApp", () => {
     productionImport();
-    return { Vivarium2DApp: () => <main data-testid="vivarium-2d-production" /> };
+    return {
+      Vivarium2DApp: (props: { readonly runLifecycle?: unknown }) => {
+        productionProps.push(props);
+        return <main data-testid="vivarium-2d-production" />;
+      },
+    };
   });
   vi.doMock("./gateway/GatewayApp", () => {
     gatewayImport();
@@ -60,6 +68,22 @@ describe("App renderer boundary", () => {
     expect(imports.livingImport).not.toHaveBeenCalled();
     expect(imports.productionImport).not.toHaveBeenCalled();
     expect(imports.gatewayImport).not.toHaveBeenCalled();
+  });
+
+  it("grants the deep-linked observer permission to end the run it is watching", async () => {
+    // The observer cannot reach the server by itself (its closure is proved free
+    // of every request verb and endpoint), so a route that mounts it and hands
+    // it nothing leaves a viewer with a world they cannot stop -- which is the
+    // state the live view was in until now.
+    await renderApp("?renderer=2d");
+
+    const granted = productionProps.at(-1)?.runLifecycle as
+      | { stop?: unknown; getLifecycle?: unknown }
+      | undefined;
+    expect(typeof granted?.stop).toBe("function");
+    expect(typeof granted?.getLifecycle).toBe("function");
+    // And nothing wider than that: no way to START a run from the observer.
+    expect(Object.keys(granted ?? {}).sort()).toEqual(["getLifecycle", "stop"]);
   });
 
   it("mounts only the production 2d observer for the exact route", async () => {

@@ -62,6 +62,23 @@ export interface PresentationWorldStageProps {
     selection: Exclude<ObserverSelection, null>;
   }> | null;
   readonly observedRegionId?: string | null;
+  /**
+   * Monotonic "give the camera back to the director" request.
+   *
+   * A serial rather than a mode, because a shell cannot express this as a mode
+   * change: a viewer ZOOM takes camera authority without altering the camera
+   * mode (see `CanvasPresentationRenderer.zoomCamera`), so the mode still reads
+   * `story` and every dedup between a shell and the renderer swallows a `story`
+   * request — this file's own `requestCameraMode` returns early on an unchanged
+   * mode, and a shell that mirrors the mode does the same. That is why the
+   * retired "Resume story framing" badge was inert for a viewer who had only
+   * zoomed. Bumping a serial cannot be deduplicated, and the effect it drives
+   * calls the renderer's `setCameraMode("story")` directly — the one entry point
+   * that knows a same-mode request still releases viewer authority.
+   *
+   * Increase it to ask; never decrease it.
+   */
+  readonly resumeStorySerial?: number;
   readonly onCameraModeRequestRejected?: (mode: CameraMode) => void;
   readonly regionOrder?: readonly string[];
   readonly activeMomentId?: string | null;
@@ -110,6 +127,7 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
   const onViewMomentRef = useRef(props.onViewMoment);
   const onObserveRegionRef = useRef(props.onObserveRegion);
   const onSemanticSnapshotRef = useRef(props.onSemanticSnapshot);
+  const resumeStorySerialRef = useRef(props.resumeStorySerial ?? 0);
   const restoreCanvasFocusRef = useRef(false);
   const highestFocusSerialRef = useRef(props.focusRequest?.serial ?? Number.NEGATIVE_INFINITY);
   const controlsRef = useRef<StageObserverControls | null>(null);
@@ -198,6 +216,15 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
     controls.renderer.observeRegion(regionId);
     controls.observedRegionId = regionId;
   }, [props.observedRegionId]);
+
+  useEffect(() => {
+    const controls = controlsRef.current;
+    const serial = props.resumeStorySerial ?? 0;
+    if (controls === null || !controls.frameAccepted
+      || serial <= resumeStorySerialRef.current) return;
+    resumeStorySerialRef.current = serial;
+    resumeStoryFraming(controls);
+  }, [props.resumeStorySerial]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -595,12 +622,6 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
     };
   }, [generation, props.atlasCommitScheduler, props.atlasPool, props.capture, props.placement, props.recipes, props.frameAcceptance, props.onSceneSignals, props.reducedMotion]);
 
-  const resumeStoryFraming = (): void => {
-    const controls = controlsRef.current;
-    if (controls === null || !controls.frameAccepted) return;
-    requestCameraMode(controls, "story", cameraModeRequestRejectedRef.current);
-  };
-
   const leaveRegion = (): void => {
     const controls = controlsRef.current;
     if (controls === null || !controls.frameAccepted) return;
@@ -634,14 +655,6 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
           </button>
         </p>
       ) : null}
-      {viewerControlsCamera ? (
-        <p className="presentation-world-stage__camera-release" role="status">
-          <span>You are steering the view.</span>
-          <button type="button" onClick={resumeStoryFraming}>
-            Resume story framing (S)
-          </button>
-        </p>
-      ) : null}
       {failure !== null ? (
         <section className="presentation-world-stage__failure" role="alert">
           <p>{failure}</p>
@@ -669,7 +682,7 @@ function handleCanvasKey(
   // Escape is deliberately absent here: it is owned once, at the window (see `onWindowKeyDown`), so
   // it works before the canvas has ever been touched and cannot fire twice for one press.
   if (key === "s") {
-    requestCameraMode(controls, "story", onCameraRejected);
+    resumeStoryFraming(controls);
     return true;
   }
   if (key === "f") {
@@ -762,6 +775,27 @@ function isCurrentSourceFrame(
     && current.revision === accepted.revision
     && current.firstCursor === accepted.firstCursor
     && current.lastCursor === accepted.lastCursor;
+}
+
+/**
+ * Give the camera back to the director, whatever mode it is nominally in.
+ *
+ * The renderer's `setCameraMode("story")` is the single explicit release (see
+ * `releaseViewerCameraControl`) and it already knows that a same-mode request
+ * still releases viewer authority. This helper exists because everything
+ * *between* the viewer and that method deduplicates on the mode, and a viewer
+ * who took the camera by zooming never changed the mode — so a `story` request
+ * from a shell or from the S key was dropped before it arrived, stranding them.
+ * Both callers therefore skip {@link requestCameraMode} and speak to the
+ * renderer directly.
+ *
+ * Side effects: releases viewer camera authority in the renderer, which
+ * publishes `onCameraAuthorityChange(false)` and `onCameraModeChange("story")`.
+ */
+function resumeStoryFraming(controls: StageObserverControls): void {
+  controls.requestedCameraMode = "story";
+  controls.pendingCameraMode = null;
+  controls.renderer.setCameraMode("story");
 }
 
 function requestCameraMode(

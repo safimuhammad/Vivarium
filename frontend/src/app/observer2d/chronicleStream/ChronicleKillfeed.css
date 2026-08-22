@@ -27,11 +27,20 @@
  * the narrative NOW card reserved `right: 23rem`. The card therefore overlapped
  * the band by 4px and its "View moment" button survived only on the card's own
  * padding. One set of numbers, one reserve, and a real gap.
+ *
+ * The band is now a FRACTION of the viewport rather than a fixed 20rem (owner
+ * direction, Safi, 2026-08-22: "10–20% of viewport width"). 18vw sits inside
+ * that range on every desktop width and scales with the display instead of
+ * eating a fifth of a laptop and a tenth of a monitor. The clamp is a
+ * legibility floor and a restraint ceiling, not a second opinion about the
+ * width: 15rem engages only below 1200px (where the world is small enough that
+ * the mobile rules are one step away) and 22rem only above 1956px (where 18%
+ * would be a column of whitespace).
  */
 .vivarium-2d-app:has(.chronicle-killfeed),
 .chronicle-killfeed.observer-drawer {
   --killfeed-rail: 52px;
-  --killfeed-band: min(20rem, 26vw);
+  --killfeed-band: clamp(15rem, 18vw, 22rem);
   --killfeed-gap: 14px;
   --killfeed-reserve: calc(var(--killfeed-rail) + var(--killfeed-band) + var(--killfeed-gap));
 }
@@ -80,6 +89,10 @@
  * Two zones: the standing strip is pinned to the top, and the flow, its lens and
  * the transport cluster hug the bottom -- so a new card enters right beside the
  * controls and travels upward, which is the killfeed's whole shape.
+ *
+ * The bottom zone takes every pixel the strip does not, because the flow inside
+ * it is now sized by GROWTH rather than by a hand-tuned viewport fraction (see
+ * `.chronicle-killfeed__flow`).
  */
 .chronicle-killfeed.observer-drawer > .chronicle-killfeed__top,
 .chronicle-killfeed.observer-drawer > .chronicle-killfeed__bottom {
@@ -89,7 +102,12 @@
   min-height: 0;
 }
 
-.chronicle-killfeed.observer-drawer > .chronicle-killfeed__bottom { justify-content: flex-end; }
+.chronicle-killfeed.observer-drawer > .chronicle-killfeed__top { flex: 0 0 auto; }
+
+.chronicle-killfeed.observer-drawer > .chronicle-killfeed__bottom {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+}
 
 /*
  * The container never takes a click; its opaque parts each opt back in.
@@ -165,14 +183,18 @@ select) {
  * The old drawer was opaque and simply covered the dialogue caption; a
  * transparent overlay cannot, so the caption has to end before the band starts
  * or the two read as one smeared block. Only applies while the feed is open.
+ *
+ * The slot used to hold the NOW card as well. That card is gone (owner
+ * direction, Safi, 2026-08-22 — it duplicated this feed's job), so the dialogue
+ * caption is the only surface left that has to yield.
  */
-.vivarium-2d-app:has(.chronicle-killfeed) :is(.dialogue-now, .story-now) {
+.vivarium-2d-app:has(.chronicle-killfeed) .dialogue-now {
   right: calc(var(--killfeed-reserve) + env(safe-area-inset-right));
   width: min(38rem, calc(100vw - var(--killfeed-reserve) - 3rem));
 }
 
 @media (max-width: 760px) {
-  .vivarium-2d-app:has(.chronicle-killfeed) :is(.dialogue-now, .story-now) {
+  .vivarium-2d-app:has(.chronicle-killfeed) .dialogue-now {
     right: max(8px, env(safe-area-inset-right));
     width: auto;
   }
@@ -325,20 +347,39 @@ select) {
   gap: 3px;
   min-height: 0;
   /*
-   * A DEFINITE height, not a cap.
+   * A DEFINITE height, not a cap — and now the WHOLE column.
    *
    * The band measures how many whole cards fit inside this box. With only a
    * `max-height` the box is as tall as its own content, so the measurement
    * measures what is already shown rather than the room available — and one
    * tall card (a thought with a four-line quote) can pin the band to a single
-   * card and keep it there. The allowance is the same 42vh it always drew; it
-   * is simply now the allowance rather than the outcome. The container is
-   * transparent and `pointer-events: none`, so unfilled band costs nothing.
+   * card and keep it there. `flex: 1 1 auto` inside a column whose own height
+   * is definite (the drawer is `inset`-positioned top to bottom) resolves to a
+   * definite box exactly as the old `height: 42vh` did, so the measurement
+   * stays feedback-free; what changes is that the box is the room actually
+   * available rather than a hand-tuned fraction of the viewport.
+   *
+   * Full height is owner direction (Safi, 2026-08-22): the live stream is the
+   * surface that says what the world is doing, and a 42vh band could hold about
+   * eight cards of a world that produces bursts of thirty. The container is
+   * transparent and `pointer-events: none`, so unfilled band costs nothing —
+   * the region shows straight through it.
    */
-  height: 42vh;
-  max-height: 42vh;
+  flex: 1 1 auto;
   margin: 0;
-  padding: 0;
+  /*
+   * A hair of clearance at the end, because the newest card is the one that
+   * must never be cut.
+   *
+   * A flex column whose content overflows and which is `justify-content:
+   * flex-end` does not land its last child exactly on the end edge: measured in
+   * Chrome, the content box ran ~10px past it across ~20 children (sub-pixel
+   * card heights, accumulated), and `overflow: hidden` then sliced the bottom
+   * off the leading card. The band is transparent, so the clearance costs
+   * nothing but a slightly earlier clip at the top, which is where cards are
+   * meant to leave anyway.
+   */
+  padding: 0 0 1rem;
   overflow: hidden;
   list-style: none;
   /*
@@ -423,6 +464,70 @@ select) {
 }
 
 .chronicle-killfeed__card.is-murmur { opacity: 0.86; }
+
+/*
+ * THE LEADING EDGE — the newest card, marked as the present tense.
+ *
+ * This is what replaced the bottom-right NOW card. That card duplicated the
+ * feed and collided with it; the feed now says the same thing in place, on the
+ * entry it is actually about, and the whole card carries the same "view this
+ * moment" action the card's button used to. The mark is gold ink and a gold
+ * ring — no extra row, no reserved band — because the killfeed's whole economy
+ * is that prominence is spent sideways, never in height.
+ *
+ * A murmur at the leading edge stops being faded: whatever the world's newest
+ * word is, it is the one thing on this surface that must not read as background.
+ */
+.chronicle-killfeed .chronicle-killfeed__card.is-leading {
+  border-color: rgb(228 189 92 / 62%);
+  border-left-color: var(--killfeed-gold);
+  border-left-width: 3px;
+  background: var(--killfeed-scrim-strong);
+  box-shadow: 0 0 0 1px rgb(228 189 92 / 32%), var(--killfeed-shadow);
+  opacity: 1;
+}
+
+/*
+ * The mark itself: a filled chip, always, in both states.
+ *
+ * An outlined chip in muted ink was tried first and could not be read at native
+ * size over a lit region -- which fails the only thing this element is for. The
+ * fill is what carries it; the COLOUR is what separates a moment still playing
+ * (gold) from the last one that finished (vellum).
+ */
+.chronicle-killfeed .chronicle-killfeed__edge {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 1px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: var(--killfeed-gold);
+  color: #17231a;
+  font-size: 0.52rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+/* The moment that has FINISHED is still the newest thing, but it is not now. */
+.chronicle-killfeed .chronicle-killfeed__card.is-leading:not([data-chronicle-now="Now"]) {
+  border-color: rgb(236 226 204 / 40%);
+  border-left-color: rgb(236 226 204 / 62%);
+  box-shadow: var(--killfeed-shadow);
+}
+
+.chronicle-killfeed
+  .chronicle-killfeed__card:not([data-chronicle-now="Now"]) .chronicle-killfeed__edge {
+  background: rgb(236 226 204 / 82%);
+  color: #17231a;
+}
+
+/* The one light card inverts everything; its mark has to invert with it. */
+.chronicle-killfeed .chronicle-killfeed__card.is-arrival .chronicle-killfeed__edge {
+  background: #12180f;
+  color: var(--killfeed-vellum);
+}
 
 .chronicle-killfeed .chronicle-killfeed__card.is-notable {
   border-color: rgb(236 226 204 / 26%);
@@ -978,7 +1083,12 @@ select) {
     width: auto;
   }
 
-  .chronicle-killfeed__flow { height: 34vh; max-height: 34vh; }
+  /*
+   * A phone keeps the BAND, not the column: the drawer is bottom-anchored here
+   * and the world above it is the whole point of a small screen. `flex: none`
+   * cancels the desktop column's growth so the explicit fraction wins.
+   */
+  .chronicle-killfeed__flow { flex: none; height: 34vh; max-height: 34vh; }
   .chronicle-peek { right: auto; left: 8px; top: auto; bottom: 8px; transform: none; }
 }
 
@@ -997,6 +1107,15 @@ select) {
 
   .chronicle-killfeed__flow { mask-image: none; }
   .chronicle-killfeed__card.is-arrival { background: Canvas; color: CanvasText; }
+
+  /* The leading edge must stay distinguishable where colour is not available. */
+  .chronicle-killfeed__card.is-leading { border: 3px solid Highlight; }
+  .chronicle-killfeed__edge {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    forced-color-adjust: auto;
+  }
 }
 
 /*

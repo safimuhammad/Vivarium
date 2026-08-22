@@ -203,7 +203,14 @@ export function GatewayApp({
       ? <>{renderObserver(launch.runId)}</>
       : (
         <Suspense fallback={<GatewayLoading label="Opening the world" />}>
-          <LazyVivarium2DApp />
+          {/*
+            The gateway starts a run, so the gateway is what grants the observer
+            permission to END one. The observer cannot reach the server by
+            itself -- its import closure is proved free of every request verb and
+            endpoint -- so without this hand-down the only way to stop a world
+            was to kill the process.
+          */}
+          <LazyVivarium2DApp runLifecycle={resolvedClient} />
         </Suspense>
       );
   }

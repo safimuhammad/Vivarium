@@ -20,6 +20,8 @@ import {
   type ObserverShellRuntime,
   type ObserverShellRuntimeOptions,
 } from "../../app/observer2d/observerShellRuntime";
+import type { RunLifecycleCapability } from "../../app/observer2d/runStopController";
+import type { RunLifecycleStatus } from "../../app/gateway/runConfig";
 import {
   createRecordedBridge,
   createReplayDriver,
@@ -38,6 +40,10 @@ export interface LiveReplayHandle {
   diagnostics(): unknown;
   /** QA fault injection — the four chrome states cannot be produced by data alone. */
   heartbeat(worldTime: number, status?: string): void;
+  /** What the stand-in run lifecycle has been asked, in order. */
+  runLifecycleCalls(): readonly string[];
+  /** What the stand-in `GET /api/run` will answer from now on. */
+  setRunStatus(status: string): void;
   dropStream(): void;
   activeStreams(): number;
 }
@@ -86,7 +92,40 @@ async function boot(): Promise<void> {
     return runtime;
   };
 
-  createRoot(root).render(<Vivarium2DApp createRuntime={createRuntime} />);
+  /**
+   * A stand-in for the run lifecycle, so the HUD's "End run" control is on
+   * screen and drivable on a route that has no server behind it.
+   *
+   * It is a QA affordance and nothing more: the observer is granted this
+   * capability by whoever owns the run (in production, the gateway), so a QA
+   * route that wants to exercise the control has to grant one too. It answers
+   * `running` until a stop is asked for, then `stopping`, then `stopped` --
+   * the same sequence a real wind-down produces -- which is what lets the
+   * chrome's honesty about an ended run be checked by eye.
+   */
+  const lifecycleCalls: string[] = [];
+  let runStatus: RunLifecycleStatus = "running";
+  let stopsSeen = 0;
+  const runLifecycle: RunLifecycleCapability = {
+    async stop() {
+      lifecycleCalls.push("stop");
+      runStatus = "stopping";
+      stopsSeen = 0;
+      return { run_id: recording.runId, status: "stopping", warnings: [] };
+    },
+    async getLifecycle() {
+      lifecycleCalls.push("getLifecycle");
+      if (runStatus === "stopping") {
+        stopsSeen += 1;
+        if (stopsSeen >= 2) runStatus = "stopped";
+      }
+      return { status: runStatus };
+    },
+  };
+
+  createRoot(root).render(
+    <Vivarium2DApp createRuntime={createRuntime} runLifecycle={runLifecycle} />,
+  );
 
   const driver = createReplayDriver({ recording, bridge, rate });
   window.__vivariumLiveReplay = {
@@ -99,6 +138,8 @@ async function boot(): Promise<void> {
     heartbeat: (worldTime, status) => bridge.heartbeat(worldTime, status),
     dropStream: () => bridge.dropStream(),
     activeStreams: () => bridge.activeStreams(),
+    runLifecycleCalls: () => [...lifecycleCalls],
+    setRunStatus: (status: string) => { runStatus = status as RunLifecycleStatus; },
   };
   // The session opens its stream during `ready`; delivering before that would
   // simply be counted as undelivered.

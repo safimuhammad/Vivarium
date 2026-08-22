@@ -1,25 +1,44 @@
 /**
  * Remembers whether the viewer keeps the killfeed open.
  *
- * The feed is closable on purpose — the region is the main course — so the one
- * thing it must not do is force the viewer to reopen it on every load. The
- * preference is *only* written when the viewer acts: an untouched install still
- * starts with the world uncluttered, and the collapsed peek is what tells them
- * something is happening.
+ * **The feed now opens by default** (owner direction, Safi, 2026-08-22). It is
+ * the live stream — the one surface that says what the world is doing right now
+ * — and a world nobody can see running is Life with the screen off. It stays
+ * closable, and a viewer who closes it still finds it closed next time; what
+ * changed is only what an *untouched* install does.
+ *
+ * That reversal is why the key is versioned. The previous key stored `"false"`
+ * for every viewer who had ever closed the old feed, and `"false"` is
+ * indistinguishable from "chose closed under the new default" — a returning
+ * viewer would have inherited the retired default forever. `.v2` is a fresh
+ * slate: the old value is left where it lies, unread, and the first thing this
+ * viewer's own choice writes is a v2 value.
  *
  * Storage failures (private browsing, a full quota, a disabled store) are not
  * errors worth surfacing to a viewer watching a world; they degrade to the
  * default rather than throwing.
  */
 
-const STORAGE_KEY = "vivarium.observer.chronicle-open";
+/**
+ * Where the viewer's own choice lives.
+ *
+ * Versioned deliberately: see the module note. Bump it again if the default
+ * ever flips back, and never re-read a retired key.
+ */
+const STORAGE_KEY = "vivarium.observer.chronicle-open.v2";
 
-/** Reads the remembered preference; false when unset or unreadable. */
+/** What an install that has never been touched does: show the live stream. */
+const DEFAULT_OPEN = true;
+
+/** Reads the remembered preference; open when unset, unreadable, or malformed. */
 export function readChronicleSurfacePreference(): boolean {
   try {
-    return globalThis.localStorage?.getItem(STORAGE_KEY) === "true";
+    const stored = globalThis.localStorage?.getItem(STORAGE_KEY) ?? null;
+    if (stored === "true") return true;
+    if (stored === "false") return false;
+    return DEFAULT_OPEN;
   } catch {
-    return false;
+    return DEFAULT_OPEN;
   }
 }
 

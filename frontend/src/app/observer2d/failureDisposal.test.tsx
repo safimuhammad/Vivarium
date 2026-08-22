@@ -70,7 +70,10 @@ describe("production observer failure and lifecycle composition", () => {
       <Vivarium2DApp createRuntime={() => fixture.runtime} />,
     ));
     await settle();
-    await click("View moment");
+    // The retired NOW card's "View moment" button now lives on the Chronicle's
+    // own leading entry -- one surface, marked as the current moment, carrying
+    // the same production path (`viewMoment` + a moment focus request).
+    await clickLeadingChronicleEntry();
 
     expect(fixture.runtime.viewMoment).toHaveBeenCalledOnce();
     expect(fixture.runtime.viewMoment).toHaveBeenCalledWith("4:4:single");
@@ -182,8 +185,10 @@ describe("production observer failure and lifecycle composition", () => {
     expect(alert.textContent).toContain("The world renderer could not be started.");
     expect(container.textContent).not.toContain("/private/provider/raw-atlas.png");
     await click("Chronicle");
-    expect(container.textContent).toContain("A quiet exchange");
-    expect(container.textContent).toContain("Aster spoke.");
+    expect(container.textContent).toContain("Aster spoke at Meadow.");
+    // And it says which entry is the present tense, which is the whole reason
+    // the separate NOW card could be retired.
+    expect(required("[data-chronicle-now]").getAttribute("data-chronicle-now")).toBe("Now");
     await click("Selection");
     expect(container.textContent).toContain("Aster");
 
@@ -621,6 +626,15 @@ function storyMoment(): StoryMoment {
     priority: "featured",
     focus: Object.freeze({ kind: "agent", id: "aster" }),
   });
+}
+
+/** Clicks the Chronicle entry marked as the moment happening now. */
+async function clickLeadingChronicleEntry(): Promise<void> {
+  const target = container.querySelector<HTMLButtonElement>(
+    "[data-chronicle-now] .chronicle-killfeed__replay",
+  );
+  if (target === null) throw new Error("the Chronicle marked no leading entry");
+  await act(async () => target.click());
 }
 
 async function click(name: string): Promise<void> {

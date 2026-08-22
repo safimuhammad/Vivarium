@@ -48,15 +48,34 @@ describe("Vivarium 2D observer chrome visual contract", () => {
     expect(rule(".dialogue-now")).toMatch(/border-left-width:\s*4px/);
   });
 
-  it("presents Story Now as a compact persistent caption in the shared narrative slot", () => {
-    expect(rule(".story-now")).toMatch(/position:\s*absolute/);
-    expect(rule(".story-now")).toMatch(/bottom:\s*max\(10px, env\(safe-area-inset-bottom\)\)/);
-    expect(rule(".story-now")).toMatch(/width:\s*min\(38rem, calc\(100vw - 22rem\)\)/);
-    expect(rule(".story-now")).toMatch(/max-height:\s*8rem/);
-    expect(rule(".story-now")).toMatch(/border-left-width:\s*4px/);
-    expect(rule(".story-now__copy p")).toMatch(/-webkit-line-clamp:\s*2/);
-    expect(rule(".story-now button")).toMatch(/min-width:\s*44px/);
-    expect(rule(".story-now button")).toMatch(/min-height:\s*44px/);
+  it("has retired the NOW card entirely rather than restyling it", () => {
+    // Owner direction (Safi, 2026-08-22): the bottom-right "NOW / View moment"
+    // card collided with the live stream and did the same job. The Chronicle
+    // marks its own leading entry now; nothing here may reserve space for a
+    // second narrative surface.
+    expect(css).not.toContain("story-now");
+  });
+
+  it("gives the persistent HUD the two controls a watcher must never hunt for", () => {
+    // Framing and ending a run are CONTROLS; everything before them on the
+    // status line is a reading. The rule between them says so.
+    expect(rule(".observer-hud__controls")).toMatch(/border-left:\s*1px solid var\(--observer-line\)/);
+    expect(rule(".observer-hud .observer-hud__framing")).toMatch(/display:\s*inline-flex/);
+    expect(css).toMatch(
+      /\.observer-hud__framing\[data-framing="yours"\][\s\S]*?border-color:\s*var\(--observer-accent\)/,
+    );
+    expect(rule(".observer-hud .observer-hud__stop")).toMatch(/color:\s*#f0b49d/);
+  });
+
+  it("asks the irreversible question on a panel anchored to the control that opened it", () => {
+    expect(rule(".observer-run-confirm")).toMatch(/position:\s*absolute/);
+    expect(rule(".observer-run-confirm")).toMatch(/top:\s*calc\(100% \+ 8px\)/);
+    expect(rule(".observer-run-confirm")).toMatch(/width:\s*22rem/);
+    // Above every drawer: a question a viewer cannot see is a question they
+    // cannot answer.
+    expect(rule(".observer-run-confirm")).toMatch(/z-index:\s*30/);
+    expect(rule(".observer-hud .observer-run-confirm__go"))
+      .toMatch(/border-color:\s*var\(--observer-danger\)/);
   });
 
   it("uses flat pixel-game surfaces without decorative gradients", () => {

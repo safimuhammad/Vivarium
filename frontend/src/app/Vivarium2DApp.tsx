@@ -23,7 +23,11 @@ import {
   type ProductionStageCaptureInjection,
 } from "../renderer2d/production/PresentationWorldStage";
 import { ArchiveDrawer } from "./observer2d/ArchiveDrawer";
+import { CameraFramingControl } from "./observer2d/CameraFramingControl";
+import { RunStopControl } from "./observer2d/RunStopControl";
 import { resolveObserverLiveness } from "./observer2d/observerLiveness";
+import { resolveRunStatus, useRunStopController } from "./observer2d/runStopController";
+import type { RunLifecycleCapability } from "./observer2d/runStopController";
 import { ChronicleKillfeed } from "./observer2d/chronicleStream/ChronicleKillfeed";
 import { StreamGlyph } from "./observer2d/chronicleStream/StreamGlyph";
 import {
@@ -40,7 +44,6 @@ import { RegionArrivalPlaque } from "./observer2d/RegionArrivalPlaque";
 import { LiveAnnouncer, type LiveAnnouncement } from "./observer2d/LiveAnnouncer";
 import { SemanticWorldMirror } from "./observer2d/SemanticWorldMirror";
 import { SelectionInspector } from "./observer2d/SelectionInspector";
-import { StoryNow } from "./observer2d/StoryNow";
 import {
   createObserverShellRuntime,
   type ObserverArchiveCheckpointKey,
@@ -102,6 +105,16 @@ export interface Vivarium2DAppProps {
   readonly chronicleSourceControls?: ReactNode;
   /** Killfeed retention window override, in milliseconds. */
   readonly chronicleBufferMs?: number;
+  /**
+   * Permission to end this run, granted by whoever started it.
+   *
+   * Injected rather than imported, and narrowed to two methods, because the
+   * observer's own import closure must contain no request verb and no endpoint
+   * (`Vivarium2DApp.closure.test.ts` proves it recursively). The gateway owns a
+   * run from its first breath to its last and is what hands this down; a
+   * fixture, a recording or a capture is handed nothing and grows no control.
+   */
+  readonly runLifecycle?: RunLifecycleCapability;
 }
 
 interface OwnedRuntimeView {
@@ -136,6 +149,7 @@ export function Vivarium2DApp({
   renderer,
   chronicleSourceControls,
   chronicleBufferMs,
+  runLifecycle,
 }: Vivarium2DAppProps): ReactElement {
   const appRef = useRef<HTMLElement>(null);
   const debugStateRef = useRef<OwnedRuntimeView["snapshot"]>(null);
@@ -176,6 +190,17 @@ export function Vivarium2DApp({
     accepted: CameraMode;
     requested: CameraMode;
   }>>(() => Object.freeze({ accepted: "story", requested: "story" }));
+  /**
+   * Whether the VIEWER is steering, and the serial that hands the camera back.
+   *
+   * Both live up here because the reading belongs in the HUD, which is the one
+   * surface always on screen. The serial is not a mode: a viewer zoom takes
+   * camera authority without changing the mode, so a `story` mode request would
+   * be deduplicated to nothing before it reached the renderer — the defect that
+   * made the retired stage pill inert for anyone who had only zoomed.
+   */
+  const [viewerControlsCamera, setViewerControlsCamera] = useState(false);
+  const [resumeStorySerial, setResumeStorySerial] = useState(0);
   const snapshotLineage = snapshot?.frame === null || snapshot?.frame === undefined
     ? null
     : `${snapshot.frame.runId}\u0000${snapshot.frame.sourceKey}`;
@@ -200,6 +225,13 @@ export function Vivarium2DApp({
     && snapshot.placement !== null
     && snapshot.recipes !== null;
   const narrativeSlotOwner = presentedNarrativeSlotOwner(snapshot);
+  // A run can only be stopped where there IS one. Recordings, fixtures and the
+  // capture harness all present the same shell over a source that has no server
+  // behind it, and must never grow a button that reaches for one.
+  const runStop = useRunStopController({
+    enabled: snapshot?.frame?.source === "live",
+    ...(runLifecycle === undefined ? {} : { client: runLifecycle }),
+  });
   const safeFrame = useMeasuredObserverSafeFrame(
     appRef,
     overlay.surface.kind,
@@ -256,6 +288,7 @@ export function Vivarium2DApp({
     cameraLineageRef.current = snapshotLineage;
     if (previous === null || previous === snapshotLineage) return;
     setCameraControl(Object.freeze({ accepted: "story", requested: "story" }));
+    setViewerControlsCamera(false);
     setShellAnnouncement(null);
   }, [snapshotLineage]);
 
@@ -423,10 +456,20 @@ export function Vivarium2DApp({
   const frame = snapshot.frame;
   const chronicle = snapshot.chronicle;
   const hud = projectObserverHud(frame, snapshot.observedRegionId);
+  /**
+   * What this run IS, from the two places that can know.
+   *
+   * The frame's own status rides the SSE heartbeat and is the fresher of the two
+   * while the stream is alive; `runStop.confirmedStatus` is the only source left
+   * once the stream closes, which is exactly what a stop causes. The more
+   * terminal one wins, so a run that ended cannot go on reading as one that is
+   * merely offline.
+   */
+  const runStatus = resolveRunStatus(frame.liveness?.runStatus ?? null, runStop.confirmedStatus);
   // Quiet / behind / disconnected / ended. In this world twenty minutes of silence
   // is normal and the sim self-terminates at `duration`, so a single LIVE pill was
   // the difference between watching and reloading.
-  const liveness = resolveObserverLiveness(frame);
+  const liveness = resolveObserverLiveness(frame, runStatus);
   const atlas = projectLivingAtlas(frame, chronicle, snapshot.observedRegionId);
   const dialogue = projectDialogueNow(frame, chronicle);
   const chronicleView = projectChronicle(frame, chronicle);
@@ -448,6 +491,17 @@ export function Vivarium2DApp({
     if (overlay.surface.kind === "chronicle") writeChronicleSurfacePreference(false);
     pendingFocusReturnRef.current = focusReturnRequest(overlay.surface, openerRef.current);
     dispatchOverlay({ type: "close" });
+  };
+  /**
+   * Hand the camera back to the story director.
+   *
+   * A serial bump rather than a mode request, on purpose: see
+   * `resumeStorySerial` on `PresentationWorldStage`. A viewer who took the
+   * camera by zooming is still nominally in `story` mode, so every mode-based
+   * dedup between here and the renderer would swallow the request.
+   */
+  const resumeStoryFraming = (): void => {
+    setResumeStorySerial((serial) => serial + 1);
   };
   const requestCameraMode = (mode: CameraMode): void => {
     setCameraControl((current) => current.requested === mode
@@ -535,8 +589,10 @@ export function Vivarium2DApp({
           callbacks={{
             onSelectionChange: selectFromCanvas,
             onCameraModeChange: acceptCameraMode,
+            onCameraAuthorityChange: setViewerControlsCamera,
             onSemanticSnapshot: acceptSemanticSnapshot,
           }}
+          resumeStorySerial={resumeStorySerial}
           onCameraModeRequestRejected={rejectCameraMode}
           regionOrder={atlas.regions.map((region) => region.key)}
           activeMomentId={chronicleView.now?.key ?? null}
@@ -553,7 +609,19 @@ export function Vivarium2DApp({
       )}
 
       <div className="observer-top-chrome">
-        <ObserverHud view={hud} />
+        <ObserverHud view={hud} controls={<>
+          <CameraFramingControl
+            mode={presentedCameraControl.accepted}
+            viewerControlled={viewerControlsCamera}
+            onResumeStory={resumeStoryFraming}
+          />
+          {frame.source === "live" && runLifecycle !== undefined && <RunStopControl
+            status={runStatus}
+            requested={runStop.requested || runStop.sending}
+            error={runStop.error}
+            onStop={runStop.requestStop}
+          />}
+        </>} />
 
         <nav className="observer-edge-triggers" aria-label="Observer panels">
           <button id="observer-world-trigger" type="button" aria-controls={PRIMARY_SURFACE_ID}
@@ -583,12 +651,6 @@ export function Vivarium2DApp({
         view={dialogue}
         onFocusSpeaker={(id) => focusAgent(runtime, id)}
         onFocusTarget={(id) => focusAgent(runtime, id)}
-      />
-
-      <StoryNow
-        view={storyNow}
-        dialogueActive={dialogue !== null}
-        onViewMoment={(momentId) => viewMoment(runtime, chronicleView, momentId)}
       />
 
       {overlay.surface.kind !== "closed" && <div id={PRIMARY_SURFACE_ID}
@@ -627,6 +689,10 @@ export function Vivarium2DApp({
           onFocusBeing={(beingId) => focusAgent(runtime, beingId)}
           onOpenArchive={() => openArchive()}
           onClose={closeSurface}
+          activeMomentRange={chronicleView.now === null ? null : {
+            firstCursor: chronicleView.now.firstCursor,
+            lastCursor: chronicleView.now.lastCursor,
+          }}
           liveness={liveness}
           notices={frame.notices ?? []}
           onReconnect={() => runtime.reconnectStream()}
@@ -760,7 +826,7 @@ function useMeasuredObserverSafeFrame(
   viewportWidth: number,
   viewportHeight: number,
   ready: boolean,
-  narrativeSlotOwner: "dialogue" | "story" | "empty",
+  narrativeSlotOwner: "dialogue" | "empty",
 ): SafeFrameInsets {
   const fallback = useMemo(() => observerSafeFrame(
     surfaceKind,
@@ -777,7 +843,7 @@ function useMeasuredObserverSafeFrame(
     }
     const selectors = Object.freeze({
       hud: ".observer-hud",
-      dialogue: ".dialogue-now, .story-now",
+      dialogue: ".dialogue-now",
       triggers: ".observer-edge-triggers",
       drawer: ".observer-primary-surface .observer-drawer",
     });
@@ -843,15 +909,21 @@ function useMeasuredObserverSafeFrame(
   return measured;
 }
 
+/**
+ * Who owns the bottom narrative slot on this frame.
+ *
+ * Only dialogue does, now. The slot used to be shared with the NOW card, which
+ * was retired (owner direction, Safi, 2026-08-22) because it duplicated the
+ * Chronicle feed's job; the reading survives because the safe-frame measurement
+ * has to be re-bound whenever the element it measures appears or disappears.
+ */
 function presentedNarrativeSlotOwner(
   snapshot: OwnedRuntimeView["snapshot"],
-): "dialogue" | "story" | "empty" {
+): "dialogue" | "empty" {
   if (snapshot?.status !== "ready" || snapshot.frame === null || snapshot.chronicle === null) {
     return "empty";
   }
-  if (projectDialogueNow(snapshot.frame, snapshot.chronicle) !== null) return "dialogue";
-  const chronicle = projectChronicle(snapshot.frame, snapshot.chronicle);
-  return projectStoryNow(snapshot.frame, chronicle) === null ? "empty" : "story";
+  return projectDialogueNow(snapshot.frame, snapshot.chronicle) === null ? "empty" : "dialogue";
 }
 
 function usableChromeRect(rect: ObserverChromeRect | null): rect is ObserverChromeRect {

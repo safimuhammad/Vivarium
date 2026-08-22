@@ -67,11 +67,20 @@ const DISCONNECTED_CONNECTIONS: ReadonlySet<string> = new Set([
  * ended whatever the socket is doing; a dead socket outranks a backlog, because
  * a backlog behind a dead socket will never drain; a backlog outranks quiet,
  * because a stage with work queued is not silent.
+ *
+ * @param frame - The presented frame to read.
+ * @param confirmedRunStatus - A run status the shell confirmed for itself, from
+ *   `GET /api/run`. Takes precedence over the frame's, because the frame's rides
+ *   the SSE heartbeat and a run that is stopping takes the stream down with it:
+ *   the last status the stream ever reports can therefore be `running`, and
+ *   without this a stopped run would sit at "Offline · Reconnecting" forever.
+ *   `null`, the ordinary case, changes nothing.
  */
 export function resolveObserverLiveness(
   frame: PresentedObserverFrame,
+  confirmedRunStatus: string | null = null,
 ): ObserverLivenessView {
-  const runStatus = frame.liveness?.runStatus;
+  const runStatus = confirmedRunStatus ?? frame.liveness?.runStatus;
   if (runStatus !== undefined && ENDED_RUN_STATUSES.has(runStatus)) {
     return Object.freeze({
       state: "ended",

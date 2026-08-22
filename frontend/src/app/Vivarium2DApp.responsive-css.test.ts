@@ -37,12 +37,31 @@ describe("Vivarium2DApp responsive and media CSS contract", () => {
     expect(css).toMatch(/@media \([^)]*max-height:\s*640px[^)]*\)/);
   });
 
-  it("keeps Story Now inside the mobile safe-area with bounded selectable copy", () => {
+  it("keeps the narrative caption inside the mobile safe-area with selectable copy", () => {
     const mobile = css.slice(css.indexOf("@media (max-width: 760px)"));
-    expect(mobile).toMatch(/\.story-now\s*\{[\s\S]*?right:\s*max\(8px, env\(safe-area-inset-right\)\)/);
-    expect(mobile).toMatch(/\.story-now\s*\{[\s\S]*?bottom:\s*max\(8px, env\(safe-area-inset-bottom\)\)/);
-    expect(mobile).toMatch(/\.story-now\s*\{[\s\S]*?left:\s*max\(8px, env\(safe-area-inset-left\)\)/);
-    expect(mobile).toMatch(/\.story-now\s*\{[\s\S]*?max-height:\s*96px/);
-    expect(css).toMatch(/\.story-now__copy p[\s\S]*user-select:\s*text/);
+    expect(mobile).toMatch(/\.dialogue-now\s*\{[\s\S]*?right:\s*max\(8px, env\(safe-area-inset-right\)\)/);
+    expect(mobile).toMatch(/\.dialogue-now\s*\{[\s\S]*?bottom:\s*max\(8px, env\(safe-area-inset-bottom\)\)/);
+    expect(mobile).toMatch(/\.dialogue-now\s*\{[\s\S]*?left:\s*max\(8px, env\(safe-area-inset-left\)\)/);
+    expect(mobile).toMatch(/\.dialogue-now\s*\{[\s\S]*?max-height:\s*106px/);
+    expect(css).toMatch(/\.observer-copy--selectable\s*\{[\s\S]*?user-select:\s*text/);
+    // The retired NOW card must not come back through a media query either.
+    expect(css).not.toContain("story-now");
+  });
+
+  it("keeps the phone's modal scrim off the transparent Chronicle", () => {
+    // The Chronicle opens by default and has no surface of its own. Dimming and
+    // swallowing the whole world behind it is what a phone viewer must not
+    // arrive to; the opaque sheets keep the scrim they earn.
+    const mobile = css.slice(css.indexOf("@media (max-width: 760px)"));
+    expect(mobile).toMatch(
+      /\.observer-primary-surface:not\(\[data-surface="chronicle"\]\)\s*\{[\s\S]*?background:\s*#0b120ecc/,
+    );
+    expect(mobile).not.toMatch(/\.observer-primary-surface\s*\{[\s\S]*?background:\s*#0b120ecc/);
+  });
+
+  it("anchors the irreversible run question to the phone screen, not to a control", () => {
+    const mobile = css.slice(css.indexOf("@media (max-width: 760px)"));
+    expect(mobile).toMatch(/\.observer-run-confirm\s*\{[\s\S]*?position:\s*fixed/);
+    expect(mobile).toMatch(/\.observer-run-confirm\s*\{[\s\S]*?left:\s*max\(8px, env\(safe-area-inset-left\)\)/);
   });
 });

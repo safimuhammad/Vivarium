@@ -84,6 +84,129 @@ body:has(.vivarium-2d-app) {
 }
 
 .observer-hud > * { min-width: 0; }
+
+/*
+ * THE HUD'S CONTROLS — the two things a watcher must never have to hunt for.
+ *
+ * Both were previously unreachable in a live view: how the view is framed lived
+ * in a badge that only appeared over the art once something had already gone
+ * sideways, and how a run ENDS lived nowhere at all (the server has answered
+ * `POST /api/run/stop` the whole time). They sit at the end of the status line,
+ * behind a rule, because they are controls and everything before them is a
+ * reading.
+ */
+.observer-hud__controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  padding-left: 9px;
+  border-left: 1px solid var(--observer-line);
+}
+
+.observer-hud .observer-hud__framing {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 9px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.observer-hud__framing > span {
+  color: var(--observer-muted);
+  font-size: 0.55rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* The viewer holding the camera is the state with a way out, so it is the lit one. */
+.observer-hud .observer-hud__framing[data-framing="yours"],
+.observer-hud .observer-hud__framing[data-framing="follow"] {
+  border-color: var(--observer-accent);
+  color: #ffe49b;
+}
+
+.observer-hud .observer-hud__framing:disabled {
+  color: var(--observer-muted);
+  cursor: default;
+}
+
+.observer-hud__run {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.observer-hud .observer-hud__stop {
+  padding: 2px 9px;
+  border-color: #8f6152;
+  color: #f0b49d;
+  font-size: 0.72rem;
+}
+
+.observer-hud .observer-hud__stop[data-actionable="true"]:hover {
+  border-color: var(--observer-danger);
+  color: #ffd9c6;
+}
+
+.observer-hud .observer-hud__stop:disabled {
+  border-color: var(--observer-line);
+  color: var(--observer-muted);
+  cursor: default;
+}
+
+.observer-hud__run-error {
+  max-width: 16rem;
+  color: var(--observer-danger);
+  font-size: 0.62rem;
+  line-height: 1.2;
+}
+
+/*
+ * Ending a run is irreversible and cannot be re-entered, so it is asked as a
+ * question rather than offered as a button. Anchored under the control that
+ * opened it, above every drawer, and wide enough to say what will be lost.
+ */
+.observer-run-confirm {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  gap: 8px;
+  width: 22rem;
+  max-width: calc(100vw - 24px);
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.observer-run-confirm strong {
+  color: #ffd9c6;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+}
+
+.observer-run-confirm p {
+  margin: 0;
+  color: var(--observer-muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.observer-run-confirm__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.observer-hud .observer-run-confirm__go {
+  border-color: var(--observer-danger);
+  background: #452117;
+  color: #ffd9c6;
+}
 .observer-hud__region { color: #fff1bd; font-size: 0.86rem; }
 /* Reads as a label on the counts that follow, not as another datum about the region named above. */
 .observer-hud__totals-scope { color: #9fb08d; }
@@ -93,8 +216,7 @@ body:has(.vivarium-2d-app) {
 .observer-edge-triggers button,
 .observer-drawer button,
 .living-atlas-2d button,
-.dialogue-now button,
-.story-now button {
+.dialogue-now button {
   min-width: 44px;
   min-height: 44px;
   border: 2px solid var(--observer-line);
@@ -358,55 +480,6 @@ body:has(.vivarium-2d-app) {
   font-size: 1rem;
   line-height: 1.45;
 }
-.story-now {
-  position: absolute;
-  z-index: 11;
-  right: max(4rem, env(safe-area-inset-right));
-  bottom: max(10px, env(safe-area-inset-bottom));
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  width: min(38rem, calc(100vw - 22rem));
-  max-height: 8rem;
-  padding: 8px 10px 8px 12px;
-  overflow: hidden;
-  border-left-width: 4px;
-}
-
-.story-now > .observer-kicker { grid-column: 1 / -1; }
-.story-now__copy { min-width: 0; }
-.story-now__copy h2 {
-  margin: 2px 0;
-  overflow: hidden;
-  color: #fff1bd;
-  font-size: 0.94rem;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.story-now__copy p {
-  display: -webkit-box;
-  margin: 2px 10px 2px 0;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  user-select: text;
-  color: #fff2ce;
-  font-size: 0.82rem;
-  line-height: 1.3;
-}
-.story-now__region,
-.story-now__segment {
-  margin-right: 8px;
-  color: var(--observer-muted);
-  font-size: 0.68rem;
-}
-.story-now button {
-  min-width: 44px;
-  min-height: 44px;
-  align-self: center;
-}
-
 .observer-edge-triggers {
   position: absolute;
   z-index: 12;
@@ -701,6 +774,19 @@ body:has(.vivarium-2d-app) {
     font-size: 0.7rem;
     writing-mode: horizontal-tb;
   }
+  .observer-hud__controls {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
+  }
+  /* A phone anchors the question to the screen, not to a control 300px wide. */
+  .observer-run-confirm {
+    position: fixed;
+    right: max(8px, env(safe-area-inset-right));
+    left: max(8px, env(safe-area-inset-left));
+    width: auto;
+    max-width: none;
+  }
   .living-atlas-2d { max-height: 10rem; }
   .living-atlas-2d header {
     min-height: 44px;
@@ -753,18 +839,21 @@ body:has(.vivarium-2d-app) {
     padding: 7px 8px 7px 10px;
     overflow: auto;
   }
-  .story-now {
-    right: max(8px, env(safe-area-inset-right));
-    bottom: max(8px, env(safe-area-inset-bottom));
-    left: max(8px, env(safe-area-inset-left));
-    width: auto;
-    max-height: 96px;
-    padding: 7px 8px 7px 10px;
-  }
-  .story-now__copy h2 { font-size: 0.82rem; }
-  .story-now__copy p { font-size: 0.76rem; line-height: 1.22; }
   .observer-copy--selectable { margin-right: 7px; font-size: 0.86rem; line-height: 1.3; }
-  .observer-primary-surface { background: #0b120ecc; pointer-events: auto; }
+  /*
+   * The modal scrim belongs to the OPAQUE sheets — World, Selection, Archive —
+   * which genuinely cover the world and are read one at a time.
+   *
+   * The Chronicle is not one of them: it is the transparent killfeed, whose
+   * first law is that the container has no surface, and it now opens by default
+   * (owner direction, Safi, 2026-08-22). Dimming and swallowing the whole world
+   * behind it is precisely what a viewer must not arrive to on a phone — the
+   * region is still the main course on the smallest screen of all.
+   */
+  .observer-primary-surface:not([data-surface="chronicle"]) {
+    background: #0b120ecc;
+    pointer-events: auto;
+  }
   .observer-drawer {
     inset: auto max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
       max(8px, env(safe-area-inset-left));

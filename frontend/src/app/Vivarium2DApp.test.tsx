@@ -20,7 +20,14 @@ vi.mock("../renderer2d/production/PresentationWorldStage", () => ({
     stageAtlasPools.push(props.atlasPool);
     return <section className="presentation-world-stage" aria-label="Production world" tabIndex={0} data-presented-cursor={frame.presentedCursor}
       data-requested-camera={props.cameraMode}
+      data-resume-serial={props.resumeStorySerial}
       data-safe-frame={JSON.stringify(props.safeFrame)}>
+      <button type="button" onClick={() => props.callbacks?.onCameraAuthorityChange?.(true)}>
+        Viewer takes the camera
+      </button>
+      <button type="button" onClick={() => props.callbacks?.onCameraAuthorityChange?.(false)}>
+        Director takes the camera
+      </button>
       <button type="button" onClick={() => props.callbacks?.onSelectionChange?.({ kind: "region", id: "meadow" })}>
         Select world region
       </button>
@@ -227,7 +234,19 @@ describe("Vivarium2DApp", () => {
     await act(async () => fixture.runtime.ready);
 
     expect(required<HTMLElement>(".observer-hud").textContent?.replace(/\s+/g, " ").trim())
-      .toBe("Meadow · Day 1, 12:00 AM · World totals: 1 living · 0 dead · 0 homes · 0 ruins");
+      .toBe("Meadow · Day 1, 12:00 AM · World totals: 1 living · 0 dead · 0 homes · 0 ruinsFramingStory");
+    // Framing is a PERSISTENT control on the status line, not a badge that
+    // materialises over the art once the viewer has already been stranded. It is
+    // present and inert while the story owns the camera.
+    expect(required<HTMLButtonElement>(".observer-hud__framing").disabled).toBe(true);
+    // No run-lifecycle capability was granted to this fixture, so no way to end
+    // a run is offered. The observer cannot reach a server by itself.
+    expect(container.querySelector(".observer-hud__stop")).toBeNull();
+
+    // Transport lives in a drawer, never in the persistent chrome. The Chronicle
+    // now opens by default and carries its own copy, so this is asserted of the
+    // state a viewer reaches by closing it.
+    await click("Close Chronicle");
     expect(button("Pause story")).toBeNull();
     expect(button("Free")).toBeNull();
     expect(container.querySelector(".living-atlas-2d")).toBeNull();
@@ -304,15 +323,21 @@ describe("Vivarium2DApp", () => {
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
 
-    expect(heading("Chronicle")).toBeNull();
-    const story = required<HTMLElement>("[data-story-now]");
-    expect(story.getAttribute("data-story-state")).toBe("active");
-    expect(story.textContent).toContain("NowShelter raisedAster completed a shelter.Meadow");
-    expect(container.querySelectorAll("button")).toSatisfy((buttons: NodeListOf<HTMLButtonElement>) => (
-      [...buttons].filter((candidate) => candidate.textContent?.trim() === "View moment").length === 1
-    ));
+    // ONE surface, not two. The bottom-right "NOW / View moment" card is gone;
+    // the Chronicle marks its own leading entry as the moment happening now and
+    // carries the same action (owner direction, Safi, 2026-08-22).
+    expect(container.querySelector("[data-story-now]")).toBeNull();
+    expect(container.querySelectorAll("[data-chronicle-now]")).toHaveLength(1);
+    const leading = required<HTMLElement>("[data-chronicle-now]");
+    expect(leading.getAttribute("data-chronicle-now")).toBe("Now");
+    expect(leading.getAttribute("aria-current")).toBe("true");
+    expect(leading.textContent).toContain("Now");
 
-    await click("View shown moment Shelter raised");
+    const view = leading.querySelector<HTMLButtonElement>(".chronicle-killfeed__replay")!;
+    expect(view.getAttribute("aria-label")).toContain("View shown moment");
+    await act(async () => view.click());
+    // Exactly what the retired button did, through exactly the same path.
+    expect(fixture.runtime.viewMoment).toHaveBeenCalledOnce();
     expect(fixture.runtime.viewMoment).toHaveBeenCalledWith(now.id);
     expect(container.innerHTML).not.toContain(now.id);
   });
@@ -326,8 +351,12 @@ describe("Vivarium2DApp", () => {
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
 
-    expect(required("[data-story-state='latest']").textContent)
-      .toContain("LatestA private reflectionAster reflected quietly.Meadow");
+    // Nothing is playing, so the newest entry is the last thing that FINISHED --
+    // the distinction the retired card drew between "Now" and "Latest", kept.
+    const leading = required<HTMLElement>("[data-chronicle-now]");
+    expect(leading.getAttribute("data-chronicle-now")).toBe("Latest");
+    expect(leading.textContent).toContain("Latest");
+    expect(container.querySelector("[data-story-now]")).toBeNull();
   });
 
   it("explains a silent checkpoint from already-present structural state", async () => {
@@ -348,11 +377,13 @@ describe("Vivarium2DApp", () => {
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
 
-    const story = required<HTMLElement>("[data-story-kind='checkpoint']");
-    expect(story.textContent).toContain(
-      "Between momentsA structure is goneA structure no longer remains in Meadow.Meadow",
-    );
-    expect(story.querySelector("button")).toBeNull();
+    // The checkpoint no longer has a card of its own -- that card was the NOW
+    // panel, and it is gone. It survives where it was always most useful, in the
+    // polite announcement (proved segment by segment in the case below), and the
+    // world itself still shows the corrected structure.
+    expect(container.querySelector("[data-story-kind='checkpoint']")).toBeNull();
+    expect(container.querySelector("[data-story-now]")).toBeNull();
+    expect(required<HTMLElement>("[role='status'][aria-live='polite']")).not.toBeNull();
   });
 
   it("announces each silent checkpoint segment once through the existing polite owner", async () => {
@@ -576,18 +607,89 @@ describe("Vivarium2DApp", () => {
       expect(trigger?.getAttribute("aria-controls")).toBe("observer-primary-surface");
     }
 
-    await click("Chronicle");
+    // The Chronicle opens by default now, and opening on load must NOT steal
+    // focus from the page a viewer just arrived on.
     expect(required("#observer-primary-surface")).not.toBeNull();
     expect(required("#observer-primary-surface").getAttribute("role")).toBe("complementary");
-    expect(document.activeElement).toBe(heading("Chronicle"));
+    expect(document.activeElement).not.toBe(heading("Chronicle"));
     await click("Selection");
+    expect(document.activeElement).toBe(heading("Selection"));
     await click("Close Selection");
     expect(document.activeElement).toBe(button("Selection"));
 
+    // Opening it BY HAND still moves focus into it, which is the case that matters.
     await click("Chronicle");
+    expect(document.activeElement).toBe(heading("Chronicle"));
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     expect(heading("Chronicle")).toBeNull();
     expect(document.activeElement).toBe(button("Chronicle"));
+  });
+
+  it("hands the camera back from the HUD through a serial, not a mode", async () => {
+    // A viewer ZOOM takes framing authority without changing the camera mode, so
+    // the shell's own state still reads `story` and a `story` mode request is
+    // deduplicated to nothing before it reaches the renderer. That is what left
+    // the retired stage badge inert, and it is why the way back is a serial.
+    const fixture = runtimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    const stage = (): HTMLElement => required(".presentation-world-stage");
+    const framing = (): HTMLButtonElement => required<HTMLButtonElement>(".observer-hud__framing");
+
+    expect(framing().getAttribute("data-framing")).toBe("story");
+    expect(framing().disabled).toBe(true);
+    const before = stage().getAttribute("data-resume-serial");
+
+    await click("Viewer takes the camera");
+    expect(framing().getAttribute("data-framing")).toBe("yours");
+    expect(framing().disabled).toBe(false);
+    // The camera MODE is untouched -- exactly the state a zoom leaves behind.
+    expect(stage().getAttribute("data-requested-camera")).toBe("story");
+
+    await act(async () => framing().click());
+    expect(stage().getAttribute("data-resume-serial")).not.toBe(before);
+    await click("Director takes the camera");
+    expect(framing().getAttribute("data-framing")).toBe("story");
+    expect(framing().disabled).toBe(true);
+  });
+
+  it("offers no way to end a run it was granted no permission to end", async () => {
+    const fixture = runtimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    expect(container.querySelector(".observer-hud__stop")).toBeNull();
+  });
+
+  it("ends a run through the granted capability and then stops reading as live", async () => {
+    const runLifecycle = {
+      stop: vi.fn(async () => ({ run_id: "public-test-run", status: "stopping", warnings: [] })),
+      getLifecycle: vi.fn(async () => ({ status: "stopped" as const })),
+    };
+    const fixture = runtimeFixture();
+    vi.useFakeTimers();
+    await act(async () => root.render(
+      <Vivarium2DApp createRuntime={() => fixture.runtime} runLifecycle={runLifecycle} />,
+    ));
+    await act(async () => fixture.runtime.ready);
+
+    const stop = (): HTMLButtonElement => required<HTMLButtonElement>(".observer-hud__stop");
+    expect(stop().textContent).toBe("End run");
+    // Still a running world until told otherwise, and never ended by one press.
+    expect(container.querySelector(".chronicle-killfeed__live")?.textContent)
+      .not.toContain("Ended");
+    await act(async () => stop().click());
+    expect(runLifecycle.stop).not.toHaveBeenCalled();
+    expect(required(".observer-run-confirm").getAttribute("aria-modal")).toBe("true");
+
+    await act(async () => required<HTMLButtonElement>(".observer-run-confirm__go").click());
+    expect(runLifecycle.stop).toHaveBeenCalledOnce();
+    expect(stop().textContent).toBe("Ending…");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+    expect(runLifecycle.getLifecycle).toHaveBeenCalled();
+    expect(stop().textContent).toBe("Ended");
+    // The whole view has to agree: a stopped run must not go on saying Live.
+    expect(container.querySelector(".chronicle-killfeed__live")?.textContent).toContain("Ended");
   });
 
   it("returns focus to the stable Selection trigger after inspecting from World", async () => {
@@ -608,6 +710,9 @@ describe("Vivarium2DApp", () => {
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
 
+    // The Chronicle opens by default, so "closed" is now a state the viewer
+    // chooses -- and it must still hand the whole width back when they do.
+    await click("Close Chronicle");
     expect(safeFrame()).toEqual({ top: 64, right: 56, bottom: 176, left: 20 });
     await click("Chronicle");
     expect(safeFrame()).toEqual({ top: 64, right: 436, bottom: 176, left: 20 });
@@ -637,18 +742,22 @@ describe("Vivarium2DApp", () => {
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
 
+    await click("Close Chronicle");
     expect(safeFrame()).toEqual({ top: 72, right: 52, bottom: 176, left: 20 });
     await click("Chronicle");
     expect(safeFrame()).toEqual({ top: 72, right: 434, bottom: 176, left: 20 });
   });
 
-  it("measures Story Now as the desktop narrative slot when dialogue is absent", async () => {
+  it("falls back to the reserved narrative band when nothing occupies the slot", async () => {
+    // The NOW card used to sit here whenever a checkpoint or a moment was
+    // showing. With it retired, a frame with no dialogue leaves the slot EMPTY,
+    // and the measurement has to fall back to the reserved band rather than
+    // handing the camera a strip the chrome will later take back.
     setViewport(1_440, 900);
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains("vivarium-2d-app")) return testRect(0, 0, 1_440, 900);
       if (this.classList.contains("observer-hud")) return testRect(12, 12, 674, 52);
       if (this.classList.contains("living-atlas-2d")) return testRect(1_076, 12, 352, 266);
-      if (this.classList.contains("story-now")) return testRect(128, 760, 1_184, 126);
       if (this.classList.contains("semantic-world-mirror")) return testRect(12, 300, 240, 306);
       if (this.classList.contains("observer-edge-triggers")) return testRect(1_396, 314, 44, 272);
       return testRect(0, 0, 0, 0);
@@ -668,10 +777,11 @@ describe("Vivarium2DApp", () => {
     });
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
+    await click("Close Chronicle");
 
-    expect(required(".story-now")).not.toBeNull();
+    expect(container.querySelector(".story-now")).toBeNull();
     expect(container.querySelector(".dialogue-now")).toBeNull();
-    expect(safeFrame()).toEqual({ top: 72, right: 52, bottom: 148, left: 20 });
+    expect(safeFrame()).toEqual({ top: 72, right: 52, bottom: 176, left: 20 });
   });
 
   it("bounds the measured safe frame by the app's own (QA-inset-shrunk) box, not the full window", async () => {
@@ -691,104 +801,108 @@ describe("Vivarium2DApp", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains("vivarium-2d-app")) return testRect(0, 100, 1_440, 700);
       if (this.classList.contains("observer-hud")) return testRect(12, 112, 674, 52);
-      if (this.classList.contains("story-now")) return testRect(128, 664, 1_184, 126);
+      if (this.classList.contains("dialogue-now")) return testRect(128, 664, 1_184, 126);
       return testRect(0, 0, 0, 0);
     });
-    const fixture = runtimeFixture({
-      frame: {
-        ...presentedFrame(),
-        checkpointFocus: {
-          regionId: "meadow",
-          kind: "region",
-          entityId: null,
-          segmentIndex: 0,
-          segmentCount: 1,
-          removed: false,
-        },
-      },
+    const speaking = storyMoment("5:5:single", "speak", {
+      speaker_id: "aster",
+      target_id: null,
+      text: "The meadow is quiet.",
     });
-    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
-    await act(async () => fixture.runtime.ready);
-
-    expect(required(".story-now")).not.toBeNull();
-    // Correct: bottom is bound by the 700px-tall app box (bottom 144), not the 900px
-    // window (which the bug would have produced as bottom 344, shrinking the frame to a
-    // 30%-ish sliver of the app's own box instead of its true ~80%).
-    expect(safeFrame()).toEqual({ top: 72, right: 52, bottom: 144, left: 20 });
-  });
-
-  it.each([
-    { initial: "story", replacement: "dialogue", expectedBottom: 232 },
-    { initial: "dialogue", replacement: "story", expectedBottom: 152 },
-  ] as const)(
-    "rebinds mobile narrative measurement from $initial to $replacement without a viewport resize",
-    async ({ initial, replacement, expectedBottom }) => {
-      setViewport(390, 844);
-      const observers: Array<{
-        readonly observed: Element[];
-        readonly disconnect: ReturnType<typeof vi.fn>;
-      }> = [];
-      class ResizeObserverFake {
-        readonly observed: Element[] = [];
-        readonly disconnect = vi.fn();
-        constructor(_callback: ResizeObserverCallback) {
-          observers.push(this);
-        }
-        observe(element: Element): void { this.observed.push(element); }
-        unobserve(): void {}
-      }
-      vi.stubGlobal("ResizeObserver", ResizeObserverFake);
-      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-        if (this.classList.contains("vivarium-2d-app")) return testRect(0, 0, 390, 844);
-        if (this.classList.contains("observer-hud")) return testRect(8, 8, 374, 88);
-        if (this.classList.contains("living-atlas-2d")) return testRect(102, 760, 280, 76);
-        if (this.classList.contains("story-now")) return testRect(8, 700, 374, 136);
-        if (this.classList.contains("dialogue-now")) return testRect(8, 620, 374, 216);
-        if (this.classList.contains("semantic-world-mirror")) return testRect(8, 760, 210, 76);
-        if (this.classList.contains("observer-edge-triggers")) return testRect(8, 104, 374, 44);
-        return testRect(0, 0, 0, 0);
-      });
-      const now = storyMoment("5:5:single", "speak", {
-        speaker_id: "aster",
-        text: "The meadow is quiet.",
-      });
-      const storyFrame = frameWithScene(now, null);
-      const dialogueFrame = frameWithScene(now, {
+    const fixture = runtimeFixture({
+      frame: frameWithScene(speaking, {
         speakerId: "aster",
         speakerName: "Aster",
         text: "The meadow is quiet.",
         visibleCharacters: 20,
         cursor: 20,
         hold: false,
-      });
-      const fixture = runtimeFixture({
-        frame: initial === "story" ? storyFrame : dialogueFrame,
-        chronicle: chronicleWindow({ now }),
-      });
+      }),
+      chronicle: chronicleWindow({ now: speaking }),
+    });
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
 
-      await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
-      await act(async () => fixture.runtime.ready);
-      const firstObserver = observers.at(-1)!;
-      expect(firstObserver.observed.some((element) => (
-        element.classList.contains(initial === "story" ? "story-now" : "dialogue-now")
-      ))).toBe(true);
+    expect(required(".dialogue-now")).not.toBeNull();
+    // Correct: bottom is bound by the 700px-tall app box (bottom 144), not the 900px
+    // window (which the bug would have produced as bottom 344, shrinking the frame to a
+    // 30%-ish sliver of the app's own box instead of its true ~80%).
+    expect(safeFrame()).toEqual({ top: 72, right: 52, bottom: 144, left: 20 });
+  });
 
-      await act(async () => fixture.replaceFrame(
-        replacement === "story" ? storyFrame : dialogueFrame,
-      ));
+  it("rebinds mobile narrative measurement as the dialogue caption comes and goes", async () => {
+    // The bottom slot used to have two possible owners: the NOW card and the
+    // dialogue caption. The card is retired, so the slot is now either the
+    // caption or EMPTY -- and the measurement still has to be re-bound at every
+    // transition, without waiting for a viewport resize.
+    setViewport(390, 844);
+    const observers: Array<{
+      readonly observed: Element[];
+      readonly disconnect: ReturnType<typeof vi.fn>;
+    }> = [];
+    class ResizeObserverFake {
+      readonly observed: Element[] = [];
+      readonly disconnect = vi.fn();
+      constructor(_callback: ResizeObserverCallback) {
+        observers.push(this);
+      }
+      observe(element: Element): void { this.observed.push(element); }
+      unobserve(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverFake);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("vivarium-2d-app")) return testRect(0, 0, 390, 844);
+      if (this.classList.contains("observer-hud")) return testRect(8, 8, 374, 88);
+      if (this.classList.contains("living-atlas-2d")) return testRect(102, 760, 280, 76);
+      if (this.classList.contains("dialogue-now")) return testRect(8, 620, 374, 216);
+      if (this.classList.contains("semantic-world-mirror")) return testRect(8, 760, 210, 76);
+      if (this.classList.contains("observer-edge-triggers")) return testRect(8, 104, 374, 44);
+      return testRect(0, 0, 0, 0);
+    });
+    const now = storyMoment("5:5:single", "speak", {
+      speaker_id: "aster",
+      text: "The meadow is quiet.",
+    });
+    const silentFrame = frameWithScene(now, null);
+    const dialogueFrame = frameWithScene(now, {
+      speakerId: "aster",
+      speakerName: "Aster",
+      text: "The meadow is quiet.",
+      visibleCharacters: 20,
+      cursor: 20,
+      hold: false,
+    });
+    const observesCaption = (observer: { readonly observed: Element[] }): boolean => (
+      observer.observed.some((element) => element.classList.contains("dialogue-now"))
+    );
+    const fixture = runtimeFixture({
+      frame: silentFrame,
+      chronicle: chronicleWindow({ now }),
+    });
 
-      expect(firstObserver.disconnect).toHaveBeenCalledOnce();
-      const rebound = observers.at(-1)!;
-      expect(rebound).not.toBe(firstObserver);
-      expect(rebound.observed.some((element) => (
-        element.classList.contains(replacement === "story" ? "story-now" : "dialogue-now")
-      ))).toBe(true);
-      expect(safeFrame().bottom).toBe(expectedBottom);
-      expect(844 - safeFrame().top - safeFrame().bottom).toBeGreaterThanOrEqual(844 * 0.52);
-    },
-  );
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    const empty = observers.at(-1)!;
+    expect(observesCaption(empty)).toBe(false);
+    expect(safeFrame().bottom).toBe(8);
 
-  it("keeps arbitrary entity IDs out of Story Now and its polite announcement", async () => {
+    await act(async () => fixture.replaceFrame(dialogueFrame));
+    expect(empty.disconnect).toHaveBeenCalledOnce();
+    const speaking = observers.at(-1)!;
+    expect(speaking).not.toBe(empty);
+    expect(observesCaption(speaking)).toBe(true);
+    expect(safeFrame().bottom).toBe(232);
+
+    await act(async () => fixture.replaceFrame(silentFrame));
+    expect(speaking.disconnect).toHaveBeenCalledOnce();
+    const quiet = observers.at(-1)!;
+    expect(quiet).not.toBe(speaking);
+    expect(observesCaption(quiet)).toBe(false);
+    expect(safeFrame().bottom).toBe(8);
+    expect(844 - safeFrame().top - safeFrame().bottom).toBeGreaterThanOrEqual(844 * 0.52);
+  });
+
+  it("keeps arbitrary entity IDs out of the whole shell and its polite announcement", async () => {
     vi.useFakeTimers();
     const now = storyMoment("5:5:single", "home_built", { builder_id: "aster" });
     const base = frameWithScene(now);
@@ -824,10 +938,16 @@ describe("Vivarium2DApp", () => {
 
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
-    expect(required<HTMLElement>("[data-story-now]").textContent)
-      .toContain("Unknown being completed a shelter.");
-    expect(required<HTMLElement>("[data-story-now]").textContent)
-      .not.toMatch(/mystic_007|raider_12/);
+    // The card that used to carry this copy is gone, so the denylist is proved
+    // where the copy went: the Chronicle's own sentences, and the announcement.
+    // (A being CHIP prints the display name the world published -- here the
+    // deliberately adversarial "Keeper mystic_007" -- which is the world's data,
+    // not narration inventing an opaque id.)
+    for (const line of container.querySelectorAll(".chronicle-killfeed__line")) {
+      expect(line.textContent).not.toMatch(/mystic_007|raider_12/);
+    }
+    expect(container.querySelector(".chronicle-killfeed__line")?.textContent)
+      .toContain("Unknown being");
 
     await act(async () => vi.advanceTimersByTime(750));
     expect(required<HTMLElement>("[role='status'][aria-live='polite']").textContent)

@@ -132,6 +132,24 @@ export interface ChronicleKillfeedProps {
   readonly notices?: readonly PresentationNotice[];
   /** Offered when the liveness reading says a reconnect is worth trying. */
   readonly onReconnect?: () => void;
+  /**
+   * The cursor range of the moment the world is playing RIGHT NOW.
+   *
+   * The feed used to run beside a separate bottom-right NOW card that named the
+   * current moment and carried the only "View moment" button. Two surfaces, one
+   * job, and they collided (owner direction, Safi, 2026-08-22: *"remove this
+   * 'View latest moment' card because it collides with the live stream… just
+   * consolidate into one UI instead of two confusing ones"*). The card is gone
+   * and the feed took the job: the newest entry is marked as the leading edge,
+   * and this range is what decides whether that edge is a moment still playing
+   * (**Now**) or the last one that finished (**Latest**).
+   *
+   * `null` when no moment is active, which is the ordinary quiet case.
+   */
+  readonly activeMomentRange?: Readonly<{
+    readonly firstCursor: number;
+    readonly lastCursor: number;
+  }> | null;
 }
 
 type FlowItem =
@@ -384,12 +402,39 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
   const livenessLabel = props.liveness?.label ?? "Live";
   const livenessDetail = props.liveness?.detail ?? "Watching the world as it happens.";
 
+  /**
+   * The one card that is the present tense, and what to call it.
+   *
+   * Only while the playhead is at the leading edge: once a viewer has rewound,
+   * the newest card on screen is a card they chose to look at, not the world's
+   * current moment, and the "Behind live" banner already owns that state. A
+   * badge saying NOW over a rewound feed would be a lie.
+   */
+  const newest = playhead.atLive ? delivered.at(-1) ?? null : null;
+  const activeRange = props.activeMomentRange ?? null;
+  const leadingEdge: Readonly<{ id: string; label: "Now" | "Latest" }> | null = newest === null
+    ? null
+    : Object.freeze({
+        id: newest.id,
+        label: activeRange !== null
+          && activeRange.firstCursor <= newest.cursor
+          && newest.cursor <= activeRange.lastCursor
+          ? "Now"
+          : "Latest",
+      });
+
   const goLive = (): void => {
     setSeek(null);
   };
   const openEvent = (event: StreamEvent): void => {
     setFollowBeingId(null);
-    setSeek({ toMs: Math.max(stream.floorMs, event.atMs - PREROLL_MS), atMs: stream.clockMs });
+    // Viewing the CURRENT moment must not rewind. Every other card seeks back a
+    // beat so the viewer sees the event arrive; doing that to the leading edge
+    // would drop the feed 900ms behind live and hang a "Behind live" banner over
+    // a viewer who only asked to look at what is happening now.
+    if (event.id !== leadingEdge?.id) {
+      setSeek({ toMs: Math.max(stream.floorMs, event.atMs - PREROLL_MS), atMs: stream.clockMs });
+    }
     props.onViewCursor(event.cursor);
   };
   const follow = (beingId: string): void => {
@@ -468,6 +513,7 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
               key={item.key}
               event={item.event}
               leaving={isLeaving}
+              leadingEdge={item.event.id === leadingEdge?.id ? leadingEdge.label : null}
               presence={presence}
               nameOf={(id) => stream.buffer.nameOf(id)}
               followBeingId={followBeingId}
@@ -591,6 +637,13 @@ interface KillfeedCardProps {
   readonly event: StreamEvent;
   /** The card has left the band and is being shown out. Inert while it fades. */
   readonly leaving: boolean;
+  /**
+   * `"Now"` while this card belongs to the moment still playing, `"Latest"`
+   * while it is the newest thing that has finished, `null` for every other card
+   * and for every card once the viewer has rewound. This is the mark that
+   * replaced the retired NOW panel.
+   */
+  readonly leadingEdge: "Now" | "Latest" | null;
   readonly presence: StreamPresence;
   readonly nameOf: (id: string) => string;
   readonly followBeingId: string | null;
@@ -619,10 +672,14 @@ function KillfeedCard(props: KillfeedCardProps): JSX.Element {
         event.notable ? "is-notable" : "",
         props.detailOpen ? "is-open" : "",
         props.leaving ? "is-leaving" : "",
+        props.leadingEdge === null ? "" : "is-leading",
       ].filter((token) => token.length > 0).join(" ")}
       style={{ ["--accent" as string]: event.accent }}
       data-event-cursor={event.cursor}
       data-posture={event.posture}
+      {...(props.leadingEdge === null
+        ? {}
+        : { "data-chronicle-now": props.leadingEdge, "aria-current": "true" as const })}
       // The whole card replays, not only its sentence: in a killfeed the card IS
       // the object a viewer aims at. The inner button remains the keyboard and
       // screen-reader path, and the two secondary controls stop propagation.
@@ -634,9 +691,29 @@ function KillfeedCard(props: KillfeedCardProps): JSX.Element {
       <button
         type="button"
         className="chronicle-killfeed__replay"
-        aria-label={`Replay from ${event.narration.line}`}
-        onClick={() => props.onOpen(event)}
+        aria-label={props.leadingEdge === null
+          ? `Replay from ${event.narration.line}`
+          : `View shown moment. ${props.leadingEdge === "Now" ? "Happening now" : "The latest moment"}: `
+            + event.narration.line}
+        // The card around this button carries the same action, so a click here
+        // would otherwise bubble into it and navigate the world twice for one
+        // press. The two other in-card controls already stop propagation for
+        // exactly this reason; this one was simply never noticed, because until
+        // the Chronicle became the only way to view a moment nothing counted.
+        onClick={(click) => {
+          click.stopPropagation();
+          props.onOpen(event);
+        }}
       >
+        {props.leadingEdge === null ? null : (
+          // In the sentence row rather than pinned over it: the mark is part of
+          // what the card SAYS ("now, this"), and an absolutely-placed tag would
+          // have to reserve a corner of every leading card's copy to sit in.
+          // The button's own label already carries the meaning, so this is ink.
+          <span className="chronicle-killfeed__edge" aria-hidden="true">
+            {props.leadingEdge}
+          </span>
+        )}
         <span className="chronicle-killfeed__medallion" aria-hidden="true">
           <StreamGlyph name={event.glyph} size={event.notable ? 13 : 11} />
         </span>
