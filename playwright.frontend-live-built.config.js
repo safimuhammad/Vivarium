@@ -11,15 +11,48 @@ module.exports = defineConfig({
   // Wall-clock budget for the whole test, not a bound on any assertion -- every
   // individual wait below still has its own (unchanged) limit. This smoke drives
   // a full three.js world, a live SSE stream and a real mechanics burst, so its
-  // cost tracks how fast the machine can produce frames. Measured end-to-end on
-  // a dev Mac with the browser CPU throttled to emulate a slow runner: 11.5s at
-  // 1x, 18.3s at 6x, 41.2s at 12x, 81.8s at 20x, 140.4s at 30x -- everything
-  // passing, nothing hanging, no individual wait running out. A CI runner
-  // rasterising WebGL in software (no GPU) sits well past the 60s this used to
-  // allow, which is why it died mid-preamble there while passing locally. 5
-  // minutes covers roughly a 60x-slower machine; a budget only costs time when
-  // something is genuinely stuck, so headroom here is free on a green run.
-  timeout: 300000,
+  // cost tracks how fast the machine can produce frames.
+  //
+  // 30 minutes, derived from the runner itself. The previous 300000 killed run
+  // 32539372177 partway through, and the error it printed reads like an app bug
+  // but is not one:
+  //
+  //     expect(locator).toHaveAttribute('data-event-detail-text') failed
+  //     Expected: "Mae turns away"   Received: ""
+  //
+  // Nothing ever rendered an empty attribute. Playwright's text matcher does
+  // `receivedString = receivedValue || ""` (matchers/expect.js), so `Received: ""`
+  // is what it prints whenever the expect never obtained a value at all -- and
+  // that run's call log stops at `waiting for locator(...)` with no
+  // `locator resolved to ...` line, above a `Test timeout of 300000ms exceeded`
+  // banner. The budget fired while that expect was still on its first poll. Had
+  // the attribute genuinely been empty for its own 10s, the failure would have
+  // been an ordinary assertion error with no timeout banner.
+  //
+  // Derivation, anchoring two runner failures against the same points locally
+  // (page.goto -> browserContext.close is 12.6s here; `2 passed (26.9s)`):
+  //   * run 32536793651 was still in selectMechanicsRegion 217s after the test
+  //     started; locally that point is 3.60s in ................. ~60x
+  //   * run 32539372177 was inside the first region-trail summary assertion when
+  //     300000 fired, so >=299s; locally that point is 3.88s in .. ~77x
+  //   * 12.6s x 60-77x projects a full run of 755-971s on the runner, and the
+  //     work after that anchor is the selection-heavy part, so the top of that
+  //     range is the honest estimate.
+  // 1800000 is ~1.9x that, which absorbs the run-to-run variance of a shared
+  // runner.
+  //
+  // Why the runner is that much slower: it rasterises WebGL in software with no
+  // GPU. Reproduced locally by launching the same Chrome with
+  // `--use-angle=swiftshader`, which takes this app from 113fps to 5fps; every
+  // frame-paced wait in the spec stretches with it (the renderer-summary wait
+  // goes from under 1s to 45s). CPU throttling does not model this -- it slows
+  // JS while leaving the rAF interval alone. Do not add `--disable-gpu` when
+  // reproducing: that kills the GPU process outright, the world never reaches
+  // `isReady`, and the runner does no such thing.
+  //
+  // A budget only costs time when something is genuinely stuck, so headroom here
+  // is free on a green run.
+  timeout: 1800000,
   expect: {
     timeout: 10000,
   },
