@@ -132,6 +132,16 @@ const MECHANICS_CHRONICLE_ROWS = [];
 const MECHANICS_FRAME_TIMEOUT_MS = 45000;
 const MECHANICS_FRAME_STABLE_MS = 250;
 const MECHANICS_FRAME_TOLERANCE_PX = 1;
+// How long one click gets to register a selection before the next offset is tried.
+// Was 500ms in both click loops, chosen on a dev Mac and never measured against a
+// runner. A CI run of this spec takes 4.2m against ~27s locally (~9x), so a
+// selection that lands in 300ms here has ~2.7s of work there and 500ms was simply
+// under it. 3000ms = ceil(300ms observed local x 9x runner) with margin. This is a
+// per-ATTEMPT wall-clock allowance, not an assertion: the loop still fails if no
+// offset selects the subject, and the worst case stays inside the 300s test budget
+// (9 offsets, and every attempt after the first also re-settles).
+const MECHANICS_SELECTION_MS = 3000;
+
 const MECHANICS_CLICK_OFFSETS = Object.freeze([
   [0, 0],
   [-18, 0],
@@ -885,60 +895,63 @@ async function selectMechanicsRegion(page, regionName) {
   // frame while the camera was still flying past it.
   await focusMechanicsRegion(page, regionName);
 
-  const selected = await clickMechanicsRegionUntilSelected(page, regionName);
+  const attempt = await clickMechanicsRegionUntilSelected(page, regionName);
   expect(
-    selected,
-    `mechanics live smoke should select rendered region ${regionName}`,
+    attempt.selected,
+    `mechanics live smoke should select rendered region ${regionName}: ${JSON.stringify(attempt)}`,
   ).toBe(true);
   await expect(page.locator('.inspector strong')).toHaveText('warm springs');
 }
 
 async function clickMechanicsRegionUntilSelected(page, regionName) {
-  const offsets = [
-    [0, 0],
-    [-90, 0],
-    [90, 0],
-    [0, -70],
-    [0, 70],
-    [-120, -45],
-    [120, -45],
-    [-120, 45],
-    [120, 45],
-  ];
-  for (const [dx, dy] of offsets) {
-    const point = await page.evaluate((name) => window.__vivariumWorld?.screenPointForRegion?.(name), regionName);
-    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
-      continue;
-    }
-    await page.evaluate(({ x, y }) => {
-      const canvas = document.querySelector('[data-testid="world-stage"] canvas');
-      if (!(canvas instanceof HTMLCanvasElement)) {
-        return;
+  // Mirrors `clickMechanicsHomeUntilSelected`. Regions previously re-PROJECTED
+  // between offsets but never re-SETTLED, which is the bug homes already had fixed:
+  // a missed click can land on a floating event bubble, which re-focuses the camera
+  // on that beat's subject, and every subsequent offset then clicks a point derived
+  // from a camera that is flying somewhere else entirely. Re-focusing and re-settling
+  // before each retry makes a miss recoverable instead of poisoning the whole loop.
+  const attempts = [];
+  let frame = await settleMechanicsFrame(page, { kind: 'region', id: regionName });
+  for (const [index, [dx, dy]] of MECHANICS_CLICK_OFFSETS.entries()) {
+    if (index > 0) {
+      await focusMechanicsRegion(page, regionName);
+      frame = await settleMechanicsFrame(page, { kind: 'region', id: regionName });
+      if (!frame.settled) {
+        return { selected: false, reason: 'region-left-the-stage-after-a-missed-click', frame, attempts };
       }
-      canvas.dispatchEvent(new PointerEvent('pointerdown', {
-        bubbles: true,
-        clientX: x,
-        clientY: y,
-        pointerId: 1,
-      }));
-      canvas.dispatchEvent(new MouseEvent('click', {
-        bubbles: true,
-        clientX: x,
-        clientY: y,
-      }));
-    }, { x: point.x + dx, y: point.y + dy });
+    }
+    if (!frame.settled || !frame.point) {
+      return { selected: false, reason: 'region-never-settled', frame, attempts };
+    }
+    const target = { x: frame.point.x + dx, y: frame.point.y + dy };
+    const cover = await page.evaluate(({ x, y }) => {
+      const canvas = document.querySelector('[data-testid="world-stage"] canvas');
+      const topMost = document.elementFromPoint(x, y);
+      return {
+        onCanvas: Boolean(canvas) && topMost === canvas,
+        topMost: topMost
+          ? `${topMost.tagName.toLowerCase()}.${String(topMost.className || '').split(' ').filter(Boolean).join('.')}`
+          : null,
+      };
+    }, target);
+    if (cover.onCanvas) {
+      await page.mouse.click(target.x, target.y);
+    } else {
+      await dispatchMechanicsCanvasClick(page, target);
+    }
     const selected = await page.waitForFunction((name) => {
       const pulse = document.querySelector('[data-testid="selected-focus-activity-pulse"]');
       return (
         pulse?.getAttribute('data-focus-selection-kind') === 'region' &&
         pulse?.getAttribute('data-focus-selection-id') === name
       );
-    }, regionName, { timeout: 500 }).then(() => true).catch(() => false);
+    }, regionName, { timeout: MECHANICS_SELECTION_MS }).then(() => true).catch(() => false);
+    attempts.push({ offset: [dx, dy], target, ...cover, selected });
     if (selected) {
-      return true;
+      return { selected: true, attempts };
     }
   }
-  return false;
+  return { selected: false, reason: 'no-offset-selected-the-region', frame, attempts };
 }
 
 async function selectMechanicsHome(page, homeId, { focusKind }) {
@@ -1117,7 +1130,7 @@ async function clickMechanicsHomeUntilSelected(page, homeId, initialFrame) {
       document
         .querySelector('[data-testid="selected-focus-activity-pulse"]')
         ?.getAttribute('data-focus-selection-id') === id
-    ), homeId, { timeout: 500 }).then(() => true).catch(() => false);
+    ), homeId, { timeout: MECHANICS_SELECTION_MS }).then(() => true).catch(() => false);
     attempts.push({ offset: [dx, dy], target, ...cover, selected });
     if (selected) {
       return { selected: true, attempts };
