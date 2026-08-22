@@ -299,6 +299,13 @@ export interface CanvasPresentationRendererDebug {
     outstanding: number;
     peak: number;
     lastRebuildReason: "initial" | "region" | "topology" | "resize" | null;
+    /**
+     * How many times the browser threw the mounted static cache's backing store away and the
+     * renderer re-rasterised it. Non-zero means the artwork was recovered, not that it was lost.
+     */
+    pixelLossRecoveries: number;
+    /** Whether the cache being drawn from right now is known to have lost its pixels. */
+    pixelsLost: boolean;
   }>;
 }
 
@@ -792,6 +799,21 @@ export async function createCanvasPresentationRenderer(
   let cacheOwnersCreated = 0;
   let cacheOwnersDisposed = 0;
   let peakCacheOwners = 0;
+  /**
+   * Cache canvases whose backing store the browser has thrown away.
+   *
+   * A static-layer cache is rasterised ONCE and thereafter only blitted, so it is the one surface
+   * in this renderer that never repaints itself. When the compositor drops a 2D canvas' backing
+   * store -- which Chrome does under canvas-memory pressure, and after a GPU process restart --
+   * the canvas comes back the right SIZE and completely EMPTY. `drawImage` of an empty canvas
+   * neither throws nor draws, so without this the region's terrain and scenery silently vanish for
+   * the rest of the session while the beings, homes and event feed carry on drawing normally.
+   * Membership is permanent per canvas: a rebuild allocates fresh canvases, so an entry here can
+   * only ever describe a surface we are about to retire.
+   */
+  const cacheCanvasesWithLostPixels = new WeakSet<HTMLCanvasElement>();
+  /** How many times a lost static-cache backing store has been rebuilt this session. */
+  let staticCachePixelLossRecoveries = 0;
   let lastCacheRebuildReason: CanvasPresentationRendererDebug["cache"]["lastRebuildReason"] = null;
   const staticArtFallbackKeys = new Set<string>();
   let selection: ObserverSelection = null;
@@ -1205,7 +1227,7 @@ export async function createCanvasPresentationRenderer(
       const owner = createOwner({ label, width, height });
       cacheOwnersCreated += 1;
       peakCacheOwners = Math.max(peakCacheOwners, cacheOwnersCreated - cacheOwnersDisposed);
-      return owner;
+      return watchCacheCanvasPixels(owner);
     };
     const createdOwners: CacheCanvasOwner[] = [];
     let terrain: CacheCanvasOwner;
@@ -1558,8 +1580,106 @@ export async function createCanvasPresentationRenderer(
   const replaceCache = (next: CachePair | null): void => {
     if (cache === next) return;
     const prior = cache;
+    accountStaticCacheRecovery(prior, next);
     cache = next;
     disposeOwnedCachePair(prior);
+  };
+
+  /**
+   * Watch one static-cache canvas for the browser throwing its backing store away.
+   *
+   * `contextlost` fires when the compositor drops the surface; `contextrestored` fires once a
+   * usable -- and blank -- surface is back. Both are recorded, because a canvas that has been
+   * through either is no longer carrying the pixels we rasterised into it, and this renderer has
+   * no other way to notice: the static layers are painted once and then only read.
+   *
+   * @param owner - The freshly created cache-canvas owner to watch.
+   * @returns An owner that behaves identically and detaches its listeners when disposed.
+   * @remarks Side effects: registers DOM listeners on `owner.canvas`; on loss it records the
+   *   canvas in {@link cacheCanvasesWithLostPixels} and, when the canvas belongs to the MOUNTED
+   *   cache, asks {@link requestLostStaticCacheRebuild} to re-rasterise it.
+   */
+  const watchCacheCanvasPixels = (owner: CacheCanvasOwner): CacheCanvasOwner => {
+    const { canvas } = owner;
+    if (typeof canvas.addEventListener !== "function") return owner;
+    const onPixelsLost = (): void => {
+      cacheCanvasesWithLostPixels.add(canvas);
+      requestLostStaticCacheRebuild();
+    };
+    canvas.addEventListener("contextlost", onPixelsLost);
+    canvas.addEventListener("contextrestored", onPixelsLost);
+    return {
+      canvas,
+      context: owner.context,
+      dispose(): void {
+        if (typeof canvas.removeEventListener === "function") {
+          canvas.removeEventListener("contextlost", onPixelsLost);
+          canvas.removeEventListener("contextrestored", onPixelsLost);
+        }
+        owner.dispose();
+      },
+    };
+  };
+
+  /** Whether any of one cache pair's canvases has had its backing store thrown away. */
+  const cachePairLostPixels = (pair: CachePair | null): boolean => pair !== null && (
+    cacheCanvasesWithLostPixels.has(pair.terrain.canvas)
+    || cacheCanvasesWithLostPixels.has(pair.scenery.canvas)
+    || cacheCanvasesWithLostPixels.has(pair.continuationMatte.canvas)
+  );
+
+  /** Whether the static cache currently being drawn from has lost any of its pixels. */
+  const mountedStaticCacheLostPixels = (): boolean => cachePairLostPixels(cache);
+
+  /**
+   * Count a cache swap that retires canvases the browser had emptied.
+   *
+   * Recorded on the swap rather than on the request so the witness says how many times the art was
+   * actually put back, never how many times a repair was merely attempted.
+   *
+   * @param retired - The cache pair being unmounted.
+   * @param installed - The cache pair taking its place.
+   */
+  const accountStaticCacheRecovery = (
+    retired: CachePair | null,
+    installed: CachePair | null,
+  ): void => {
+    if (installed === null || retired === installed || !cachePairLostPixels(retired)) return;
+    staticCachePixelLossRecoveries += 1;
+  };
+
+  /**
+   * Re-rasterise the observed region's static layers after the browser discarded them.
+   *
+   * Deliberately routed through the ordinary `loadRegion` atlas-commit path rather than a bespoke
+   * repair: that path already leases the atlases, drives the region's exact static-scene provider
+   * within its draw budget, and swaps the cache atomically, and `prepareLoadedRegion` treats a
+   * lost mounted cache as requiring preparation (which it otherwise would not, the descriptor
+   * being unchanged). Suppressed while a load is already in flight -- that load will build a fresh
+   * cache anyway -- so this can never become a per-frame retry loop.
+   *
+   * No viewer-facing failure is raised on the recoverable path, deliberately. The stage's failure
+   * surface is a modal that stays up until the viewer rebuilds the whole renderer, and parking one
+   * over art that is about to put itself back would cost more than the fault does; the durable
+   * witness is `debug().cache.pixelLossRecoveries`/`pixelsLost`. A loss we cannot rebuild from --
+   * no observed region, or no accepted frame to rebuild it at -- is a different thing, and does
+   * get reported, because then the blank region really is what the viewer keeps.
+   *
+   * @remarks Side effects: may start a region load, or emit a retryable canvas failure.
+   */
+  const requestLostStaticCacheRebuild = (): void => {
+    if (disposed || loading !== null || !mountedStaticCacheLostPixels()) return;
+    const regionId = visibleRegionId;
+    const frame = acceptedFrame;
+    if (regionId === null || frame === null) {
+      emitFailure({
+        kind: "canvas",
+        retryable: true,
+        publicMessage: "The world view could not be updated.",
+      });
+      return;
+    }
+    loadRegion(frame, regionId, true, acceptedBatch, regionId);
   };
 
   /**
@@ -1953,7 +2073,9 @@ export async function createCanvasPresentationRenderer(
     for (const regionId of [...atlasIslands.keys()]) {
       if (known.has(regionId)) continue;
       atlasIslands.delete(regionId);
+      releaseAtlasRaster(atlasLayers.get(regionId)?.layers ?? null);
       atlasLayers.delete(regionId);
+      releaseAtlasRaster(atlasSymbolLayers.get(regionId)?.layer ?? null);
       atlasSymbolLayers.delete(regionId);
       atlasSymbolRects.delete(regionId);
     }
@@ -1965,6 +2087,29 @@ export async function createCanvasPresentationRenderer(
     );
     atlasLayout = { signature, sheet: packed };
     return packed;
+  };
+
+  /**
+   * Release the backing stores of atlas raster surfaces that nothing will draw again.
+   *
+   * Only ever called with a surface the owning map has just replaced or dropped, so the zeroing
+   * can never blank something still on screen. Anything that is not a canvas (a test double, an
+   * `ImageBitmap`) is left alone.
+   *
+   * @param layers - The superseded island layers, map inset, or `null`.
+   */
+  const releaseAtlasRaster = (
+    layers: IslandLayers | MapSymbolLayer | null,
+  ): void => {
+    if (layers === null) return;
+    const surfaces = "canvas" in layers
+      ? [layers.canvas]
+      : [layers.shadow, layers.water, layers.dressing];
+    for (const surface of surfaces) {
+      if (surface === null || !(surface instanceof HTMLCanvasElement)) continue;
+      surface.width = 0;
+      surface.height = 0;
+    }
   };
 
   /** The island's raster layers, rebuilt only when its mask, its vitality bucket, or the
@@ -1980,6 +2125,12 @@ export async function createCanvasPresentationRenderer(
     const key = `${island.signature}|v${vitalityBucket}|l${lightBucket}`;
     const existing = atlasLayers.get(regionId);
     if (existing !== undefined && existing.key === key) return existing.layers;
+    // Freeing the superseded surfaces here rather than leaving them to the collector matters:
+    // canvas backing stores are off-heap, the collector prices them as ordinary small objects,
+    // and this key moves on every vitality and time-of-day bucket -- so a run accumulates
+    // thousands of unreferenced-but-still-resident surfaces beside the region-sized static
+    // caches, which is precisely the pressure that makes a browser discard a cache's pixels.
+    if (existing !== undefined) releaseAtlasRaster(existing.layers);
     const layers = buildIslandLayers({
       mask: island.mask,
       surface: atlasSurface,
@@ -2018,6 +2169,7 @@ export async function createCanvasPresentationRenderer(
     const cached = atlasSymbolLayers.get(regionId);
     if (cached !== undefined && cached.signature === island.signature) return cached.layer;
     if (content.length === 0) return null;
+    if (cached !== undefined) releaseAtlasRaster(cached.layer);
     const layer = buildRegionMapInset({
       regionId,
       content,
@@ -4539,6 +4691,7 @@ export async function createCanvasPresentationRenderer(
       const priorCache = cache;
       graph = candidate;
       candidate = null;
+      accountStaticCacheRecovery(priorCache, preparedCache);
       cache = preparedCache;
       preparedCache = null;
       visibleRegionId = generation.regionId;
@@ -4639,9 +4792,13 @@ export async function createCanvasPresentationRenderer(
       releaseLeases(leases.values());
       return;
     }
+    // A cache whose canvases the browser emptied still matches its descriptor exactly, so the
+    // structural comparison below cannot see it. Without this clause the reload would adopt the
+    // blank canvases it already has and the region would stay bare for the rest of the session.
     const cacheRequiresPreparation = visibleRegionId !== generation.regionId
       || cache === null
       || cache.regionId !== generation.regionId
+      || mountedStaticCacheLostPixels()
       || !sameProductionStaticSceneDescriptor(
         cache.descriptor,
         generation.staticTarget.descriptor,
@@ -5370,6 +5527,8 @@ export async function createCanvasPresentationRenderer(
           outstanding: cacheOwnersCreated - cacheOwnersDisposed,
           peak: peakCacheOwners,
           lastRebuildReason: lastCacheRebuildReason,
+          pixelLossRecoveries: staticCachePixelLossRecoveries,
+          pixelsLost: mountedStaticCacheLostPixels(),
         },
       });
     },

@@ -2489,6 +2489,56 @@ describe("CanvasPresentationRenderer", () => {
       fixture.renderer.dispose();
     });
 
+    it("re-rasterises the region's art after the browser discards a static cache canvas' pixels", async () => {
+      // The defect this covers was observed live: minutes into a run the region's terrain,
+      // landforms and props vanished and never came back, leaving the houses and beings floating
+      // on the sheet's open water while the event feed kept flowing.
+      //
+      // The static layers are the one surface here that is rasterised ONCE and thereafter only
+      // blitted. When the compositor throws a 2D canvas' backing store away -- which it does under
+      // canvas-memory pressure, and after a GPU process restart -- the canvas returns at the right
+      // SIZE and completely EMPTY. `drawImage` of an empty canvas neither throws nor draws, so the
+      // blank cache satisfied every structural check the renderer had (same region, same
+      // descriptor, same cache identity) and was drawn, empty, for the rest of the session.
+      //
+      // The recovery is driven by the browser's own `contextlost`/`contextrestored` signal, not by
+      // a periodic re-render: a fresh cache must be rasterised and drawn from.
+      const fixture = await harness({
+        worldSheetSnapshots: true,
+        // The same-region atlas adoption path requires a fresh graph generation, which the shared
+        // default fake graph cannot be.
+        sceneGraphFactory: () => fakeGraph() as unknown as ProductionSceneGraph,
+      });
+      fixture.renderer.resize(800, 600);
+      fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "worn" }));
+      await settle();
+      fixture.driver.fire(16);
+      await settle();
+
+      const context = contexts.get(fixture.canvas)!;
+      const terrainSources = (): readonly HTMLCanvasElement[] => context.drawImageCalls
+        .map((args) => args[0] as HTMLCanvasElement | undefined)
+        .filter((source): source is HTMLCanvasElement => source?.dataset?.cache === "terrain");
+      const emptied = terrainSources().at(-1);
+      expect(emptied).toBeDefined();
+
+      emptied!.dispatchEvent(new Event("contextlost"));
+      await settle();
+      await settle();
+      await settle();
+      fixture.driver.fire(32);
+      await settle();
+
+      const restored = terrainSources().at(-1);
+      expect(restored).toBeDefined();
+      // Still drawing terrain -- and from a canvas that was rasterised after the loss, not from
+      // the emptied one the renderer used to keep blitting forever.
+      expect(restored).not.toBe(emptied);
+      expect(fixture.debug().cache.pixelLossRecoveries).toBe(1);
+      expect(fixture.debug().cache.pixelsLost).toBe(false);
+      fixture.renderer.dispose();
+    });
+
     it("draws the sheet background BEHIND the focused region's own terrain, never covering it", async () => {
       // Regression coverage for a real bug caught only via live browser evidence, not by the
       // other tests in this block: the gutter fill covers the WHOLE sheet's bounds, which
@@ -3358,6 +3408,10 @@ describe("CanvasPresentationRenderer", () => {
         outstanding: 0,
         peak: 0,
         lastRebuildReason: null,
+        // A cache that was never allocated cannot have lost a backing store, and an allocation
+        // failure must not be mistaken for one -- asserted exactly.
+        pixelLossRecoveries: 0,
+        pixelsLost: false,
       },
       frameIdentity: null,
       visibleRegionId: null,
@@ -4531,6 +4585,10 @@ describe("CanvasPresentationRenderer", () => {
       outstanding: 3,
       peak: 3,
       lastRebuildReason: "initial",
+      // A healthy session never loses a cache backing store, so the recovery witness stays at its
+      // resting values -- asserted exactly, so a spurious recovery would fail this test.
+      pixelLossRecoveries: 0,
+      pixelsLost: false,
     });
 
     fixture.graph.nextDiff = {
