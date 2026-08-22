@@ -20,6 +20,7 @@ const {
   buildRawRunMetadataBannedCopy,
   expectNoRawRunMetadataCopy,
   expectRunConstants,
+  fetchJsonlArtifact,
 } = require('./live-common-helpers');
 
 test('production app observes the real deterministic live API and SSE stream', async ({ page, request }) => {
@@ -214,7 +215,19 @@ test('production app observes the real deterministic live API and SSE stream', a
   expect(eventsEnvelope.status).toBe(200);
   expect(eventsEnvelope.body.schema).toBe(1);
   expect(eventsEnvelope.body.events.length).toBeGreaterThan(0);
-  expect(eventsEnvelope.body.events.map((entry) => entry.event.type))
+  // Vocabulary is asserted against the DURABLE archive, not the live feed. The feed
+  // is a bounded ring buffer (`feed_maxlen`, 512), so `?cursor=0` means "since the
+  // oldest RETAINED cursor", never "since the start" -- on a slow machine the run
+  // outlives 512 events and `simulation_started` is evicted before this runs. That
+  // is correct behaviour for a live feed and the wrong source for a completeness
+  // claim. Same matcher, same unshrunk LIVE_RUN_EVENT_TYPES, lossless sink of the
+  // same CompositeEventLog. The superset guard keeps an empty or stale archive from
+  // making this vacuous. Fixed in the built sibling first (CI); carried here because
+  // this spec had the identical latent bug and is not covered by CI.
+  const runEventArtifact = await fetchJsonlArtifact(page, '/api/replay/artifacts/events');
+  expect(runEventArtifact.ok).toBe(true);
+  expect(runEventArtifact.rows.length).toBeGreaterThanOrEqual(eventsEnvelope.body.events.length);
+  expect(runEventArtifact.rows.map((row) => row.type))
     .toEqual(expect.arrayContaining(LIVE_RUN_EVENT_TYPES));
 
   expect(failedRequests).toEqual([]);

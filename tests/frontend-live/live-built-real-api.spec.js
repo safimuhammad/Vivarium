@@ -20,6 +20,7 @@ const {
   buildRawRunMetadataBannedCopy,
   expectNoRawRunMetadataCopy,
   expectRunConstants,
+  fetchJsonlArtifact,
 } = require('./live-common-helpers');
 
 test('built frontend observes the real deterministic live API and SSE stream', async ({ page, request }) => {
@@ -136,6 +137,33 @@ test('built frontend observes the real deterministic live API and SSE stream', a
     };
   });
 
+  // Whole-run event vocabulary, read from the DURABLE archive rather than the live
+  // feed. `/api/events` is backed by a ring buffer (`ServerSettings.feed_maxlen`,
+  // 512), so `?cursor=0` does not mean "since the beginning" -- it means "since the
+  // oldest event still retained", which the envelope reports as `oldest_cursor` with
+  // `overflow: true`. Locally the whole run fits and the two sources look identical;
+  // on a runner they do not, and asserting the vocabulary against the feed made this
+  // spec fail in CI run 32543802379 with a `Received` list of nothing but `speak`.
+  //
+  // Measured against the harness this spec runs (`tests/frontend_live/live_api_server.py`,
+  // 4 breathing agents, 120s of run duration): the buffer overflows ~70s in, well
+  // inside the run's own lifetime and long before a software-rasterising runner has
+  // crawled from page load to here. The burst survives eviction only because
+  // `/api/test/mechanics/run` quiesces the breathing loop, so nothing is appended
+  // after it; `simulation_started`, emitted at cursor 1, does not. That is the whole
+  // failure: one true event, correctly forgotten by a live feed that is meant to
+  // forget. Raising `feed_maxlen` would only move the wrap later, and any value loses
+  // to a longer run.
+  //
+  // `/api/replay/artifacts/events` is the lossless sink of the same `CompositeEventLog`
+  // (`scripts/run.py`) -- every event, in order, no bound -- streamed whole as NDJSON,
+  // so there is no page to walk and no page budget to silently truncate against
+  // (`/api/replay/events` has both). The SSE stream is the other candidate and is
+  // rejected for the same reason the feed is: the client subscribes at the snapshot's
+  // cursor, so the union of what it observes can never contain the run's opening
+  // events.
+  const runEventArtifact = await fetchJsonlArtifact(page, '/api/replay/artifacts/events');
+
   await page.getByRole('button', { name: 'Open archive — Archive Preserved view', exact: true }).click();
 
   const browserState = await page.evaluate(() => ({
@@ -230,7 +258,14 @@ test('built frontend observes the real deterministic live API and SSE stream', a
   expect(eventsEnvelope.status).toBe(200);
   expect(eventsEnvelope.body.schema).toBe(1);
   expect(eventsEnvelope.body.events.length).toBeGreaterThan(0);
-  expect(eventsEnvelope.body.events.map((entry) => entry.event.type))
+  expect(runEventArtifact.ok).toBe(true);
+  expect(runEventArtifact.status).toBe(200);
+  expect(runEventArtifact.contentType).toContain('application/x-ndjson');
+  // The durable sink can never hold less than the forgetful one -- it is written first
+  // and never evicts -- so this pins the archive as a superset of the feed rather than
+  // a stale or empty file that would make the vocabulary assertion below vacuous.
+  expect(runEventArtifact.rows.length).toBeGreaterThanOrEqual(eventsEnvelope.body.events.length);
+  expect(runEventArtifact.rows.map((row) => row.type))
     .toEqual(expect.arrayContaining(LIVE_RUN_EVENT_TYPES));
   expect(failedRequests).toEqual([]);
   for (const path of API_PATHS) {
