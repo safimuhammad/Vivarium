@@ -131,10 +131,57 @@ jobs:
   # `build:frontend` before serving the preview, so no build step is needed here.
   # ffmpeg is not needed either -- that is the capture-handoff contract's
   # dependency, and that contract stays on the push path.
+  # Nightly, but only when there is something new to smoke. Compares HEAD against
+  # the head SHA of the previous COMPLETED scheduled run: unchanged means nobody
+  # pushed since the last nightly, so the 16-minute job would re-test bytes it has
+  # already tested. Ten pushes in a day still produce exactly one nightly run, on
+  # the latest commit -- the gate keys on "did main move", not on how often.
+  # A manual `workflow_dispatch` always runs: asking for it IS the intent.
+  smoke-gate:
+    name: did main move since the last smoke?
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+
+    steps:
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "manual run -- always smoking"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # `status=completed` excludes this run, which is still in progress.
+          previous=$(gh api \
+            "repos/$REPO/actions/workflows/ci.yml/runs?event=schedule&status=completed&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // ""')
+          if [ -z "$previous" ]; then
+            echo "no previous scheduled run -- smoking"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$previous" != "$HEAD_SHA" ]; then
+            echo "main moved: $previous -> $HEAD_SHA -- smoking"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main unchanged since $previous -- nothing new to smoke, skipping"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   frontend-live-smoke:
     name: built live smoke (nightly)
     runs-on: ubuntu-latest
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: smoke-gate
+    if: needs.smoke-gate.outputs.should_run == 'true'
 
     steps:
       - name: Check out repository
