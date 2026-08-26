@@ -38,6 +38,8 @@ import { createProductionRegionMapRecipe } from "../maps/ProductionRegionMapReci
 import {
   EnvironmentSystem,
   ENVIRONMENT_POOL_CAPACITIES,
+  TEXT_FADE_OUT_MS,
+  textFadeAlpha,
   TRANSIENT_SMOKE_SLOTS,
   type EnvironmentEffectRequest,
 } from "./EnvironmentSystem";
@@ -45,7 +47,7 @@ import {
 type SpeechRequest = Extract<EnvironmentEffectRequest, { kind: "speech-bubble" }>;
 
 /** One ordinary spoken line, with the grammar's own defaults filled in. */
-function speech(speakerId: string, text: string): SpeechRequest {
+function speech(speakerId: string, text: string, targetId?: string): SpeechRequest {
   return {
     kind: "speech-bubble",
     at: { x: 100, y: 100 },
@@ -56,6 +58,7 @@ function speech(speakerId: string, text: string): SpeechRequest {
     hue: identityHue(speakerId),
     accent: "#8a8270",
     tier: "murmur",
+    ...(targetId === undefined ? {} : { targetId }),
   };
 }
 
@@ -581,13 +584,16 @@ describe("EnvironmentSystem", () => {
     expect(bubble.surface.width).toBeGreaterThan(brief.surface.width);
   });
 
-  it("holds the whole message on screen long enough to read it", () => {
-    // 70ms/char is ~171 words per minute; the old 9s ceiling paid for 111
-    // characters, i.e. two thirds of a median message going unread.
+  it("keeps a long message up for the full seven seconds, and no longer", () => {
+    // Owner band (Safi, 2026-08-26): 5-7s, longer message = closer to 7s. A
+    // 380-character line is nearly the saturation length, so it earns very
+    // close to the ceiling -- and the ceiling is now a hard 7s, not 30s.
     const system = createSystem(recipeFor(world[0]!));
     system.emit(speech("aster", "a".repeat(380)), 0);
-    system.advanceTo(27_000);
+    system.advanceTo(6_800);
     expect(system.diagnostics().activeBubbles).toBe(1);
+    system.advanceTo(7_001);
+    expect(system.diagnostics().activeBubbles).toBe(0);
     system.dispose();
   });
 
@@ -750,18 +756,17 @@ describe("EnvironmentSystem", () => {
     expect(inkRun(solid, 0)).toBeGreaterThan(inkRun(dashed, 0));
   });
 
-  it("holds a bubble for at least its own scene AND long enough to read every word of it, and reduced motion EXTENDS that", () => {
-    // Two independent floors on presence: the scene's own length (3s + 80ms/char,
-    // capped 14s) and the reading budget (1.2s + 70ms/char, i.e. ~171 wpm,
-    // capped 30s). A bubble must outlast both -- since 2026-08-21 it carries the
-    // WHOLE message, so the reading budget is the one that binds for anything
-    // long, and the old 9s ceiling would have taken a median line away with two
-    // thirds of it unread.
+  it("lives 5s to 7s by message length, and reduced motion EXTENDS that", () => {
+    // Owner-set band (Safi, 2026-08-26), replacing the reading-budget model:
+    // `clamp(5000 + 5 x visibleChars, 5000, 7000)`. A bubble is the live pulse
+    // of a conversation; the Chronicle feed is the record of it.
     const brief = createSystem(recipeFor(world[0]!));
     brief.emit(speech("aster", "Yes."), 0);
-    brief.advanceTo(3_299);
+    // The floor is a flat five seconds -- not the 3.3s the old reading budget
+    // gave a four-character line.
+    brief.advanceTo(4_999);
     expect(brief.diagnostics().activeBubbles).toBe(1);
-    brief.advanceTo(3_320);
+    brief.advanceTo(5_021);
     expect(brief.diagnostics().activeBubbles).toBe(0);
     brief.dispose();
 
@@ -771,37 +776,107 @@ describe("EnvironmentSystem", () => {
       + "of our breathing. I am held by the presence of my companions, and by the "
       + "quiet that has settled over this place since the morning.";
     long.emit(speech("aster", real), 0);
-    // Its 14s scene is over; its 385 characters are not read yet. 60ms/char is
-    // a deliberately generous 285 words per minute -- the budget must clear even
-    // that for the whole message.
-    long.advanceTo(14_000);
+    // A median-length line earns most of the band ...
+    long.advanceTo(6_000);
     expect(long.diagnostics().activeBubbles).toBe(1);
-    long.advanceTo(real.length * 60);
-    expect(long.diagnostics().activeBubbles).toBe(1);
-    long.advanceTo(30_001);
+    // ... and the ceiling binds hard at seven seconds. This is the deliberate
+    // consequence the owner chose: a 385-character line is NOT fully readable
+    // above a head any more.
+    long.advanceTo(7_001);
     expect(long.diagnostics().activeBubbles).toBe(0);
     long.dispose();
 
-    // The budget is bounded: an outlier cannot park itself over the world.
+    // Longer means longer, monotonically, up to the ceiling.
+    const shortRun = createSystem(recipeFor(world[0]!));
+    shortRun.emit(speech("aster", "a".repeat(40)), 0);
+    shortRun.advanceTo(5_199);
+    expect(shortRun.diagnostics().activeBubbles).toBe(1);
+    shortRun.advanceTo(5_221);
+    expect(shortRun.diagnostics().activeBubbles).toBe(0);
+    shortRun.dispose();
+
+    // An outlier still cannot park itself over the world.
     const outlier = createSystem(recipeFor(world[0]!));
     outlier.emit(speech("aster", "a".repeat(1_153)), 0);
-    outlier.advanceTo(30_001);
+    outlier.advanceTo(7_001);
     expect(outlier.diagnostics().activeBubbles).toBe(0);
     outlier.dispose();
 
+    // Reduced motion is the one carve-out kept from the old model: an
+    // accessibility contract, not a reading budget.
     const calm = createSystem(recipeFor(world[0]!), undefined, true);
     calm.emit(speech("aster", "Yes."), 0);
-    calm.advanceTo(3_320);
+    calm.advanceTo(5_021);
     expect(calm.diagnostics().activeBubbles).toBe(1);
     calm.dispose();
   });
 
-  it("replaces a being's live bubble with their next one -- one head, one bubble -- and leaves the old one as residue", () => {
+  it("fades a being's previous bubble out when their next one arrives, then leaves residue", () => {
+    // One head, one bubble -- but the replaced one now DISSOLVES rather than
+    // popping (Safi, 2026-08-26: "the prev should fade away").
     const system = createSystem(recipeFor(world[0]!));
     system.emit(speech("aster", "First."), 0);
     system.emit(speech("aster", "Second."), 100);
+    // Both are alive for the length of the fade: the old one on its way out ...
+    expect(system.diagnostics().activeBubbles).toBe(2);
+    expect(system.diagnostics().activeResidue).toBe(0);
+    system.advanceTo(300);
+    expect(system.diagnostics().activeBubbles).toBe(2);
+    // ... and gone, as residue, once the fade lands.
+    system.advanceTo(501);
     expect(system.diagnostics().activeBubbles).toBe(1);
     expect(system.diagnostics().activeResidue).toBe(1);
+    system.dispose();
+  });
+
+  it("dissolves a bubble instead of popping it, at both ends of its life", () => {
+    // "Fade out, do not pop" (Safi, 2026-08-26). ONE 400ms alpha ramp serves
+    // both ways a bubble leaves: running out of its 5-7s, and being superseded,
+    // which simply pulls the deadline into that ramp.
+    const expiresAtMs = 5_020;
+    const slot = { expiresAtMs };
+    // Full strength for the whole readable life ...
+    expect(textFadeAlpha(slot, 0)).toBe(1);
+    expect(textFadeAlpha(slot, expiresAtMs - TEXT_FADE_OUT_MS)).toBe(1);
+    // ... then a ramp, not a cliff ...
+    expect(textFadeAlpha(slot, expiresAtMs - TEXT_FADE_OUT_MS / 2)).toBeCloseTo(0.5, 5);
+    expect(textFadeAlpha(slot, expiresAtMs - 40)).toBeCloseTo(0.1, 5);
+    // ... reaching zero exactly at the deadline, never below it.
+    expect(textFadeAlpha(slot, expiresAtMs)).toBe(0);
+    expect(textFadeAlpha(slot, expiresAtMs + 10_000)).toBe(0);
+    expect(TEXT_FADE_OUT_MS).toBe(400);
+  });
+
+  it("supersedes the partner it is answering, and nobody else in the world", () => {
+    // THE RULE (Safi, 2026-08-26): a new utterance supersedes the previous one
+    // from the same being, or from that being's conversation partner -- the pair
+    // currently exchanging. Utterances elsewhere must NOT clear each other.
+    const system = createSystem(recipeFor(world[0]!));
+    system.emit(speech("aster", "Have you seen the springs?", "briar"), 0);
+    // A third being, talking to somebody else entirely, is a bystander here.
+    system.emit(speech("cinder", "The ridge is bare again.", "dune"), 10);
+    expect(system.diagnostics().activeBubbles).toBe(2);
+
+    // Briar answers Aster: Aster's line is the one this reply displaces.
+    system.emit(speech("briar", "Only at dusk.", "aster"), 20);
+    expect(system.diagnostics().activeBubbles).toBe(3);
+    system.advanceTo(421);
+    // Aster's faded; briar's is up; cinder's -- a different conversation -- is
+    // untouched and still running out its own 5-7s.
+    expect(system.diagnostics().activeBubbles).toBe(2);
+    expect(system.diagnostics().activeResidue).toBe(1);
+    system.dispose();
+  });
+
+  it("does not let a stranger's line clear a bubble that was never addressed to them", () => {
+    const system = createSystem(recipeFor(world[0]!));
+    system.emit(speech("aster", "A long thought about the water.", "briar"), 0);
+    // Briar speaks -- but to a THIRD being, so this is not the pair exchanging.
+    system.emit(speech("briar", "Dune, hold the door.", "dune"), 10);
+    system.advanceTo(421);
+    // Both survive: only a reply aimed BACK at the speaker supersedes.
+    expect(system.diagnostics().activeBubbles).toBe(2);
+    expect(system.diagnostics().activeResidue).toBe(0);
     system.dispose();
   });
 

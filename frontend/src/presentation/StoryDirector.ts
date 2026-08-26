@@ -182,22 +182,9 @@ const MAX_DEFERRED_UTTERANCE_EVIDENCE = 256;
  * produces at most three.
  */
 const MAX_FRAME_STAGING = 12;
-/**
- * How long a word may wait for feet, in presentation ms.
- *
- * A ceiling, never the normal case: {@link CONVERSATION_APPROACH_MAX_PX} already
- * bounds a staged approach at well under three seconds. This exists so that a
- * decision returning an absurd budget — a route primitive changing under us, a
- * clock jumping — can never make a line unreadable by holding it forever. Past
- * it the words are simply raised; the walk, which is already in flight, keeps
- * going and nothing is lost but the exactness of the arrival.
- */
-const MAX_UTTERANCE_HOLD_MS = 4_000;
 /** The decision a line gets when staging could not make one: raise it, move nobody. */
 const UNSTAGED: ConversationStagingDecision = Object.freeze({
   beats: Object.freeze([]),
-  arrivalBeats: Object.freeze([]),
-  delayMs: 0,
   outcome: "unplaced",
 });
 
@@ -205,13 +192,6 @@ type CheckpointFocusSeed = Omit<
   CheckpointFocusTarget,
   "segmentIndex" | "segmentCount"
 >;
-
-/** One drained utterance waiting for its addressee's feet, and what lands with it. */
-interface PendingUtteranceRelease {
-  readonly utterance: PresentedUtterance;
-  readonly arrivalBeats: readonly PresentedStagingBeat[];
-  readonly releaseAtMs: number;
-}
 
 interface ActiveCheckpointHold {
   readonly line: number;
@@ -272,24 +252,6 @@ export class StoryDirector {
   private utterances: readonly PresentedUtterance[] = Object.freeze([]);
   private staging: readonly PresentedStagingBeat[] = Object.freeze([]);
   /**
-   * Words whose feet have not arrived yet, in the order they were drained.
-   *
-   * Release is MONOTONIC across the whole queue, not per pair: a line released
-   * ahead of an earlier one would put the observer's own record of the world
-   * out of the order it happened in, and the Chronicle feed is ordered. The
-   * cost is bounded — one approach's budget, and only for lines drained behind
-   * a staged one.
-   */
-  private pendingReleases: PendingUtteranceRelease[] = [];
-  /**
-   * The release timer, deliberately independent of the scene clock.
-   *
-   * `scheduleNext` exists to advance a scene and returns early when no scene
-   * holds the stage — which is precisely the common case for a conversation, a
-   * lane that by construction never takes the stage. Sharing that timer would
-   * have made a staged line wait for the next scene to release its words.
-   */
-  private releaseCancel: (() => void) | null = null;
   /**
    * The high-water mark of moments taken off the queue and finished.
    *
@@ -521,7 +483,6 @@ export class StoryDirector {
       this.compactPendingCheckpointsForPause();
       this.paused = true;
       this.cancelScheduledClock();
-      this.scheduleUtteranceRelease();
       this.pausedSnapshot = this.makeSnapshot();
       this.emit();
       return;
@@ -532,11 +493,6 @@ export class StoryDirector {
     this.reconcileCheckpointIfSafe();
     this.startNextIfIdle();
     this.scheduleNext();
-    // A view resuming after arbitrary wall time has feet that kept walking
-    // while it was away: everything already due is raised at once rather than
-    // re-queued behind a timer that would make the observer wait twice.
-    this.releaseRipeUtterances();
-    this.scheduleUtteranceRelease();
     this.emit();
   }
 
@@ -560,9 +516,7 @@ export class StoryDirector {
     else {
       this.startNextIfIdle();
       this.scheduleNext();
-      this.releaseRipeUtterances();
     }
-    this.scheduleUtteranceRelease();
     this.emit();
   }
 
@@ -640,9 +594,6 @@ export class StoryDirector {
     if (this.disposed) return;
     this.disposed = true;
     this.cancelScheduledClock();
-    this.releaseCancel?.();
-    this.releaseCancel = null;
-    this.pendingReleases = [];
     this.pendingCheckpoints = [];
     this.checkpointCompactionCount = 0;
     this.newestCompactedCheckpointDigest = null;
@@ -772,57 +723,44 @@ export class StoryDirector {
   }
 
   /**
-   * Raises drained words, bringing two beings together first when they should be.
+   * Raises drained words, bringing two beings together in the same instant.
    *
-   * The evidence, the cursor and the chronicle are NOT delayed by any of this —
-   * they were committed by the caller before this runs. Only the bubble waits,
-   * and only for as long as the addressee's own certified walk.
+   * Nothing here is deferred. A same-region directed line flashes its addressee
+   * to conversational distance (`conversationStaging.ts`) and the words are
+   * published in the very same pass, so the bubble, the evidence, the cursor and
+   * the Chronicle entry all land together. The word-delay queue this method used
+   * to feed — a monotone release schedule timed against the addressee's walk —
+   * was deleted with the walk itself rather than left configured to zero.
    *
-   * Side effects: publishes staging beats, replaces the overlay window, arms the
-   * release timer.
+   * Side effects: publishes staging beats and appends to the overlay window.
    */
   private raiseUtterances(raised: readonly PresentedUtterance[]): void {
     const staging = this.conversationStaging;
-    if (staging === null) {
-      this.utterances = Object.freeze(
-        [...this.utterances, ...raised].slice(-MAX_FRAME_UTTERANCES),
-      );
-      return;
-    }
-    const nowMs = this.clock.now();
-    const busyBeingIds = this.occupiedBodies();
-    const beats: PresentedStagingBeat[] = [];
-    // Monotone across the whole queue: never behind what is already waiting.
-    let floorMs = this.pendingReleases.at(-1)?.releaseAtMs ?? nowMs;
-    for (const utterance of raised) {
-      // A staging decision reads live spatial truth, and spatial truth can be
-      // mid-replacement (a recovery swapping the placement generation, a seam
-      // with no getters at all). An exception here would leave `drainUtterances`
-      // through `ingest` into `PresentationIngress`'s isolation catch — the
-      // exact silent-lane death the BUBBLES-FIX comment below documents, where
-      // 93% of a run stops appearing and the frame still reads "live". Words
-      // must never cost more than the walk they were going to be staged with.
-      let decided: ConversationStagingDecision;
-      try {
-        decided = staging.stage({ utterance, busyBeingIds, nowMs });
-      } catch {
-        decided = UNSTAGED;
+    if (staging !== null) {
+      const nowMs = this.clock.now();
+      const busyBeingIds = this.occupiedBodies();
+      const beats: PresentedStagingBeat[] = [];
+      for (const utterance of raised) {
+        // A staging decision reads live spatial truth, and spatial truth can be
+        // mid-replacement (a recovery swapping the placement generation, a seam
+        // with no getters at all). An exception here would leave `drainUtterances`
+        // through `ingest` into `PresentationIngress`'s isolation catch — the
+        // exact silent-lane death the BUBBLES-FIX comment below documents, where
+        // 93% of a run stops appearing and the frame still reads "live". Words
+        // must never cost more than the step they were going to be staged with.
+        let decided: ConversationStagingDecision;
+        try {
+          decided = staging.stage({ utterance, busyBeingIds, nowMs });
+        } catch {
+          decided = UNSTAGED;
+        }
+        beats.push(...decided.beats);
       }
-      beats.push(...decided.beats);
-      const releaseAtMs = Math.max(
-        floorMs,
-        nowMs + Math.min(decided.delayMs, MAX_UTTERANCE_HOLD_MS),
-      );
-      floorMs = releaseAtMs;
-      this.pendingReleases.push({
-        utterance,
-        arrivalBeats: decided.arrivalBeats,
-        releaseAtMs,
-      });
+      if (beats.length > 0) this.publishStaging(beats);
     }
-    if (beats.length > 0) this.publishStaging(beats);
-    this.releaseRipeUtterances();
-    this.scheduleUtteranceRelease();
+    this.utterances = Object.freeze(
+      [...this.utterances, ...raised].slice(-MAX_FRAME_UTTERANCES),
+    );
   }
 
   /**
@@ -848,47 +786,8 @@ export class StoryDirector {
     );
   }
 
-  /** Moves every word whose feet have arrived into the overlay window. */
-  private releaseRipeUtterances(): void {
-    if (this.pendingReleases.length === 0) return;
-    const nowMs = this.clock.now();
-    let count = 0;
-    while (
-      count < this.pendingReleases.length
-      && this.pendingReleases[count]!.releaseAtMs <= nowMs
-    ) count += 1;
-    if (count === 0) return;
-    const ripe = this.pendingReleases.slice(0, count);
-    this.pendingReleases = this.pendingReleases.slice(count);
-    const beats = ripe.flatMap((entry) => [...entry.arrivalBeats]);
-    if (beats.length > 0) this.publishStaging(beats);
-    this.utterances = Object.freeze(
-      [...this.utterances, ...ripe.map((entry) => entry.utterance)]
-        .slice(-MAX_FRAME_UTTERANCES),
-    );
-  }
-
-  /** Arms (or disarms) the independent timer that releases held words. */
-  private scheduleUtteranceRelease(): void {
-    this.releaseCancel?.();
-    this.releaseCancel = null;
-    if (this.disposed || this.paused || this.held) return;
-    const next = this.pendingReleases[0];
-    if (next === undefined) return;
-    this.releaseCancel = this.clock.schedule(next.releaseAtMs, () => {
-      this.releaseCancel = null;
-      if (this.disposed) return;
-      this.releaseRipeUtterances();
-      this.scheduleUtteranceRelease();
-      this.emit();
-    });
-  }
-
-  /** Forgets both lanes' in-flight state, for a run this director no longer presents. */
+  /** Forgets the staging lane's state, for a run this director no longer presents. */
   private discardStagedConversation(): void {
-    this.releaseCancel?.();
-    this.releaseCancel = null;
-    this.pendingReleases = [];
     this.staging = Object.freeze([]);
     this.conversationStaging?.reset();
   }

@@ -1,5 +1,5 @@
 /**
- * CONVERSATIONAL STAGING — beings talking to each other stand together.
+ * CONVERSATIONAL STAGING — beings talking to each other stand together, at once.
  *
  * Owner observation (Safi, 2026-08-22):
  *
@@ -21,48 +21,71 @@
  *
  * ---
  *
- * **The three decisions, owner-made, implemented exactly:**
+ * **Revision (Safi, 2026-08-26), after watching the walk live:**
  *
- * 1. **Same region, directed speech: walk together, hold, then part.** The
- *    ADDRESSEE walks to conversational distance of the speaker and both turn to
- *    face each other. The speaker does not move, so the words stay anchored
- *    where they were emitted.
- * 2. **The words land ON ARRIVAL.** The bubble is held back for exactly the
- *    approach's certified route budget — the same
- *    `certifiedProductionRouteBudgetMs` every choreographed walk is timed by —
- *    and released when the two are together. A fast exchange may therefore lag
- *    the feed by up to one approach; that was the owner's explicit choice over
- *    speaking-immediately-and-walking-during.
- * 3. **Cross-region: do NOTHING spatial.** Nobody moves and nothing is drawn
+ * > *"make them flash step to appear close when addressing or talking to each
+ * > other, given they are in the same region."*
+ *
+ * The first build of this lane walked the addressee over and held the words
+ * back for the walk — up to four seconds of a silent screen after a line had
+ * already reached the feed. That is now gone. Same region + directed speech
+ * means the addressee **appears** at conversational distance immediately and
+ * the line lands with it.
+ *
+ * **The four decisions, owner-made, implemented exactly:**
+ *
+ * 1. **Same region, directed speech: flash step.** The ADDRESSEE arrives at
+ *    conversational distance of the speaker at once and both turn to face each
+ *    other. The speaker does not move, so the words stay anchored where they
+ *    were emitted.
+ * 2. **The words are never held.** Every decision this module makes is
+ *    instantaneous; there is no delay channel left to hold them on.
+ * 3. **It must read as deliberate.** The flash is performed with the piece's
+ *    existing vanish-and-appear language, not a jump cut: the beat resolves to
+ *    a `reposition` primitive whose reason drives the actors' 180ms fade-out /
+ *    180ms fade-in ({@link CONVERSATION_FLASH_STEP_MS}) — the same fade a
+ *    region transition's `fade-reposition` performs. A being visibly dissolves
+ *    where it stood and resolves where it is spoken to.
+ * 4. **Cross-region: do NOTHING spatial.** Nobody moves and nothing is drawn
  *    between them. The bubble's `to <Name>` tag carries the connection on its
  *    own. This is the honest reading — they really are far apart.
+ *
+ * The destination is unchanged from the walking build: still the endpoint of a
+ * route resolved by `resolveLegalContactRoute` against the region's real ground
+ * and structures, so a flash can no more drop a being into the river than a
+ * walk could. Only the traversal is removed.
  *
  * ---
  *
  * **Why this is nearly stateless, and why that is the point.**
  *
  * The rule is geometric, re-read per line: *are they already within
- * conversational distance?* If yes, nothing is staged and the words land at
- * once. That single test answers three of the hard cases on its own:
+ * conversational distance?* If yes, nothing is staged. That single test answers
+ * three of the hard cases on its own:
  *
- * - **Rapid back-and-forth.** After the first approach the two are adjacent, so
- *   lines two through five stage nothing and re-walk nothing. They stay
- *   together for as long as the exchange lasts because nothing pulls them
- *   apart — beings in this world never move on their own; only a beat moves
- *   them.
+ * - **Rapid back-and-forth.** After the first flash the two are adjacent, so
+ *   lines two through five stage nothing and move nobody. They stay together
+ *   for as long as the exchange lasts because nothing pulls them apart — beings
+ *   in this world never move on their own; only a beat moves them.
  * - **The hold.** There is no hold timer, because there is nothing to hold.
  *   Standing still is the default state of a body nobody has commanded.
  * - **The part.** Nothing is glued. The pair is not a tracked entity at all;
  *   the moment any beat moves either body they are apart, and the next directed
  *   line re-reads the geometry from scratch.
  *
- * The one piece of state that IS kept is the set of approaches currently in
- * flight ({@link ConversationStaging} `pending`), and it exists for exactly one
- * reason: the placement ledger's anchor is only refreshed when a walk completes
- * (`SpatialDirector.syncArrivalPoint`), so a burst of lines resolved inside one
- * ingest would otherwise all read the same stale "far away" point and all stage
- * their own walk. A pending approach's destination stands in for the ledger's
- * point until it lands.
+ * The one piece of state that IS kept is {@link ConversationStaging}'s memo of
+ * where it has just flashed a being to, and it exists for exactly one reason:
+ * the placement ledger's anchor is refreshed when a being *settles*
+ * (`SpatialDirector.syncArrivalPoint`, driven for this lane by the scene
+ * graph's `conversation-flash` sync), and that happens a renderer tick later
+ * than the decision. Without the memo, a burst of lines resolved inside one
+ * ingest would all read the same stale "far away" point and all flash again.
+ *
+ * The memo retires on **evidence, not on a clock**: it remembers the ledger
+ * point it was made against, and the moment the ledger reads anything else the
+ * being has genuinely moved and the memo is dropped. A deadline would have been
+ * wrong here — a flash produces no walk to time, and the ledger's own refresh
+ * is the only honest signal that the world has caught up.
  *
  * ---
  *
@@ -72,42 +95,20 @@
  * - **The addressee is not rendered** (unmounted region art, not yet placed).
  *   Fail soft; a bubble is never worth an invented body.
  * - **The addressee's body belongs to the active scene.** Choreography owns one
- *   body at a time and this lane must never fight it for one. Note this is a
- *   correctness guard, not a liveness one: a staging walk cannot deadlock
- *   against a scene in any case, because a later `move` supersedes an earlier
- *   route in place at the actor (`LayeredHumanActor.apply`) and settlement is
- *   marker-driven, never renderer-driven.
- * - **The addressee is already walking to someone else.** Two beings addressing
- *   the same third in quick succession must not make it ping-pong. The first
- *   approach stands; the second line's words simply land where they are.
+ *   body at a time and this lane must never fight it for one.
+ * - **The addressee was flashed a moment ago.** Two beings addressing the same
+ *   third in quick succession must not make it strobe between them. The first
+ *   flash stands for as long as it is still playing
+ *   ({@link CONVERSATION_FLASH_STEP_MS}); the second line's words simply land
+ *   where they are.
  * - **No legal route reaches the speaker**, or the region's recipe is unknown.
  * - **Reduced motion.** Less animation, never less information.
- *
- * ---
- *
- * **The one judgement call: how far is worth walking.**
- *
- * `WALK_MAX_DISTANCE_PX` (320px) is the existing threshold for *choreographed*
- * walks, and it is tuned against a different cost — a walk that leases the
- * stage. This lane leases nothing, so that cost is gone; what replaces it is
- * the viewer's own patience, because the words wait for the walk. 320px at the
- * production gait is over six seconds of silence before a line appears. So the
- * visible approach is bounded much tighter, and a longer route is not cut away
- * (a conversation that begins with a teleport is a lie) but TRUNCATED with the
- * existing `truncateApproach` primitive: the addressee is placed on a point of
- * its own certified route, {@link CONVERSATION_APPROACH_MAX_PX} back, and walks
- * the last stretch in. Legality is inherited, exactly as it is for the
- * departure half of a region transition.
  */
 
-import {
-  certifiedProductionRouteBudgetMs,
-} from "./choreography/productionLocomotionTiming";
 import {
   homeExclusionsForRegion,
   resolveLegalContactRoute,
 } from "./choreography/interactionContact";
-import { truncateApproach } from "./choreography/locomotionGate";
 import { INTERACTION_CONTACT_TOLERANCE_PX } from "../renderer2d/production/placement/SpatialDirector";
 import type { PlacementLedgerSnapshot } from "../renderer2d/production/placement/PlacementLedger";
 import type { RegionMapRecipeV1 } from "../renderer2d/production/maps/RegionMapRecipe";
@@ -119,49 +120,42 @@ import type {
 } from "./contracts";
 
 /**
- * How close two beings must already be for the words to land with no walk.
+ * How close two beings must already be for nobody to move.
  *
  * Reused, not invented: `INTERACTION_CONTACT_TOLERANCE_PX` (1.5 tiles, 48px) is
  * already the distance at which every two-participant beat in the world — a
  * strike, a gift, a proposal — considers the parties to be *at* each other, and
  * the same number is what `resolveLegalContactRoute`'s nearest-first candidate
- * ordering lands an approach on. Using a second, private notion of "together"
- * would let a being walk to a spot the rest of the system already calls close
- * enough, or refuse to when it is not.
+ * ordering lands a contact point on. Using a second, private notion of
+ * "together" would let a being flash to a spot the rest of the system already
+ * calls close enough, or refuse to when it is not.
  */
 export const CONVERSATION_TOGETHER_PX = INTERACTION_CONTACT_TOLERANCE_PX;
 
 /**
- * The longest stretch of an approach that is actually walked, in pixels.
+ * How long one flash step is visibly in progress, in milliseconds.
  *
- * Four tiles — under three seconds at the production gait, including the
- * certified turn and frame slop. This is the number that decides how long a
- * viewer stares at a silent screen after a line has already reached the feed,
- * because {@link ConversationStagingDecision.delayMs} is derived from it, so it
- * is bounded by patience rather than by the stage-cost argument that set
- * `WALK_MAX_DISTANCE_PX` at ten tiles. Anything longer is truncated onto its
- * own route rather than skipped, so the approach still reads as *coming over*
- * however far apart they started.
+ * Two 180ms fade phases — `FALLBACK_FADE_PHASE_MS` out, then in — which is the
+ * actors' existing vanish-and-appear duration and the reason this beat reads as
+ * a deliberate step rather than a dropped frame. Kept in numeric lockstep with
+ * `LayeredHumanActor.ts` / `SpriteSheetHumanActor.ts` by convention (and pinned
+ * by `conversationStaging.test.ts`) rather than by import, so the presentation
+ * layer never depends downward on a renderer constant.
+ *
+ * The words do NOT wait for it. It is used here for one thing only: a being
+ * whose flash is still playing is not flashed somewhere else.
  */
-export const CONVERSATION_APPROACH_MAX_PX = 128;
+export const CONVERSATION_FLASH_STEP_MS = 360;
 
 /**
- * The gait an approach is walked and timed at, in pixels per second.
+ * Hard ceiling on flashed-standing memos remembered at once.
  *
- * The production walk, identical to the value the command resolver stamps on
- * every `move` primitive and to the one `movementBudgetMs` budgets against. A
- * different number here would make the words land before or after the feet.
+ * Each entry retires on its own evidence — the ledger moving off the point it
+ * was made against — so this only ever matters if a pathological run flashed
+ * more beings than a region holds without any of them settling. A lane that
+ * stages proximity must not become an unbounded map.
  */
-export const CONVERSATION_GAIT_PX_PER_SECOND = 48;
-
-/**
- * Hard ceiling on in-flight approaches remembered at once.
- *
- * Entries retire on their own arrival deadline, so this only ever matters if a
- * pathological run staged more concurrent approaches than a region has beings.
- * A lane that stages proximity must not become an unbounded map.
- */
-const MAX_PENDING_APPROACHES = 64;
+const MAX_FLASHED_STANDING = 64;
 
 /** Why one directed line was or was not staged. Diagnostic only; never causal. */
 export type ConversationStagingOutcome =
@@ -171,9 +165,9 @@ export type ConversationStagingOutcome =
   | "already-together"
   | "reduced-motion"
   | "listener-busy"
-  | "approach-pending"
+  | "flash-pending"
   | "no-route"
-  | "approach";
+  | "flash-step";
 
 /** Everything one staging decision needs, and nothing that could vary per call site. */
 export interface ConversationStagingInput {
@@ -182,22 +176,28 @@ export interface ConversationStagingInput {
    * Bodies the active choreography scene already owns.
    *
    * Empty when no scene holds the stage. A being in this set is never staged
-   * over — see the module header for why this is a correctness guard rather
-   * than a liveness one.
+   * over — choreography owns one body at a time.
    */
   readonly busyBeingIds: ReadonlySet<string>;
   /** Presentation-clock reading, never wall time read here. */
   readonly nowMs: number;
 }
 
-/** One resolved decision: what to publish now, what to publish with the words, and when. */
+/**
+ * One resolved decision: what to publish, right now.
+ *
+ * There is deliberately no delay and no second, later batch of beats. Both
+ * existed to time a walk the words waited on; the flash step lands with the
+ * line, so a decision is a single, immediate publication or nothing at all.
+ */
 export interface ConversationStagingDecision {
-  /** Published immediately — the approach walk, if there is one. */
+  /**
+   * Published immediately, in order: the flash step, then the two turns.
+   *
+   * The order is load-bearing — a `face` resolved before the body has been
+   * repositioned would aim the addressee from where it no longer stands.
+   */
   readonly beats: readonly PresentedStagingBeat[];
-  /** Published at the same instant the words are, once the two are together. */
-  readonly arrivalBeats: readonly PresentedStagingBeat[];
-  /** How long the words wait. Always `0` unless an approach was staged. */
-  readonly delayMs: number;
   readonly outcome: ConversationStagingOutcome;
 }
 
@@ -208,18 +208,26 @@ export interface ConversationStagingOptions {
   readonly reducedMotion: () => boolean;
 }
 
-/** Decides whether one directed line brings two beings together, and how. */
+/** Decides whether one directed line brings two beings together, and where. */
 export interface ConversationStaging {
   stage(input: ConversationStagingInput): ConversationStagingDecision;
-  /** Forgets every in-flight approach. Called when a run is replaced or reset. */
+  /** Forgets every flashed-standing memo. Called when a run is replaced or reset. */
   reset(): void;
 }
 
-/** An approach already on its way, standing in for a ledger anchor that is stale. */
-interface PendingApproach {
+/** Where this lane last put a being, and the ledger reading that memo is valid against. */
+interface FlashedStanding {
   readonly regionId: string;
   readonly destination: Vec2;
-  readonly arrivesAtMs: number;
+  /**
+   * The ledger's own point for this being at the instant the flash was staged.
+   *
+   * The memo is valid only while the ledger still reads exactly this. Anything
+   * else means the world has caught up (or the being has moved on), and the
+   * ledger is once again the better answer.
+   */
+  readonly ledgerPoint: Vec2;
+  readonly stagedAtMs: number;
 }
 
 const NOTHING: readonly PresentedStagingBeat[] = Object.freeze([]);
@@ -227,12 +235,11 @@ const NOTHING: readonly PresentedStagingBeat[] = Object.freeze([]);
 function decision(
   outcome: ConversationStagingOutcome,
 ): ConversationStagingDecision {
-  return Object.freeze({
-    beats: NOTHING,
-    arrivalBeats: NOTHING,
-    delayMs: 0,
-    outcome,
-  });
+  return Object.freeze({ beats: NOTHING, outcome });
+}
+
+function samePoint(left: Vec2, right: Vec2): boolean {
+  return left.x === right.x && left.y === right.y;
 }
 
 /**
@@ -260,43 +267,47 @@ export function conversationalDistancePx(from: Vec2, to: Vec2): number {
  * Builds the conversational staging rule over live spatial truth.
  *
  * The returned object is stateful only in the sense documented in the module
- * header: it remembers approaches that have not landed yet, and forgets each
- * one the instant its certified budget elapses.
+ * header: it remembers where it has just flashed a being to, and forgets that
+ * the moment the placement ledger disagrees with the reading the memo was made
+ * against.
  */
 export function createConversationStaging(
   options: ConversationStagingOptions,
 ): ConversationStaging {
-  const pending = new Map<string, PendingApproach>();
+  const flashed = new Map<string, FlashedStanding>();
 
-  const prune = (nowMs: number): void => {
-    for (const [beingId, approach] of pending) {
-      if (approach.arrivesAtMs <= nowMs) pending.delete(beingId);
-    }
-    // Retirement is by deadline; the cap only guards against a pathological
-    // burst outrunning it. Oldest-first, because a Map iterates in insertion
-    // order and the oldest approach is the one closest to having landed.
-    while (pending.size > MAX_PENDING_APPROACHES) {
-      const oldest = pending.keys().next();
+  const remember = (beingId: string, memo: FlashedStanding): void => {
+    flashed.set(beingId, memo);
+    // Insertion order, oldest first out. Retirement is by evidence; the cap only
+    // guards against a pathological burst outrunning it.
+    while (flashed.size > MAX_FLASHED_STANDING) {
+      const oldest = flashed.keys().next();
       if (oldest.done) break;
-      pending.delete(oldest.value);
+      flashed.delete(oldest.value);
     }
   };
 
-  /** Where a being effectively stands: its in-flight destination, else the ledger. */
+  /**
+   * Where a being effectively stands: a still-valid flash destination, else the
+   * ledger — dropping the memo as soon as the ledger has moved off it.
+   */
   const standingPoint = (
     beingId: string,
     regionId: string,
     ledgerPoint: Vec2,
   ): Vec2 => {
-    const approach = pending.get(beingId);
-    return approach !== undefined && approach.regionId === regionId
-      ? approach.destination
-      : ledgerPoint;
+    const memo = flashed.get(beingId);
+    if (memo === undefined) return ledgerPoint;
+    if (memo.regionId !== regionId || !samePoint(memo.ledgerPoint, ledgerPoint)) {
+      flashed.delete(beingId);
+      return ledgerPoint;
+    }
+    return memo.destination;
   };
 
   return Object.freeze({
     reset(): void {
-      pending.clear();
+      flashed.clear();
     },
 
     stage(input: ConversationStagingInput): ConversationStagingDecision {
@@ -305,10 +316,9 @@ export function createConversationStaging(
       if (utterance.eventType !== "speak" || listenerId === null) {
         return decision("not-directed");
       }
-      // A being cannot walk to itself. The backend has never published such a
-      // line, and staging one would author a zero-length route.
+      // A being cannot step to itself. The backend has never published such a
+      // line, and staging one would author a zero-length move.
       if (listenerId === utterance.beingId) return decision("not-directed");
-      prune(nowMs);
 
       const placement = options.getPlacement();
       const speakerPlacement = placement.agents.get(utterance.beingId);
@@ -329,7 +339,10 @@ export function createConversationStaging(
       }
       if (options.reducedMotion()) return decision("reduced-motion");
       if (busyBeingIds.has(listenerId)) return decision("listener-busy");
-      if (pending.has(listenerId)) return decision("approach-pending");
+      const inFlight = flashed.get(listenerId);
+      if (inFlight !== undefined && nowMs - inFlight.stagedAtMs < CONVERSATION_FLASH_STEP_MS) {
+        return decision("flash-pending");
+      }
 
       const recipes = options.getRecipes();
       const recipe = recipes.get(regionId);
@@ -344,21 +357,26 @@ export function createConversationStaging(
         return decision("no-route");
       }
 
-      const truncated = truncateApproach(route.waypoints, CONVERSATION_APPROACH_MAX_PX);
-      const waypoints = truncated.waypoints.map((point) => Object.freeze({ ...point }));
-      const destination = waypoints.at(-1)!;
-      const delayMs = certifiedProductionRouteBudgetMs(
-        waypoints,
-        CONVERSATION_GAIT_PX_PER_SECOND,
-      );
-      pending.set(listenerId, Object.freeze({
+      // The route is resolved and then thrown away except for where it ENDS.
+      // That endpoint is the whole legality argument: it is a point the
+      // region's own ground and structures already admitted a body to.
+      const destination = Object.freeze({ ...route.waypoints.at(-1)! });
+      remember(listenerId, Object.freeze({
         regionId,
         destination,
-        arrivesAtMs: nowMs + delayMs,
+        ledgerPoint: Object.freeze({ ...listenerPlacement.point }),
+        stagedAtMs: nowMs,
       }));
 
       const key = `${utterance.momentId}:${utterance.cursor}`;
-      const arrivalBeats: PresentedStagingBeat[] = [
+      const beats: PresentedStagingBeat[] = [
+        Object.freeze({
+          id: `${key}:flash-step`,
+          kind: "flash-step" as const,
+          beingId: listenerId,
+          regionId,
+          to: destination,
+        }),
         Object.freeze({
           id: `${key}:face-speaker`,
           kind: "face" as const,
@@ -370,7 +388,7 @@ export function createConversationStaging(
       // The speaker turns too — but only if nothing else owns its body. A being
       // mid-scene keeps whatever facing its scene gave it.
       if (!busyBeingIds.has(utterance.beingId)) {
-        arrivalBeats.push(Object.freeze({
+        beats.push(Object.freeze({
           id: `${key}:face-listener`,
           kind: "face" as const,
           beingId: utterance.beingId,
@@ -380,21 +398,8 @@ export function createConversationStaging(
       }
 
       return Object.freeze({
-        beats: Object.freeze([
-          Object.freeze({
-            id: `${key}:approach`,
-            kind: "approach" as const,
-            beingId: listenerId,
-            regionId,
-            waypoints: Object.freeze(waypoints),
-            ...(truncated.cutFrom === null
-              ? {}
-              : { cutFrom: Object.freeze({ ...truncated.cutFrom }) }),
-          }),
-        ]),
-        arrivalBeats: Object.freeze(arrivalBeats),
-        delayMs,
-        outcome: "approach",
+        beats: Object.freeze(beats),
+        outcome: "flash-step",
       });
     },
   });

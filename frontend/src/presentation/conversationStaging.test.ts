@@ -10,14 +10,13 @@ import {
 import { stableHash } from "../renderer2d/production/maps/directedTopology";
 import type { PlacementLedgerSnapshot } from "../renderer2d/production/placement/PlacementLedger";
 import { INTERACTION_CONTACT_TOLERANCE_PX } from "../renderer2d/production/placement/SpatialDirector";
-import { routeDistancePx } from "./choreography/locomotionGate";
 import {
-  CONVERSATION_APPROACH_MAX_PX,
-  CONVERSATION_GAIT_PX_PER_SECOND,
+  CONVERSATION_FLASH_STEP_MS,
   CONVERSATION_TOGETHER_PX,
   conversationalDistancePx,
   conversationalFacing,
   createConversationStaging,
+  type ConversationStagingDecision,
   type ConversationStagingOptions,
 } from "./conversationStaging";
 import type { PresentedStagingBeat, PresentedUtterance, Vec2 } from "./contracts";
@@ -28,13 +27,14 @@ const LISTENER = "wanderer_004";
 const NOBODY = new Set<string>();
 
 describe("conversational staging", () => {
-  it("reuses the world's own contact tolerance and the production gait", () => {
-    // Not a tautology: these are the two numbers that must never be privately
-    // re-invented here, because the rest of the system already commits to them.
+  it("reuses the world's own contact tolerance, and keeps the flash brief", () => {
+    // Not a tautology: this is the number that must never be privately
+    // re-invented here, because the rest of the system already commits to it.
     expect(CONVERSATION_TOGETHER_PX).toBe(INTERACTION_CONTACT_TOLERANCE_PX);
-    expect(CONVERSATION_GAIT_PX_PER_SECOND).toBe(48);
-    // Bounded well under the choreographed walk ceiling: the words wait for it.
-    expect(CONVERSATION_APPROACH_MAX_PX).toBeLessThan(TILE_SIZE * 10);
+    // Two 180ms fade phases — the actors' own vanish-and-appear, mirrored here
+    // by convention rather than by importing a renderer constant upward. Short
+    // enough to read as one deliberate step rather than a disappearance.
+    expect(CONVERSATION_FLASH_STEP_MS).toBe(360);
   });
 
   it("agrees with the renderer's own orient derivation about which way a being looks", () => {
@@ -48,7 +48,7 @@ describe("conversational staging", () => {
     expect(conversationalFacing({ x: 0, y: 0 }, { x: -5, y: 5 })).toBe("west");
   });
 
-  it("walks the addressee to the speaker and holds the words until it arrives", () => {
+  it("flashes the addressee to the speaker's side, in one immediate publication", () => {
     const world = twoBeings({ apartTiles: 3 });
     const staging = createConversationStaging(world.options);
     const decided = staging.stage({
@@ -57,33 +57,37 @@ describe("conversational staging", () => {
       nowMs: 0,
     });
 
-    expect(decided.outcome).toBe("approach");
-    expect(decided.beats).toHaveLength(1);
-    const approach = decided.beats[0]!;
-    expect(approach.kind).toBe("approach");
-    // THE ADDRESSEE walks, never the speaker: the words are anchored over the
-    // speaker's head and a moving anchor is a moving bubble.
-    expect(approach.beingId).toBe(LISTENER);
-    if (approach.kind !== "approach") throw new Error("expected an approach beat");
-    expect(approach.waypoints.length).toBeGreaterThanOrEqual(2);
-    expect(approach.waypoints[0]).toEqual(world.listenerPoint);
+    expect(decided.outcome).toBe("flash-step");
+    // Everything this decision does is published at once: there is no second,
+    // later batch and no delay channel to hold the words on.
+    expect(Object.keys(decided).sort()).toEqual(["beats", "outcome"]);
+    expect(decided.beats).toHaveLength(3);
 
-    // It ends within conversational distance of the speaker, which is the whole
-    // point of the beat.
-    const destination = approach.waypoints.at(-1)!;
+    const step = decided.beats[0]!;
+    // The step comes FIRST and the turns follow: a face resolved before the
+    // body moved would aim the addressee from where it no longer stands.
+    expect(step.kind).toBe("flash-step");
+    if (step.kind !== "flash-step") throw new Error("expected a flash-step beat");
+    // THE ADDRESSEE moves, never the speaker: the words are anchored over the
+    // speaker's head and a moving anchor is a moving bubble.
+    expect(step.beingId).toBe(LISTENER);
+
+    // It lands within conversational distance of the speaker, which is the whole
+    // point of the beat ...
+    const destination = step.to;
     expect(conversationalDistancePx(destination, world.speakerPoint))
       .toBeLessThanOrEqual(CONVERSATION_TOGETHER_PX);
+    // ... and it really was a distance worth closing.
+    expect(conversationalDistancePx(world.listenerPoint, world.speakerPoint))
+      .toBeGreaterThan(CONVERSATION_TOGETHER_PX);
 
-    // And the words wait exactly as long as those feet take.
-    expect(decided.delayMs).toBeGreaterThan(0);
-    expect(decided.delayMs).toBeLessThan(4_000);
-
-    // Both turn to look at each other as the words land.
-    expect(decided.arrivalBeats.map((beat) => beat.beingId).sort())
+    // Both turn to look at each other in the same instant.
+    const turns = decided.beats.slice(1);
+    expect(turns.map((beat) => beat.beingId).sort())
       .toEqual([LISTENER, SPEAKER].sort());
-    for (const beat of decided.arrivalBeats) expect(beat.kind).toBe("face");
-    const listenerFace = faceOf(decided.arrivalBeats, LISTENER);
-    const speakerFace = faceOf(decided.arrivalBeats, SPEAKER);
+    for (const beat of turns) expect(beat.kind).toBe("face");
+    const listenerFace = faceOf(turns, LISTENER);
+    const speakerFace = faceOf(turns, SPEAKER);
     expect(listenerFace).toBe(conversationalFacing(destination, world.speakerPoint));
     expect(speakerFace).toBe(conversationalFacing(world.speakerPoint, destination));
     expect(listenerFace).not.toBe(speakerFace);
@@ -99,15 +103,10 @@ describe("conversational staging", () => {
       nowMs: 0,
     });
 
-    expect(decided).toMatchObject({
-      outcome: "already-together",
-      delayMs: 0,
-      beats: [],
-      arrivalBeats: [],
-    });
+    expect(decided).toMatchObject({ outcome: "already-together", beats: [] });
   });
 
-  it("does not re-walk a rapid exchange: one approach, then four lines that stage nothing", () => {
+  it("does not re-step a rapid exchange: one flash, then four lines that stage nothing", () => {
     const world = twoBeings({ apartTiles: 5 });
     const staging = createConversationStaging(world.options);
 
@@ -116,12 +115,13 @@ describe("conversational staging", () => {
       busyBeingIds: NOBODY,
       nowMs: 0,
     });
-    expect(opening.outcome).toBe("approach");
+    expect(opening.outcome).toBe("flash-step");
+    const destination = flashDestination(opening);
 
-    // The next four lines land INSIDE the approach's flight time -- the ledger
-    // still says the addressee is five tiles away, because a ledger anchor is
-    // only refreshed when a walk completes. The pending destination is what
-    // keeps this from staging five walks.
+    // The next four lines land BEFORE the ledger has caught up -- it still says
+    // the addressee is five tiles away, because its anchor is refreshed a
+    // renderer tick later. The memo of where this lane put the being is what
+    // keeps that from staging five flashes.
     const during = [2, 3, 4, 5].map((cursor) => staging.stage({
       utterance: cursor % 2 === 0 ? replyLine(cursor) : directedLine(cursor),
       busyBeingIds: NOBODY,
@@ -130,68 +130,59 @@ describe("conversational staging", () => {
     expect(during.map((decided) => decided.outcome))
       .toEqual(["already-together", "already-together", "already-together", "already-together"]);
     expect(during.flatMap((decided) => decided.beats)).toEqual([]);
-    expect(during.map((decided) => decided.delayMs)).toEqual([0, 0, 0, 0]);
 
-    // And after they have arrived -- the ledger now agreeing with where they
-    // stand -- a further line still stages nothing, because they are together.
-    world.moveTo(LISTENER, opening.beats[0]!.kind === "approach"
-      ? opening.beats[0]!.waypoints.at(-1)!
-      : world.listenerPoint);
+    // And once the ledger DOES catch up -- the memo retiring on that evidence
+    // rather than on any clock -- a further line still stages nothing, because
+    // they are genuinely together now.
+    world.moveTo(LISTENER, destination);
     const after = staging.stage({
       utterance: directedLine(6),
       busyBeingIds: NOBODY,
-      nowMs: opening.delayMs + 1,
+      nowMs: 10_000,
     });
     expect(after.outcome).toBe("already-together");
   });
 
-  it("re-approaches once a later beat has moved them apart again", () => {
+  it("flashes again once a later beat has moved them apart", () => {
     const world = twoBeings({ apartTiles: 4 });
     const staging = createConversationStaging(world.options);
     const first = staging.stage({ utterance: directedLine(1), busyBeingIds: NOBODY, nowMs: 0 });
-    expect(first.outcome).toBe("approach");
-    const destination = first.beats[0]!.kind === "approach"
-      ? first.beats[0]!.waypoints.at(-1)!
-      : world.listenerPoint;
-    world.moveTo(LISTENER, destination);
+    expect(first.outcome).toBe("flash-step");
+    world.moveTo(LISTENER, flashDestination(first));
 
     // Something else -- a harvest, a home beat, a region walk -- takes the
-    // addressee away. Nothing is glued: the geometry is simply re-read.
+    // addressee away. Nothing is glued: the geometry is simply re-read, and the
+    // memo retires on the ledger disagreeing with it.
     world.moveTo(LISTENER, world.openPointNear(world.speakerPoint, 5));
     const later = staging.stage({
       utterance: directedLine(2),
       busyBeingIds: NOBODY,
-      nowMs: first.delayMs + 1_000,
+      nowMs: 1_000,
     });
-    expect(later.outcome).toBe("approach");
+    expect(later.outcome).toBe("flash-step");
   });
 
-  it("truncates a long approach onto its own route instead of walking or cutting the whole thing", () => {
+  it("costs a far pair nothing extra: the same one step, the same immediate words", () => {
+    // Twelve tiles apart -- past anything the old build was willing to walk,
+    // which truncated the route and still made the words wait for the tail.
     const world = twoBeings({ apartTiles: 12 });
+    expect(conversationalDistancePx(world.listenerPoint, world.speakerPoint))
+      .toBeGreaterThan(TILE_SIZE * 10);
     const decided = createConversationStaging(world.options).stage({
       utterance: directedLine(1),
       busyBeingIds: NOBODY,
       nowMs: 0,
     });
 
-    expect(decided.outcome).toBe("approach");
-    const approach = decided.beats[0]!;
-    if (approach.kind !== "approach") throw new Error("expected an approach beat");
-    // It IS truncated ...
-    expect(approach.cutFrom).toBeDefined();
-    // ... to one of the route's own points, which is the entire legality
-    // argument: nothing new is asserted about the map.
-    expect(approach.waypoints[0]).toEqual(approach.cutFrom);
-    // ... the visible tail is inside the budget ...
-    expect(routeDistancePx(approach.waypoints))
-      .toBeLessThanOrEqual(CONVERSATION_APPROACH_MAX_PX);
-    // ... it is still a WALK, never a teleport into a conversation ...
-    expect(approach.waypoints.length).toBeGreaterThanOrEqual(2);
-    // ... and it still ends beside the speaker.
-    expect(conversationalDistancePx(approach.waypoints.at(-1)!, world.speakerPoint))
+    expect(decided.outcome).toBe("flash-step");
+    expect(decided.beats).toHaveLength(3);
+    const destination = flashDestination(decided);
+    // Distance buys no truncation and no wait -- only the endpoint of a route
+    // the region's own ground and structures already admitted a body to, which
+    // is the entire legality argument.
+    expect(conversationalDistancePx(destination, world.speakerPoint))
       .toBeLessThanOrEqual(CONVERSATION_TOGETHER_PX);
-    // The words therefore wait for the tail, not for the whole distance.
-    expect(decided.delayMs).toBeLessThan(4_000);
+    expect(world.isOpenGround(destination)).toBe(true);
   });
 
   it("does nothing spatial across regions", () => {
@@ -203,12 +194,7 @@ describe("conversational staging", () => {
       nowMs: 0,
     });
 
-    expect(decided).toMatchObject({
-      outcome: "cross-region",
-      delayMs: 0,
-      beats: [],
-      arrivalBeats: [],
-    });
+    expect(decided).toMatchObject({ outcome: "cross-region", beats: [] });
   });
 
   it("fails soft to the cross-region behaviour when the addressee is not rendered", () => {
@@ -220,7 +206,7 @@ describe("conversational staging", () => {
       nowMs: 0,
     });
 
-    expect(decided).toMatchObject({ outcome: "unplaced", delayMs: 0, beats: [] });
+    expect(decided).toMatchObject({ outcome: "unplaced", beats: [] });
   });
 
   it("never takes a body the active scene already owns", () => {
@@ -231,10 +217,10 @@ describe("conversational staging", () => {
       nowMs: 0,
     });
 
-    expect(decided).toMatchObject({ outcome: "listener-busy", delayMs: 0, beats: [] });
+    expect(decided).toMatchObject({ outcome: "listener-busy", beats: [] });
   });
 
-  it("leaves a busy speaker's facing to its own scene while still walking the addressee over", () => {
+  it("leaves a busy speaker's facing to its own scene while still stepping the addressee over", () => {
     const world = twoBeings({ apartTiles: 4 });
     const decided = createConversationStaging(world.options).stage({
       utterance: directedLine(1),
@@ -242,8 +228,10 @@ describe("conversational staging", () => {
       nowMs: 0,
     });
 
-    expect(decided.outcome).toBe("approach");
-    expect(decided.arrivalBeats.map((beat) => beat.beingId)).toEqual([LISTENER]);
+    expect(decided.outcome).toBe("flash-step");
+    // The step still happens; only the speaker's turn is withheld.
+    expect(decided.beats.map((beat) => beat.kind)).toEqual(["flash-step", "face"]);
+    expect(decided.beats.map((beat) => beat.beingId)).toEqual([LISTENER, LISTENER]);
   });
 
   it("does not ping-pong a being addressed by two others at once", () => {
@@ -254,7 +242,7 @@ describe("conversational staging", () => {
       busyBeingIds: NOBODY,
       nowMs: 0,
     });
-    expect(first.outcome).toBe("approach");
+    expect(first.outcome).toBe("flash-step");
 
     const second = staging.stage({
       utterance: line({ cursor: 2, speaker: "wanderer_005", target: LISTENER }),
@@ -262,8 +250,16 @@ describe("conversational staging", () => {
       nowMs: 0,
     });
     // The words still land -- they are simply not staged. Nobody is dropped and
-    // nobody walks twice.
-    expect(second).toMatchObject({ outcome: "approach-pending", delayMs: 0, beats: [] });
+    // nobody strobes between two speakers.
+    expect(second).toMatchObject({ outcome: "flash-pending", beats: [] });
+
+    // The guard lasts exactly as long as the flash itself is on screen.
+    const later = staging.stage({
+      utterance: line({ cursor: 3, speaker: "wanderer_005", target: LISTENER }),
+      busyBeingIds: NOBODY,
+      nowMs: CONVERSATION_FLASH_STEP_MS,
+    });
+    expect(later.outcome).toBe("flash-step");
   });
 
   it("stages nothing under reduced motion, and delays nothing either", () => {
@@ -274,7 +270,7 @@ describe("conversational staging", () => {
       nowMs: 0,
     });
 
-    expect(decided).toMatchObject({ outcome: "reduced-motion", delayMs: 0, beats: [] });
+    expect(decided).toMatchObject({ outcome: "reduced-motion", beats: [] });
   });
 
   it("ignores undirected speech and private thought entirely", () => {
@@ -303,20 +299,20 @@ describe("conversational staging", () => {
     }).outcome).toBe("not-directed");
   });
 
-  it("forgets in-flight approaches on reset", () => {
+  it("forgets its flashed-standing memos on reset", () => {
     const world = threeBeings();
     const staging = createConversationStaging(world.options);
     expect(staging.stage({ utterance: directedLine(1), busyBeingIds: NOBODY, nowMs: 0 }).outcome)
-      .toBe("approach");
+      .toBe("flash-step");
     expect(staging.stage({
       utterance: line({ cursor: 2, speaker: "wanderer_005", target: LISTENER }),
       busyBeingIds: NOBODY,
       nowMs: 0,
-    }).outcome).toBe("approach-pending");
+    }).outcome).toBe("flash-pending");
 
     staging.reset();
     expect(staging.stage({ utterance: directedLine(3), busyBeingIds: NOBODY, nowMs: 0 }).outcome)
-      .toBe("approach");
+      .toBe("flash-step");
   });
 
   it("returns deeply frozen decisions", () => {
@@ -328,10 +324,18 @@ describe("conversational staging", () => {
     });
     expect(Object.isFrozen(decided)).toBe(true);
     expect(Object.isFrozen(decided.beats)).toBe(true);
-    expect(Object.isFrozen(decided.beats[0])).toBe(true);
-    expect(Object.isFrozen(decided.arrivalBeats)).toBe(true);
+    for (const beat of decided.beats) expect(Object.isFrozen(beat)).toBe(true);
   });
 });
+
+/** The point a decision's flash step lands on, asserting there is exactly one. */
+function flashDestination(decided: ConversationStagingDecision): Vec2 {
+  const step = decided.beats[0];
+  if (step === undefined || step.kind !== "flash-step") {
+    throw new Error("expected a flash-step beat first");
+  }
+  return step.to;
+}
 
 function faceOf(beats: readonly PresentedStagingBeat[], beingId: string): string {
   const beat = beats.find((candidate) => candidate.beingId === beingId);
@@ -372,6 +376,8 @@ interface StagedWorld {
   putInRegion(beingId: string, regionId: string): void;
   unplace(beingId: string): void;
   openPointNear(anchor: Vec2, tiles: number): Vec2;
+  /** Whether the region's own collision mask admits a body's feet at this point. */
+  isOpenGround(point: Vec2): boolean;
 }
 
 /**
@@ -442,6 +448,13 @@ function buildWorld(
       agents.delete(beingId);
     },
     openPointNear: (anchor, tiles) => openPointNear(spring, anchor, tiles),
+    isOpenGround(point) {
+      const { grid } = spring;
+      const column = Math.floor(point.x / TILE_SIZE);
+      const row = Math.floor(point.y / TILE_SIZE);
+      return column >= 0 && row >= 0 && column < grid.columns && row < grid.rows
+        && grid.collision[row * grid.columns + column] === 0;
+    },
   };
 }
 

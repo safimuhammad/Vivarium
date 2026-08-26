@@ -411,36 +411,45 @@ const FLYING_ITEM_POOL_CAPACITY = 12;
  * Bubble lifetime is **wall-clock** and is deliberately NOT divided by the
  * simulation speed multiplier.
  *
- * This inverts RimWorld's Interaction Bubbles convention on purpose: text you
- * cannot finish reading is worse than a world that runs slightly ahead of its
- * captions. At 2x speed the sim outpaces the bubbles and the residue pips carry
- * the tail of memory, so nothing is lost.
- */
-const TEXT_LIFETIME_BASE_MS = 1_200;
-const TEXT_LIFETIME_PER_CHAR_MS = 70;
-const TEXT_LIFETIME_MIN_MS = 2_600;
-/**
- * Ceiling on the reading budget.
+ * This inverts RimWorld's Interaction Bubbles convention on purpose: a bubble
+ * that blinks out faster than the world runs is worse than a world that runs
+ * slightly ahead of its captions. At 2x speed the sim outpaces the bubbles and
+ * the residue pips carry the tail of memory, so nothing is lost.
  *
- * It was 9s, which at 70ms/char pays for about 111 characters — fine while a
- * bubble showed a three-line excerpt, and a guaranteed half-read message now
- * that it shows the whole thing. 30s pays for ~410 characters, so the measured
- * MEDIAN message (385 chars, 28.2s) is covered end to end; the p90 (580 chars,
- * 41.8s) is not, and is deliberately cut short. This is a bound on how long one
- * bubble may park itself over the world, not a claim about every message: raise
- * it if a viewer says the long ones vanish early.
+ * **Owner decision (Safi, 2026-08-26), replacing the reading-budget model:**
+ *
+ * > *"if another message comes in then the prev should fade away if not then
+ * > keep it for 5-7sec based on length on message longer message means max
+ * > time."*
+ *
+ * So a bubble is no longer sized to be *read* in place — it lives 5s to 7s and
+ * then fades, and the Chronicle feed carries the full text for reading. The
+ * curve is the simplest one that honours "longer message means max time": a
+ * flat 5s floor plus 5ms a character, saturating at 7s once a message reaches
+ * {@link TEXT_LIFETIME_FULL_LENGTH_CHARS}, which is the measured MEDIAN message
+ * length — so a typical line already earns close to the ceiling and only the
+ * genuinely short ones sit at the floor.
  */
-const TEXT_LIFETIME_MAX_MS = 30_000;
+const TEXT_LIFETIME_MIN_MS = 5_000;
+const TEXT_LIFETIME_MAX_MS = 7_000;
+const TEXT_LIFETIME_BASE_MS = TEXT_LIFETIME_MIN_MS;
+/** Where the 5s→7s ramp saturates: the measured median message (385 chars), rounded. */
+const TEXT_LIFETIME_FULL_LENGTH_CHARS = 400;
+/** 5ms a character — the ramp derived from the band and its saturation length, never guessed. */
+const TEXT_LIFETIME_PER_CHAR_MS =
+  (TEXT_LIFETIME_MAX_MS - TEXT_LIFETIME_MIN_MS) / TEXT_LIFETIME_FULL_LENGTH_CHARS;
 /**
- * Mirrors `speechDuration()` in
- * `presentation/choreography/lifecycleMovementCommunicationResource.ts` so a
- * bubble never dies while its own scene is still playing. Kept in numeric
- * lockstep by convention, not by import, to avoid a layering dependency from
- * renderer code back up into presentation/choreography.
+ * How long a bubble takes to dissolve, in milliseconds.
+ *
+ * Applies to BOTH ends of a bubble's life — the ordinary 5-7s expiry and a
+ * supersede — because the owner's rule is "fade away", never blink out. A
+ * superseded bubble simply has its deadline pulled forward into this tail, so
+ * there is one code path and one visual language for a bubble leaving.
+ *
+ * Deliberately shorter than the actors' own 180ms x 2 vanish-and-appear: chrome
+ * that lingers while the next line is already up reads as a leak, not a fade.
  */
-const SCENE_SPEECH_MIN_MS = 3_000;
-const SCENE_SPEECH_MAX_MS = 14_000;
-const SCENE_SPEECH_PER_CHAR_MS = 80;
+export const TEXT_FADE_OUT_MS = 400;
 /** Reduced motion extends every lifetime: less animation, never less information. */
 const REDUCED_MOTION_LIFETIME_FACTOR = 1.3;
 const RESIDUE_LIFETIME_MS = 6_000;
@@ -680,8 +689,10 @@ export class EnvironmentSystem {
    * Add or replace one being's speech / whisper / thought bubble.
    *
    * A new bubble for the same being replaces their previous one — one head, one
-   * bubble — and the replaced one demotes to a residue pip rather than
-   * vanishing. Any gather this being had open resolves into it.
+   * bubble — and so does one from the being it is addressing, when that being
+   * was addressing it back ({@link supersedeTexts}). A superseded bubble FADES
+   * and then demotes to a residue pip; nothing pops. Any gather this being had
+   * open resolves into it.
    */
   private emitText(request: Extract<EnvironmentEffectRequest, { kind: "speech-bubble" }>): void {
     const at = snapPoint(request.at);
@@ -705,8 +716,15 @@ export class EnvironmentSystem {
       messageColumns(request.text.length, metrics.minColumns, metrics.maxColumns),
     );
     this.resolveGather(request.speakerId);
-    this.retireOwnedOverlays(request.speakerId);
-    const availableIndex = this.texts.indexOf(null);
+    this.retireOwnedMarks(request.speakerId);
+    this.supersedeTexts(request.speakerId, request.targetId ?? null);
+    // Superseded bubbles now linger for their fade instead of freeing their slot
+    // at once, so a busy region can find the pool full. The line that just
+    // arrived is the one thing that must never be the casualty of that: reclaim
+    // whichever bubble is closest to gone rather than dropping the newcomer.
+    const availableIndex = this.texts.indexOf(null) >= 0
+      ? this.texts.indexOf(null)
+      : this.reclaimFadingText();
     if (availableIndex < 0) {
       this.droppedEffects += 1;
       return;
@@ -741,7 +759,8 @@ export class EnvironmentSystem {
       ...(request.micro === undefined ? {} : { micro: request.micro }),
     });
     this.resolveGather(request.ownerId);
-    this.retireOwnedOverlays(request.ownerId);
+    this.retireOwnedMarks(request.ownerId);
+    this.supersedeTexts(request.ownerId, null);
     const availableIndex = this.marks.indexOf(null);
     if (availableIndex < 0) {
       this.droppedEffects += 1;
@@ -852,20 +871,74 @@ export class EnvironmentSystem {
     }
   }
 
-  /** Collapse an owner's live overlays into residue so a replaced beat is not simply lost. */
-  private retireOwnedOverlays(ownerId: string): void {
-    for (let index = 0; index < this.texts.length; index += 1) {
-      const slot = this.texts[index];
-      if (slot?.ownerId !== ownerId) continue;
-      this.pushResidue(slot);
-      this.texts[index] = null;
-    }
+  /** Collapse an owner's live action marks into residue so a replaced beat is not simply lost. */
+  private retireOwnedMarks(ownerId: string): void {
     for (let index = 0; index < this.marks.length; index += 1) {
       const slot = this.marks[index];
       if (slot?.ownerId !== ownerId) continue;
       this.pushResidue(slot);
       this.marks[index] = null;
     }
+  }
+
+  /**
+   * Begin fading every live bubble one new utterance supersedes.
+   *
+   * **The rule, owner-set (Safi, 2026-08-26):** a new utterance supersedes the
+   * previous one **from the same being**, and the previous one **from that
+   * being's conversation partner** — the being it is addressing, when that
+   * being's live bubble was itself addressed back at the speaker. Those two are
+   * the pair currently exchanging, and a reply clearing the line it answers is
+   * the whole point of the rule.
+   *
+   * Everything else in the world is deliberately untouched. Utterances do not
+   * clear each other by mere adjacency in time: a being speaking in Nirvana must
+   * never wipe a bubble in Warm Springs, and a bubble addressed to a THIRD being
+   * is not part of this exchange.
+   *
+   * A superseded bubble is not removed — its deadline is pulled forward into
+   * {@link TEXT_FADE_OUT_MS}, so it dissolves on exactly the same path as one
+   * that simply ran out of time, and leaves the same residue pip when it lands.
+   */
+  private supersedeTexts(speakerId: string, targetId: string | null): void {
+    for (let index = 0; index < this.texts.length; index += 1) {
+      const slot = this.texts[index];
+      if (slot === null || slot === undefined) continue;
+      const own = slot.ownerId === speakerId;
+      const partner = targetId !== null
+        && slot.ownerId === targetId
+        && slot.targetId === speakerId;
+      if (!own && !partner) continue;
+      const expiresAtMs = Math.min(slot.expiresAtMs, this.nowMs + TEXT_FADE_OUT_MS);
+      if (expiresAtMs === slot.expiresAtMs) continue;
+      this.texts[index] = { ...slot, expiresAtMs };
+    }
+  }
+
+  /**
+   * Free the bubble closest to gone, returning its index, or `-1` if none is
+   * fading.
+   *
+   * The last resort under pool exhaustion, and the ONE place a bubble may leave
+   * without finishing its fade: dropping an already-dissolving bubble a few
+   * frames early is invisible, while dropping the message that arrived is not.
+   * Its residue pip is pushed exactly as an ordinary expiry would.
+   */
+  private reclaimFadingText(): number {
+    let chosen = -1;
+    let earliest = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < this.texts.length; index += 1) {
+      const slot = this.texts[index];
+      if (slot === null || slot === undefined) continue;
+      if (slot.expiresAtMs - this.nowMs > TEXT_FADE_OUT_MS) continue;
+      if (slot.expiresAtMs >= earliest) continue;
+      earliest = slot.expiresAtMs;
+      chosen = index;
+    }
+    if (chosen < 0) return -1;
+    this.pushResidue(this.texts[chosen]!);
+    this.texts[chosen] = null;
+    return chosen;
   }
 
   /**
@@ -904,37 +977,31 @@ export class EnvironmentSystem {
   }
 
   /**
-   * How long a bubble stays readable.
+   * How long a bubble stays up before it fades, in milliseconds.
    *
-   * The reading budget is `clamp(1200 + 70 x visibleChars, 2600, 30000)` — 70ms
-   * a character is about 171 words per minute — wall-clock, and deliberately NOT
-   * divided by the simulation speed multiplier, because text you cannot finish
-   * reading is worse than a world that runs slightly ahead of its captions. The
-   * ceiling was 9s while a bubble held a three-line excerpt; a bubble now holds
-   * the whole message, so it must be paid for in full.
+   * `clamp(5000 + 5 x visibleChars, 5000, 7000)` — wall-clock, and deliberately
+   * NOT divided by the simulation speed multiplier. Owner-set band (see
+   * {@link TEXT_LIFETIME_BASE_MS}): a bubble is the live pulse of a conversation,
+   * not the record of it, and it saturates at 7s once a message reaches the
+   * measured median length.
    *
-   * That budget is a **floor on readability, not a ceiling on presence**. A
-   * scene's own length is driven by the *full* message (`speechDuration` in
-   * `choreography/lifecycleMovementCommunicationResource.ts`: 3s + 80ms/char,
-   * capped at 14s), so a 385-character line — the measured median — gives a
-   * 14s scene but only a ~4.7s reading budget. Live, that showed as a being
-   * standing mid-conversation with nothing above its head for the last two
-   * thirds of its own moment. The bubble therefore also holds for as long as
-   * its scene does. The two formulas are kept in numeric lockstep by
-   * convention, not by import, so the renderer never depends upward on the
-   * choreography layer.
+   * The previous model asked a bubble to be *readable in place* — up to 30s,
+   * and floored at the length of the speaker's own scene — and the owner has
+   * replaced it after watching a live run. The consequence is deliberate and
+   * accepted: a long line is no longer fully readable above a head, and the
+   * Chronicle feed is where it is read.
+   *
+   * Reduced motion still stretches the result by
+   * {@link REDUCED_MOTION_LIFETIME_FACTOR}. That is the one carve-out kept from
+   * the old model, and it is an accessibility contract rather than a reading
+   * budget: less animation, never less information.
    */
   private textLifetimeMs(layout: MessageLayout): number {
     const visible = layout.lines.reduce((total, line) => total + line.length, 0);
-    const reading = Math.min(
+    const held = Math.min(
       TEXT_LIFETIME_MAX_MS,
       Math.max(TEXT_LIFETIME_MIN_MS, TEXT_LIFETIME_BASE_MS + visible * TEXT_LIFETIME_PER_CHAR_MS),
     );
-    const scene = Math.min(
-      SCENE_SPEECH_MAX_MS,
-      Math.max(SCENE_SPEECH_MIN_MS, SCENE_SPEECH_MIN_MS + layout.total * SCENE_SPEECH_PER_CHAR_MS),
-    );
-    const held = Math.max(reading, scene);
     return Math.round(held * (this.reducedMotion ? REDUCED_MOTION_LIFETIME_FACTOR : 1));
   }
 
@@ -1096,6 +1163,16 @@ export class EnvironmentSystem {
     }
     for (const item of this.flyingItems) {
       if (item !== null) deadline = minimumFuture(deadline, item.expiresAtMs, this.nowMs);
+    }
+    // A dissolving bubble animates its own opacity, and unlike every other
+    // animated piece of chrome it must keep doing so under reduced motion: a
+    // cross-fade is the gentlest transition there is, and skipping the ticks
+    // would turn the owner's "fade away" back into a pop for exactly the
+    // viewers who asked for less abruptness.
+    if (this.texts.some((slot) => (
+      slot !== null && slot.expiresAtMs - this.nowMs <= TEXT_FADE_OUT_MS
+    ))) {
+      deadline = minimumFuture(deadline, nextMultipleAfter(this.nowMs, 60), this.nowMs);
     }
     // A filling gather animates; wake often enough to advance its dots.
     if (hasAnyActive(this.gathers) && !this.reducedMotion) {
@@ -1405,7 +1482,15 @@ export class EnvironmentSystem {
     let textsPlaced = 0;
     for (const slot of live) {
       const isText = slot.kind === "text";
-      const overBudget = isText && textsPlaced >= CROWD_TEXT_BUDGET && slot.tier !== "knell";
+      // A bubble already dissolving is a ghost: it is drawn, but it neither
+      // blocks the crowd solver nor spends the text budget. Otherwise the very
+      // line that superseded it would be lifted a row (or demoted to a stud)
+      // for the length of the fade and then drop back — a jump exactly where
+      // the viewer is looking.
+      const fade = isText ? textFadeAlpha(slot, this.nowMs) : 1;
+      const dissolving = fade < 1;
+      const overBudget = isText && !dissolving
+        && textsPlaced >= CROWD_TEXT_BUDGET && slot.tier !== "knell";
       // Below the text threshold EVERY silhouette collapses to a glyph stud on a
       // short stem -- speech to a quote mark, thought to an ellipsis, an action
       // to its verb glyph -- so a wide view reads as a field of coloured intent
@@ -1419,7 +1504,7 @@ export class EnvironmentSystem {
       const anchorX = toScreenX(at.x);
       const anchorY = toScreenY(at.y - CONNECTOR_TIP_OFFSET_Y);
       if (overBudget) {
-        this.drawDemoted(context, slot, anchorX, anchorY, scale);
+        this.drawDemoted(context, slot, anchorX, anchorY, scale, fade);
         continue;
       }
       // A text bubble carries the whole message, so its own scale is a separate
@@ -1483,7 +1568,7 @@ export class EnvironmentSystem {
       let settled = chosen;
       if (settled === null) {
         if (slot.tier !== "knell") {
-          this.drawDemoted(context, slot, anchorX, anchorY, scale);
+          this.drawDemoted(context, slot, anchorX, anchorY, scale, fade);
           continue;
         }
         settled = clampIntoFrame({ x: baseX, y: baseY, width, height }, anchored);
@@ -1491,9 +1576,11 @@ export class EnvironmentSystem {
       if (isText && frame !== null && (width > frame.width || height > frame.height)) {
         this.overflowingBubbles += 1;
       }
-      placed.push(settled);
-      if (isText) textsPlaced += 1;
-      const alpha = slot.kind === "text" ? TEXT_KIND_METRICS[slot.variant].alpha : 1;
+      if (!dissolving) {
+        placed.push(settled);
+        if (isText) textsPlaced += 1;
+      }
+      const alpha = (slot.kind === "text" ? TEXT_KIND_METRICS[slot.variant].alpha : 1) * fade;
       surface.blit(
         context,
         settled.x + surface.ax * blitScale,
@@ -1533,12 +1620,19 @@ export class EnvironmentSystem {
     anchorX: number,
     anchorY: number,
     scale: number,
+    fade = 1,
   ): void {
     const glyph = slot.kind === "mark" ? slot.glyph : slot.studGlyph;
     const accent = slot.kind === "mark"
       ? OVERLAY_FAMILY_ACCENT[slot.family]
       : slot.hue;
-    buildStud(glyph, accent).surface.blit(context, anchorX, anchorY, Math.max(1, scale - 1), 0.9);
+    buildStud(glyph, accent).surface.blit(
+      context,
+      anchorX,
+      anchorY,
+      Math.max(1, scale - 1),
+      0.9 * fade,
+    );
   }
 
   /**
@@ -1834,6 +1928,23 @@ function frameKey(slot: AmbientSlot): string {
 function effectKey(slot: EffectSlot): string {
   const label = slot.label === null ? "" : `:${slot.label.recipientId}=${slot.label.value}`;
   return `${slot.sequence}:${slot.kind}:${slot.at.x},${slot.at.y}:${slot.startedAtMs}-${slot.expiresAtMs}${label}`;
+}
+
+/**
+ * How opaque a bubble is right now: 1 until its last {@link TEXT_FADE_OUT_MS},
+ * then a linear ramp to 0 at its deadline.
+ *
+ * One function for both ways a bubble leaves — running out of its 5-7s, or
+ * being superseded (which simply pulls the deadline into this tail). Nothing
+ * pops.
+ */
+export function textFadeAlpha(
+  slot: Readonly<Pick<TextOverlaySlot, "expiresAtMs">>,
+  nowMs: number,
+): number {
+  const remaining = slot.expiresAtMs - nowMs;
+  if (remaining >= TEXT_FADE_OUT_MS) return 1;
+  return Math.max(0, Math.min(1, remaining / TEXT_FADE_OUT_MS));
 }
 
 function effectPosition(slot: EffectSlot, nowMs: number, reducedMotion: boolean): Vec2 {

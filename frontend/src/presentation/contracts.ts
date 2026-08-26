@@ -296,24 +296,20 @@ export interface PresentedUtterance {
 export type PresentedStagingBeat =
   | Readonly<{
     readonly id: string;
-    readonly kind: "approach";
-    /** The being that walks — always the ADDRESSEE, never the speaker. */
+    readonly kind: "flash-step";
+    /** The being that moves — always the ADDRESSEE, never the speaker. */
     readonly beingId: string;
     readonly regionId: string;
     /**
-     * A certified route ending at a legal standing tile beside the speaker.
+     * The legal standing point beside the speaker the addressee appears at.
      *
-     * Resolved by `interactionContact.ts`'s `resolveLegalContactRoute`, the
-     * same primitive every two-participant beat already walks on, so the
-     * renderer's own apply-time gates cannot silently veto it.
+     * The END of a route resolved by `interactionContact.ts`'s
+     * `resolveLegalContactRoute` — the same primitive every two-participant
+     * beat already walks on — so the renderer's own apply-time gates cannot
+     * silently veto it. Only the traversal is dropped; the destination is
+     * chosen exactly as it was when the addressee walked there.
      */
-    readonly waypoints: readonly Vec2[];
-    /**
-     * Where a truncated approach is cut to before it walks the part worth
-     * watching — always one of `waypoints`' own points, and always the first.
-     * Same contract and same legality argument as {@link ActorVisualIntent.cutFrom}.
-     */
-    readonly cutFrom?: Readonly<{ x: number; y: number }>;
+    readonly to: Readonly<{ x: number; y: number }>;
   }>
   | Readonly<{
     readonly id: string;

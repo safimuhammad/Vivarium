@@ -46,14 +46,20 @@ type HumanStatus = "alive" | "paralyzed" | "dead";
  *
  * `distance-cut` is the deliberate one (`choreography/locomotionGate.ts`): the
  * destination was too far for a walk to read as anything but trudging, so the
- * being fades out where it stood and fades in where it acted. The other two are
+ * being is placed where it acted. `conversation-flash` is the other deliberate
+ * one (`presentation/conversationStaging.ts`): a being addressed from across
+ * the region arrives at conversational distance at once, and — being the one
+ * reason authored purely to be *watched* — it is performed with the same
+ * fade-out/fade-in vanish-and-appear a `fallback` uses, so it reads as a
+ * deliberate flash step rather than a dropped frame. The remaining two are
  * concessions — a motion preference, and a route that could not be planned.
  */
 export type HumanRepositionReason =
   | "reduced-motion"
   | "fallback"
   | "region-transition"
-  | "distance-cut";
+  | "distance-cut"
+  | "conversation-flash";
 
 export type HumanPrimitiveCommand =
   | Readonly<{
@@ -160,7 +166,8 @@ interface MutablePoint {
 
 interface ActiveFallbackReposition {
   phase: "fade-out" | "fade-in";
-  readonly reason: "fallback";
+  /** One of {@link FADED_REPOSITION_REASONS} — the reason reported on the `repositioned` signal. */
+  readonly reason: HumanRepositionReason;
   readonly originPosition: MutablePoint;
   readonly originOffset: MutablePoint;
   readonly target: MutablePoint;
@@ -183,6 +190,12 @@ const REPOSITION_REASONS = new Set<HumanRepositionReason>([
   "fallback",
   "region-transition",
   "distance-cut",
+  "conversation-flash",
+]);
+/** The reasons performed as a vanish-and-appear fade rather than an instant placement. */
+const FADED_REPOSITION_REASONS = new Set<HumanRepositionReason>([
+  "fallback",
+  "conversation-flash",
 ]);
 const SKIN_FILTERS: Readonly<Record<HumanAppearance["skinRamp"], string>> = Object.freeze({
   porcelain: "sepia(0.08) saturate(0.72) brightness(1.12)",
@@ -673,8 +686,8 @@ export class LayeredHumanActor implements ProductionHumanActor {
           throw new TypeError("Human reposition position must be finite.");
         }
         if (this.#status !== "alive") return;
-        if (command.reason === "fallback") {
-          this.#beginFallbackReposition(command.position);
+        if (FADED_REPOSITION_REASONS.has(command.reason)) {
+          this.#beginFallbackReposition(command.position, false, command.reason);
           return;
         }
         if (this.stagePosition(command.position) === null) return;
@@ -1064,7 +1077,11 @@ export class LayeredHumanActor implements ProductionHumanActor {
     this.#recoveryMarkerSent = false;
   }
 
-  #beginFallbackReposition(target: Vec2, sustained = false): void {
+  #beginFallbackReposition(
+    target: Vec2,
+    sustained = false,
+    reason: HumanRepositionReason = "fallback",
+  ): void {
     this.#supersedeFallbackReposition();
     const originPosition = copyMutablePoint(this.#position);
     const originOffset = copyMutablePoint(this.#visualOffset);
@@ -1077,7 +1094,7 @@ export class LayeredHumanActor implements ProductionHumanActor {
     this.#opacity = 1;
     this.#reposition = {
       phase: "fade-out",
-      reason: "fallback",
+      reason,
       originPosition,
       originOffset,
       target: copyMutablePoint(target),
@@ -1116,7 +1133,7 @@ export class LayeredHumanActor implements ProductionHumanActor {
         kind: "repositioned",
         actorId: this.#id,
         position: copyPoint(this.#position),
-        reason: "fallback",
+        reason: reposition.reason,
       }));
       return;
     }

@@ -548,43 +548,46 @@ describe("ProductionSceneCommandResolver", () => {
     }
   });
 
-  it("walks a conversational approach without a scene, and turns both beings at arrival", () => {
+  it("flash-steps a conversational addressee without a scene, and turns both beings", () => {
     // The staging lane (`presentation/conversationStaging.ts`): a being spoken
-    // to from across the region comes over first. It is published exactly the
-    // way a bubble is -- no scene, no lease, no token bump -- because it must
-    // never delay or disturb whatever the stage is doing.
+    // to from across the region APPEARS beside the speaker. It is published
+    // exactly the way a bubble is -- no scene, no lease, no token bump --
+    // because it must never delay or disturb whatever the stage is doing.
     const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
-    const walked = resolver(namedFrame(null, {
+    const stepped = resolver(namedFrame(null, {
       staging: [{
-        id: "m-1:9:approach",
-        kind: "approach",
+        id: "m-1:9:flash-step",
+        kind: "flash-step",
         beingId: "briar",
         regionId: "worn",
-        waypoints: [{ x: 320, y: 160 }, { x: 288, y: 160 }, { x: 256, y: 160 }],
+        to: { x: 256, y: 160 },
       }],
     }, 4));
 
-    expect(walked?.sceneToken).toBe(0);
-    expect(walked?.commands).toEqual([{
+    expect(stepped?.sceneToken).toBe(0);
+    // `conversation-flash` is the reason that makes the actors perform their
+    // vanish-and-appear fade rather than snapping: a deliberate step, not a
+    // dropped frame. It is deliberately NOT `fallback`, which the scene graph
+    // gates behind its failure policy and would refuse.
+    expect(stepped?.commands).toEqual([{
       kind: "actor",
-      commandId: "staging:m-1:9:approach:0",
+      commandId: "staging:m-1:9:flash-step:0",
       actorId: "briar",
       command: {
-        kind: "move",
-        waypoints: [{ x: 320, y: 160 }, { x: 288, y: 160 }, { x: 256, y: 160 }],
-        speedPixelsPerSecond: 48,
-        gait: "walk",
+        kind: "reposition",
+        position: { x: 256, y: 160 },
+        reason: "conversation-flash",
       },
     }]);
 
-    // Re-published frames carry a rolling window; the walk is raised once.
+    // Re-published frames carry a rolling window; the step is raised once.
     expect(resolver(namedFrame(null, {
       staging: [{
-        id: "m-1:9:approach",
-        kind: "approach",
+        id: "m-1:9:flash-step",
+        kind: "flash-step",
         beingId: "briar",
         regionId: "worn",
-        waypoints: [{ x: 320, y: 160 }, { x: 288, y: 160 }, { x: 256, y: 160 }],
+        to: { x: 256, y: 160 },
       }],
     }, 5))).toBeNull();
 
@@ -610,45 +613,53 @@ describe("ProductionSceneCommandResolver", () => {
     ]);
   });
 
-  it("repositions before it walks a truncated approach, exactly as the scene lane does", () => {
+  it("steps before it turns, exactly as the scene lane repositions before it moves", () => {
     // The order is load-bearing, not cosmetic: the graph applies each command as
-    // it validates it, so the reposition must land before the move's route
-    // clearance reads the actor's position.
+    // it validates it, so a turn resolved before the step would aim the being
+    // from where it no longer stands.
     const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
     const batch = resolver(namedFrame(null, {
-      staging: [{
-        id: "m-2:11:approach",
-        kind: "approach",
-        beingId: "briar",
-        regionId: "worn",
-        cutFrom: { x: 384, y: 160 },
-        waypoints: [{ x: 384, y: 160 }, { x: 352, y: 160 }],
-      }],
+      staging: [
+        {
+          id: "m-2:11:flash-step",
+          kind: "flash-step",
+          beingId: "briar",
+          regionId: "worn",
+          to: { x: 352, y: 160 },
+        },
+        {
+          id: "m-2:11:face-speaker",
+          kind: "face",
+          beingId: "briar",
+          regionId: "worn",
+          facing: "west",
+        },
+      ],
     }, 4));
 
     expect(batch?.commands.map((command) => (
       (command as { command: { kind: string } }).command.kind
-    ))).toEqual(["reposition", "move"]);
+    ))).toEqual(["reposition", "orient"]);
     expect(batch?.commands[0]).toMatchObject({
-      command: { kind: "reposition", position: { x: 384, y: 160 }, reason: "distance-cut" },
+      command: { kind: "reposition", position: { x: 352, y: 160 }, reason: "conversation-flash" },
     });
   });
 
-  it("raises a conversational approach beside a running scene, and outlives the scene's clear", () => {
+  it("raises a conversational flash step beside a running scene, and outlives the scene's clear", () => {
     const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
     const running = resolver(namedFrame(scene({}), {
       staging: [{
-        id: "m-3:12:approach",
-        kind: "approach",
+        id: "m-3:12:flash-step",
+        kind: "flash-step",
         beingId: "briar",
         regionId: "worn",
-        waypoints: [{ x: 320, y: 160 }, { x: 288, y: 160 }],
+        to: { x: 288, y: 160 },
       }],
     }));
-    // The scene keeps its own token; the approach rides along without bumping it.
+    // The scene keeps its own token; the step rides along without bumping it.
     expect(running?.sceneToken).toBe(7);
     expect(running?.commands).toContainEqual(expect.objectContaining({
-      commandId: "staging:m-3:12:approach:0",
+      commandId: "staging:m-3:12:flash-step:0",
     }));
 
     const closing = resolver(namedFrame(null, {

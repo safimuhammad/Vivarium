@@ -129,16 +129,6 @@ const MAX_REMEMBERED_UTTERANCES = 128;
  */
 const MAX_REMEMBERED_STAGING = 64;
 
-/**
- * The gait a conversational approach is walked at, in pixels per second.
- *
- * Identical to the scene-authored walk below, and to the number
- * `conversationStaging.ts` timed the words' wait against. A being that came
- * over to be spoken to must not walk at a different speed from one that came
- * over to be struck.
- */
-const STAGING_WALK_PX_PER_SECOND = 48;
-
 /** Translate one typed retained scene view into renderer-native idempotent commands. */
 export function createProductionSceneCommandResolver(
   options: ProductionSceneCommandResolverOptions,
@@ -245,17 +235,16 @@ export function createProductionSceneCommandResolver(
    * The staging lane's commands for this frame.
    *
    * Conversational proximity (`presentation/conversationStaging.ts`): a being
-   * addressed by someone standing across the region walks over first, and both
-   * turn to face each other as the words land. Published exactly the way the
-   * overlay lane is — at `lastSceneToken`, so the scene graph accepts the batch
-   * without clearing its applied-command memory and a running scene is never
-   * disturbed — and it survives `clear-scene`, which cancels fallback
-   * repositions and offsets but never a route.
+   * addressed by someone standing across the region FLASH STEPS to conversational
+   * distance, and both turn to face each other in the same instant the words
+   * land. Published exactly the way the overlay lane is — at `lastSceneToken`, so
+   * the scene graph accepts the batch without clearing its applied-command memory
+   * and a running scene is never disturbed.
    *
-   * The `reposition`-before-`move` ordering for a truncated approach is the same
-   * load-bearing order the scene lane uses and for the same reason: the graph
-   * applies each command as it validates it, so the reposition must land before
-   * the move's route-clearance gate reads the actor's position.
+   * The flash-step beat is emitted before its `face` beats and the order is
+   * load-bearing for the same reason the scene lane's `reposition`-before-`move`
+   * ordering is: the graph applies each command as it validates it, so a turn
+   * resolved first would aim a being from where it no longer stands.
    */
   const stagingCommands = (
     frame: PresentedObserverFrame,
@@ -1335,26 +1324,21 @@ function effectPoint(
 /**
  * The renderer primitives one conversational staging beat performs.
  *
- * An `approach` is the ordinary production walk — same gait, same route shape,
- * same truncate-then-walk contract — and a `face` is a bare turn. Neither
- * consults the placement ledger: unlike a scene intent, a staging beat already
- * carries a route resolved against the region's real ground and structures, and
- * re-deriving anything here would be a second opinion about spatial truth.
+ * A `flash-step` is a `reposition` under the `"conversation-flash"` reason,
+ * which is what makes it read as a deliberate step rather than a dropped frame:
+ * that reason drives the actors' existing vanish-and-appear fade — the same one
+ * a region transition's `fade-reposition` performs — so the being dissolves
+ * where it stood and resolves beside whoever addressed it. A `face` is a bare
+ * turn. Neither consults the placement ledger: unlike a scene intent, a staging
+ * beat already carries a point resolved against the region's real ground and
+ * structures, and re-deriving anything here would be a second opinion about
+ * spatial truth. The scene graph still re-checks that point against object
+ * exclusions and ground collision before it applies, exactly as it does for
+ * every other reposition.
  */
 function stagingPrimitives(beat: PresentedStagingBeat): readonly HumanPrimitiveCommand[] {
   if (beat.kind === "face") return [{ kind: "orient", facing: beat.facing }];
-  if (beat.waypoints.length < 2) return [];
-  const walk: HumanPrimitiveCommand = {
-    kind: "move",
-    waypoints: beat.waypoints.map((waypoint) => ({ ...waypoint })),
-    speedPixelsPerSecond: STAGING_WALK_PX_PER_SECOND,
-    gait: "walk",
-  };
-  if (beat.cutFrom === undefined) return [walk];
-  return [
-    { kind: "reposition", position: { ...beat.cutFrom }, reason: "distance-cut" },
-    walk,
-  ];
+  return [{ kind: "reposition", position: { ...beat.to }, reason: "conversation-flash" }];
 }
 
 function directionFor(from: Vec2, to: Vec2): Direction4 {

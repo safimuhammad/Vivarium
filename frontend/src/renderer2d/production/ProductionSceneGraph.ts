@@ -1734,6 +1734,18 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
         }
         const movementWasActive = entry.actor.snapshot().routeActive;
         entry.actor.apply(command.command, safeNow);
+        // Spatial-truth freshness for the conversational staging lane
+        // (`presentation/conversationStaging.ts`). A completed WALK settles the
+        // ledger's anchor below, on its `arrived` signal; a flash step has no
+        // walk to arrive from, so without this the addressee's anchor would stay
+        // at the point it was spoken to from and every later beat would plan its
+        // route from a place the being is not. Only this one reason syncs here:
+        // the others are concessions applied mid-scene, whose own beat already
+        // owns where the being ends up.
+        if (command.command.kind === "reposition"
+          && command.command.reason === "conversation-flash") {
+          syncArrivalPoint(placement, command.actorId, command.command.position);
+        }
         synchronizeActorMovement(
           command.actorId,
           movementWasActive,
@@ -2657,7 +2669,8 @@ function validHumanCommand(candidate: HumanPrimitiveCommand): boolean {
       return true;
     case "reposition":
       return validFinitePoint(command.position)
-        && ["reduced-motion", "fallback", "region-transition", "distance-cut"].includes(command.reason);
+        && ["reduced-motion", "fallback", "region-transition", "distance-cut", "conversation-flash"]
+          .includes(command.reason);
     case "set-offset":
       return validFinitePoint(command.offset) && Math.hypot(command.offset.x, command.offset.y) <= 8;
     case "set-selected":

@@ -100,6 +100,18 @@ const REPOSITION_REASONS = new Set<HumanRepositionReason>([
   "fallback",
   "region-transition",
   "distance-cut",
+  "conversation-flash",
+]);
+/**
+ * The reasons performed as a vanish-and-appear fade rather than an instant placement.
+ *
+ * Mirrors `LayeredHumanActor.ts`'s identical set — see `HumanRepositionReason`
+ * for why `conversation-flash` is in it: a flash step is the one reposition
+ * authored to be watched, so it must not read as a dropped frame.
+ */
+const FADED_REPOSITION_REASONS = new Set<HumanRepositionReason>([
+  "fallback",
+  "conversation-flash",
 ]);
 
 /**
@@ -182,7 +194,8 @@ interface MutablePoint {
 
 interface ActiveFallbackReposition {
   phase: "fade-out" | "fade-in";
-  readonly reason: "fallback";
+  /** One of {@link FADED_REPOSITION_REASONS} — the reason reported on the `repositioned` signal. */
+  readonly reason: HumanRepositionReason;
   readonly originPosition: MutablePoint;
   readonly originOffset: MutablePoint;
   readonly target: MutablePoint;
@@ -662,8 +675,8 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
           throw new TypeError("Sprite human reposition position must be finite.");
         }
         if (this.#status !== "alive") return;
-        if (command.reason === "fallback") {
-          this.#beginFallbackReposition(command.position);
+        if (FADED_REPOSITION_REASONS.has(command.reason)) {
+          this.#beginFallbackReposition(command.position, false, command.reason);
           return;
         }
         if (this.stagePosition(command.position) === null) return;
@@ -1088,7 +1101,11 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
     }
   }
 
-  #beginFallbackReposition(target: Vec2, sustained = false): void {
+  #beginFallbackReposition(
+    target: Vec2,
+    sustained = false,
+    reason: HumanRepositionReason = "fallback",
+  ): void {
     this.#supersedeFallbackReposition();
     const originPosition = copyMutablePoint(this.#position);
     const originOffset = copyMutablePoint(this.#visualOffset);
@@ -1100,7 +1117,7 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
     this.#opacity = 1;
     this.#reposition = {
       phase: "fade-out",
-      reason: "fallback",
+      reason,
       originPosition,
       originOffset,
       target: copyMutablePoint(target),
@@ -1140,7 +1157,7 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
         kind: "repositioned",
         actorId: this.#id,
         position: copyPoint(this.#position),
-        reason: "fallback",
+        reason: reposition.reason,
       }));
       return;
     }
