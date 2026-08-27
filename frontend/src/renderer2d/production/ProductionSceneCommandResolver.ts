@@ -704,7 +704,7 @@ function effectCommands(
   /**
    * Public display names for the beings on stage, keyed by id.
    *
-   * The single choke point for the bubble's `to <name>` tag: BOTH ingestion
+   * The single choke point for the bubble's `[to <name>]` tag: BOTH ingestion
    * paths (the non-blocking utterance lane and a `speak` chained into a
    * physical moment) reach the bubble through this function, so resolving the
    * name here is the only way a mixed moment keeps its tag. A being missing
@@ -776,6 +776,12 @@ function effectCommands(
       tier: "murmur",
       ...(intent.targetId === null ? {} : { targetId: intent.targetId }),
       ...(targetName === undefined || targetName.length === 0 ? {} : { targetName }),
+      // The WHOLE roster, not just the addressee: a line names beings it is not
+      // addressed to ("Joe, Dick, Allen—it is as I feared"), and a self-talk
+      // names them with no addressee at all. Handing over the frame's already
+      // scrubbed names is what lets the bubble bracket a reference without ever
+      // guessing which capitalised word is a being.
+      ...(beingNames.size === 0 ? {} : { knownBeingNames: [...beingNames.values()] }),
       // A whisper is a dashed balloon WITH a thread; a broadcast is a solid
       // balloon WITHOUT one -- the direct answer to the performance matrix's
       // "whisper and broadcast are visually identical" gap.

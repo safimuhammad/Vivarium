@@ -47,7 +47,7 @@
  *    region transition's `fade-reposition` performs. A being visibly dissolves
  *    where it stood and resolves where it is spoken to.
  * 4. **Cross-region: do NOTHING spatial.** Nobody moves and nothing is drawn
- *    between them. The bubble's `to <Name>` tag carries the connection on its
+ *    between them. The bubble's `[to <Name>]` tag carries the connection on its
  *    own. This is the honest reading — they really are far apart.
  *
  * The destination is unchanged from the walking build: still the endpoint of a

@@ -121,12 +121,59 @@ dialogue, all of which the old `\s+` wrap silently collapsed.
 >    and it is the honest trade: a bubble taller than the screen is less readable than a
 >    small one that fits.
 >
-> **The addressee tag.** Directed speech opens with a soft-ink `to <name>` line, derived
-> from the event payload's `target_id` (never from prose), resolved to a public display
-> name at the one choke point both bubble paths share
-> (`ProductionSceneCommandResolver.effectCommands`). A being with no public-safe name
-> gets **no tag** rather than a raw id. Undirected speech and private self-talk carry no
-> tag at all.
+> **The addressee tag.** Directed speech opens with a **bracketed `[to <name>]`** line on
+> its own row, derived from the event payload's `target_id` (never from prose), resolved
+> to a public display name at the one choke point both bubble paths share
+> (`ProductionSceneCommandResolver.effectCommands`) and composed by `addresseeTag`. A
+> being with no public-safe name gets **no tag** rather than a raw id. Undirected speech
+> and private self-talk carry no tag at all.
+>
+> Two things make it read as a tag ABOUT the line rather than as the line's opening
+> words (Safi, 2026-08-26: *"color code the and use [] for the [to dick] etc messages"*).
+> **The brackets** are structure, so an over-long name loses NAME characters and the pair
+> still closes; `MAX_TAG_CHARS` is 26 rather than 24 precisely so `[to ` + `]` costs the
+> name nothing against the bare form's `to `. **`TAG_INK` (`#5f7285`)** is the palette's
+> one cool accent — every other colour the overlay owns is warm, so cool slate on warm
+> vellum is the only hue in the set that reads as a label instead of as faded speech. It
+> was chosen by eye at the type FLOOR (blit scale 2, which the default zoom of 2 already
+> produces, so the floor is the common case): speech's own `world` accent is ~3.2:1 on
+> vellum and reads as washed-out ink, `exchange` is dimmer, `dwell` green sinks into the
+> terrain, `harm` red shouts violence over a civil sentence, and `bond` rose would paint
+> every directed line — hostile ones included — in the mating family's colour. Borrowing
+> the `body` family's hue costs nothing legible: family colour is only ever worn by a
+> mark's post/bar/glyph or a burst, never by a bubble.
+>
+> The tag keeps its **own line**, above the message and outside the message's own wrap.
+> That is what makes it structurally impossible to break between `[` and `]`, and — since
+> the box is sized to hold tag and message together — impossible to orphan from the words
+> it belongs to.
+>
+> **In-message references.** Every being the message actually *says* is bracketed and
+> drawn in the same `TAG_INK` (Safi, 2026-08-26: *"all references within the bubble …
+> within the block braces and then, with a different color, it should name that
+> reference"*). `"Joe, Dick, Allen—it is as I feared. Both the East and West are
+> incredibly sparse."` draws as `[Joe], [Dick], [Allen]—…` with `East` and `West` left
+> plain. The bubble therefore carries **one** reference colour, not two.
+>
+> What makes a word a being is the **frame's roster** (`markBeingReferences`), never a
+> capitalised-word heuristic — which is exactly what would have painted the two regions
+> in that sentence. The roster is the same `safePublicCopy`-scrubbed name map the tag
+> uses, handed to every bubble at the same choke point, so an id or an unsafe name can
+> never be bracketed and an unknown name is simply left as plain type. Matching is
+> **case-sensitive** (a being called `Will` must not paint every "will"), **whole-word**
+> (`Maeve` is never `[Mae]ve`; `Joe's` is `[Joe]'s` — punctuation and the possessive stay
+> outside), **longest-first and non-overlapping** (`Allen` beats the `Al` that opens it),
+> and floored at two characters so a one-letter name cannot paint every `I` in the world.
+> The speaker's own name is bracketed too — one uniform rule, and a self-mention is still
+> a reference. Self-talk gets references but still no `to` tag: it is addressed to nobody.
+>
+> Colour runs are free here because the font is **fixed-advance**: a run's pen x is its
+> character offset, so `layoutMessage` wraps tokens whose length already counts the
+> brackets, and a bracketed name is an atomic token that cannot split across two lines.
+> The 5–7s lifetime band is deliberately **not** affected: `MessageLayout.total` stays the
+> whitespace-normalised count of the WORDS SAID, because `shared/speechLifetime.ts` holds
+> that number in mechanical lockstep with the scene the being plays while speaking.
+> Brackets are chrome, and chrome has never driven either clock.
 >
 > **Placement.** The crowd solver additionally treats the speaker's and the addressee's
 > own 22x46 bodies as blockers for that bubble alone, lifts up to 14 rungs (a text

@@ -24,6 +24,7 @@ import {
   type RegionMapRecipeV1,
 } from "../maps/RegionMapRecipe";
 import {
+  addresseeTag,
   bubbleScale,
   buildBurst,
   buildCap,
@@ -117,13 +118,24 @@ export type EnvironmentEffectRequest =
       /**
        * The being this line was addressed to, when the payload named one.
        *
-       * Drives the bubble's opening `to <name>` tag and keeps the bubble off the
-       * addressee's own body. Undirected speech and private self-talk leave both
-       * undefined — nothing about an audience is ever inferred.
+       * Drives the bubble's opening `[to <name>]` tag and keeps the bubble off
+       * the addressee's own body. Undirected speech and private self-talk leave
+       * both undefined — nothing about an audience is ever inferred.
        */
       targetId?: string;
       /** Public display name of {@link targetId}, already scrubbed for public copy. */
       targetName?: string;
+      /**
+       * Public display names of every being in the current frame, already
+       * scrubbed for public copy.
+       *
+       * Whichever of them the message actually says are bracketed and drawn in
+       * the bubble's reference colour — `[Joe]`, `[Dick]` — so the words point
+       * at the beings they name. This is the frame's ROSTER, not a guess: a
+       * capitalised word that names nobody (a region, say) stays plain, and an
+       * id or an unsafe name never reaches this field.
+       */
+      knownBeingNames?: readonly string[];
     }>
   | Readonly<{
       kind: "event-mark";
@@ -798,21 +810,26 @@ export class EnvironmentSystem {
     const metrics = TEXT_KIND_METRICS[request.variant];
     // The addressee tag is a fact from the payload, never prose parsing: it
     // exists exactly when the event named a target, and it is the addressee's
-    // public display name, already scrubbed upstream.
-    const tag = request.targetName === undefined || request.targetName.trim().length === 0
-      ? undefined
-      : `to ${request.targetName.trim()}`;
+    // public display name, already scrubbed upstream. The bracketed `[to Joe]`
+    // form and its budget belong to the grammar module, not to this pool.
+    const tag = addresseeTag(request.targetName);
+    // The roster is a fact from the frame too: the bubble matches the names it
+    // is GIVEN and invents none, so a region word or an unknown name stays
+    // plain type. Both ingestion lanes resolve it at the same choke point.
+    const names = request.knownBeingNames ?? [];
     const { surface, layout: built } = buildTextBubble({
       kind: request.variant,
       text: request.text,
       hue: request.hue,
       accent: request.accent,
       lean: request.tailLean,
+      names,
       ...(tag === undefined ? {} : { tag }),
     });
     const layout = built ?? layoutMessage(
       request.text,
       messageColumns(request.text.length, metrics.minColumns, metrics.maxColumns),
+      names,
     );
     this.resolveGather(request.speakerId);
     this.retireOwnedMarks(request.speakerId);

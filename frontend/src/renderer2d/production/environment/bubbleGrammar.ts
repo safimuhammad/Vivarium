@@ -51,6 +51,34 @@ export const OVERLAY_FAMILY_ACCENT: Readonly<Record<OverlayFamily, string>> = Ob
 });
 
 /**
+ * Ink for the bracketed addressee tag (`[to Joe]`) that opens directed speech.
+ *
+ * **The palette's one COOL accent, deliberately.** Every other colour the
+ * overlay owns is warm — ink is a near-black green, the body is cream vellum,
+ * and five of the six family accents are warm (amber, rose, rust, moss, and a
+ * grey-brown). A cool slate on warm vellum is the one hue in the set that reads
+ * instantly as *a label about the message* rather than as words in it, which is
+ * exactly what a tag has to do.
+ *
+ * Chosen against the alternatives by eye at the type FLOOR (blit scale 2, a
+ * 10x16 CSS-px glyph cell — the scale the story-framing default zoom of 2
+ * already produces, so the floor is the common case, not the edge one):
+ * `world` (#8a8270, speech's own family accent) is only ~3.2:1 on vellum and
+ * reads as faded ink rather than as colour; `exchange` is dimmer still;
+ * `dwell` green sinks into the terrain it is drawn over; `harm` red shouts
+ * violence over a civil sentence; `bond` rose would paint every directed line —
+ * hostile ones included — in the mating family's colour, and directed speech is
+ * far too frequent for that to survive. This slate is ~4.2:1 on vellum, the
+ * highest of the accents that are not semantically loaded.
+ *
+ * It borrows the `body` family's hue, which costs almost nothing: family colour
+ * is only ever worn by a mark's post/bar/glyph or a burst, never by a bubble, so
+ * a tag inside a balloon cannot be mistaken for a `halt`/`rise` banner beside a
+ * being.
+ */
+export const TAG_INK = OVERLAY_FAMILY_ACCENT.body;
+
+/**
  * Identity hues, chosen to read against both moss grass (`#b4bc6c`) and sand
  * (`#d4bc94`) — no greens, nothing that sinks into terrain. Derived from a
  * being's id alone; it colours exactly two things (the speech tail and a
@@ -620,12 +648,46 @@ export function pixelTextWidth(text: string): number {
 // message layout — the answer to 385-character messages
 // ---------------------------------------------------------------------------
 
+/**
+ * One same-coloured stretch of type inside a wrapped line.
+ *
+ * The overlay's font is FIXED-ADVANCE, so a colour change costs nothing to
+ * position: a run's pen x is simply the sum of the character counts before it.
+ * That is the whole reason a bubble can carry mixed colour inside a wrapped
+ * line without ever measuring text.
+ */
+export interface TextRun {
+  /** Exactly the characters drawn, brackets included. */
+  readonly text: string;
+  /**
+   * True when this run is a bracketed reference to a being — `[Joe]` — and is
+   * therefore drawn in {@link TAG_INK} rather than in the message's own ink.
+   */
+  readonly reference: boolean;
+}
+
 export interface MessageLayout {
   /** Every line of the WHOLE message. Never an excerpt, never an ellipsis. */
   readonly lines: readonly string[];
+  /**
+   * The same lines as coloured runs, in draw order.
+   *
+   * `runs[i].map((run) => run.text).join("")` is always exactly `lines[i]`;
+   * `lines` is the text, `runs` is the text plus its colour.
+   */
+  readonly runs: readonly (readonly TextRun[])[];
   /** Columns the message was wrapped to. */
   readonly columns: number;
-  /** Characters in the whitespace-normalised source message. */
+  /**
+   * Characters in the whitespace-normalised source message — the WORDS SAID.
+   *
+   * Brackets added around a being's name are chrome and are deliberately NOT
+   * counted, exactly as the `[to <Name>]` tag is not: this number is the one
+   * the 5-7s utterance band is computed from, and `shared/speechLifetime.ts`
+   * holds it in mechanical lockstep with the SCENE the being plays while
+   * speaking (Safi, 2026-08-26). Counting chrome here would silently desync
+   * the two clocks that module exists to keep together.
+   */
   readonly total: number;
 }
 
@@ -670,32 +732,242 @@ export function messageColumns(total: number, minColumns: number, maxColumns: nu
  * single token longer than the measure is hard-broken with a hyphen rather than
  * allowed to overflow the box.
  */
-export function layoutMessage(text: string, columns: number): MessageLayout {
+export function layoutMessage(
+  text: string,
+  columns: number,
+  names: readonly string[] = [],
+): MessageLayout {
   const width = Math.max(1, Math.floor(columns));
   const clean = text.replace(/\s+/gu, " ").trim();
-  if (clean.length === 0) return { lines: [""], columns: width, total: 0 };
-  const lines: string[] = [];
-  let current = "";
-  for (const rawWord of clean.split(" ")) {
-    let word = rawWord;
-    while (word.length > width) {
-      if (current.length > 0) {
-        lines.push(current);
-        current = "";
-      }
-      lines.push(`${word.slice(0, width - 1)}-`);
-      word = word.slice(width - 1);
+  if (clean.length === 0) return { lines: [""], runs: [[]], columns: width, total: 0 };
+  const wrapped = wrapRuns(tokeniseRuns(markBeingReferences(clean, names)), width);
+  return {
+    lines: wrapped.map(runsText),
+    runs: wrapped,
+    columns: width,
+    total: clean.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// in-message references — "[Joe], [Dick], [Allen]—it is as I feared."
+// ---------------------------------------------------------------------------
+
+/** The brackets that turn a spoken name into a visible reference. */
+const REFERENCE_OPEN = "[";
+const REFERENCE_CLOSE = "]";
+
+/**
+ * Shortest roster name that may be bracketed inside a message body.
+ *
+ * A one-character name would paint the pronoun `I` and the article `A` in every
+ * sentence in the world, which is a catastrophe by eye and cannot be worth the
+ * one being it would serve. The addressee tag has no such floor: it is derived
+ * from an id, never matched against prose.
+ */
+const MIN_BODY_REFERENCE_CHARS = 2;
+
+/**
+ * What counts as "inside a word", for the boundary test.
+ *
+ * Letters and digits only, so punctuation, quotes, spaces and the em-dashes
+ * these beings are fond of all end a name — and `Maeve` never yields `[Mae]ve`.
+ */
+const WORD_CHARACTER = /[\p{L}\p{N}]/u;
+
+/**
+ * Bracket every reference to a real being inside one normalised message.
+ *
+ * **Why a roster and not a regex.** Safi's own example — *"Joe, Dick, Allen—it
+ * is as I feared. Both the East and West are incredibly sparse."* — is exactly
+ * the case a capitalised-word heuristic gets wrong: `East` and `West` are
+ * REGIONS, and a proper-noun rule would paint them as beings. So the only thing
+ * that makes a word a being is the frame's own roster, which upstream has
+ * already scrubbed through the same public-copy guard the `[to <Name>]` tag
+ * uses. An id or an unsafe name never reaches this function, and a name that is
+ * not on the roster is left exactly as it was spoken.
+ *
+ * **The rules, and why:**
+ * - **Case-sensitive.** Load-bearing, not fussiness: beings are named from
+ *   ordinary words, and a being called `Will` must not paint every "will", nor
+ *   `Rose` every "rose". A name is a proper noun; a proper noun is capitalised.
+ * - **Whole words only.** Both neighbours must be non-word characters, so
+ *   `Joe,` `Joe.` `Joe—it` and `(Joe)` all bracket the NAME and leave the
+ *   punctuation outside, `Joe's` becomes `[Joe]'s` (the possessive is grammar,
+ *   not part of the name), and `Maeve` is never `[Mae]ve`.
+ * - **Longest first, non-overlapping.** `Allen` is claimed before `Al`, and a
+ *   claimed span is dead to every later candidate, so a roster containing both
+ *   cannot produce `[Al]len`.
+ * - **The speaker's own name is bracketed too.** One uniform rule: a being who
+ *   says its own name has made a reference to a being, third-person lines
+ *   ("Dick told Allen…") stay whole, and no surface has to know who is talking.
+ *
+ * @param text - One whitespace-normalised, trimmed message.
+ * @param names - Public display names of the beings in the current frame.
+ * @returns The message as coloured runs; a single plain run when nothing matched.
+ */
+export function markBeingReferences(
+  text: string,
+  names: readonly string[],
+): readonly TextRun[] {
+  const plain: readonly TextRun[] = [{ text, reference: false }];
+  const candidates = Array.from(new Set(names.map((name) => name.trim())))
+    .filter((name) => name.length >= MIN_BODY_REFERENCE_CHARS)
+    .sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
+  if (candidates.length === 0) return plain;
+
+  const claimed: Array<{ readonly start: number; readonly end: number; readonly name: string }> = [];
+  for (const name of candidates) {
+    for (let from = 0; ; ) {
+      const start = text.indexOf(name, from);
+      if (start < 0) break;
+      from = start + 1;
+      const end = start + name.length;
+      if (start > 0 && WORD_CHARACTER.test(text[start - 1]!)) continue;
+      if (end < text.length && WORD_CHARACTER.test(text[end]!)) continue;
+      if (claimed.some((range) => start < range.end && range.start < end)) continue;
+      claimed.push({ start, end, name });
     }
-    const candidate = current.length === 0 ? word : `${current} ${word}`;
-    if (candidate.length <= width) {
-      current = candidate;
+  }
+  if (claimed.length === 0) return plain;
+
+  claimed.sort((a, b) => a.start - b.start);
+  const runs: TextRun[] = [];
+  let cursor = 0;
+  for (const range of claimed) {
+    if (range.start > cursor) runs.push({ text: text.slice(cursor, range.start), reference: false });
+    runs.push({ text: `${REFERENCE_OPEN}${range.name}${REFERENCE_CLOSE}`, reference: true });
+    cursor = range.end;
+  }
+  if (cursor < text.length) runs.push({ text: text.slice(cursor), reference: false });
+  return runs;
+}
+
+/** Concatenated text of one line's runs — what actually lands on the surface. */
+function runsText(runs: readonly TextRun[]): string {
+  return runs.map((run) => run.text).join("");
+}
+
+/** Drawn character count of a run list, brackets included. */
+function runsLength(runs: readonly TextRun[]): number {
+  return runs.reduce((total, run) => total + run.text.length, 0);
+}
+
+/** Fold neighbouring runs of the same colour together, so the draw pass is tight. */
+function mergeRuns(runs: readonly TextRun[]): readonly TextRun[] {
+  const merged: TextRun[] = [];
+  for (const run of runs) {
+    if (run.text.length === 0) continue;
+    const previous = merged[merged.length - 1];
+    if (previous !== undefined && previous.reference === run.reference) {
+      merged[merged.length - 1] = { text: previous.text + run.text, reference: run.reference };
       continue;
     }
-    if (current.length > 0) lines.push(current);
-    current = word;
+    merged.push(run);
   }
-  if (current.length > 0) lines.push(current);
-  return { lines, columns: width, total: clean.length };
+  return merged;
+}
+
+/** The `[from, to)` character window of a run list, colours preserved. */
+function sliceRuns(runs: readonly TextRun[], from: number, to: number): readonly TextRun[] {
+  const sliced: TextRun[] = [];
+  let cursor = 0;
+  for (const run of runs) {
+    const end = cursor + run.text.length;
+    const start = Math.max(from, cursor);
+    const stop = Math.min(to, end);
+    if (stop > start) {
+      sliced.push({ text: run.text.slice(start - cursor, stop - cursor), reference: run.reference });
+    }
+    cursor = end;
+  }
+  return sliced;
+}
+
+/**
+ * Split one run list into whitespace-delimited wrap tokens.
+ *
+ * A **reference run is atomic**: it is never split on an internal space and
+ * never handed to the wrap in pieces, which is what guarantees a bracketed name
+ * cannot break across two lines. Only plain runs are split on spaces, so
+ * `[Joe],` stays one token and `[Joe]` glues to the comma that follows it.
+ */
+function tokeniseRuns(runs: readonly TextRun[]): readonly (readonly TextRun[])[] {
+  const tokens: Array<readonly TextRun[]> = [];
+  let current: TextRun[] = [];
+  const flush = (): void => {
+    if (current.length > 0) tokens.push(current);
+    current = [];
+  };
+  for (const run of runs) {
+    if (run.reference) {
+      current.push(run);
+      continue;
+    }
+    const parts = run.text.split(" ");
+    parts.forEach((part, index) => {
+      if (index > 0) flush();
+      if (part.length > 0) current.push({ text: part, reference: false });
+    });
+  }
+  flush();
+  return tokens;
+}
+
+/**
+ * Greedy-wrap tokens to `width` characters, colours intact.
+ *
+ * This is the one wrap engine in the module: {@link layoutMessage} is a thin
+ * plain-text adapter over it, so a message with no roster wraps BYTE-IDENTICALLY
+ * to the way it always did. Bracket characters are counted like any other, so
+ * adding a reference can move a word down a line — which is the honest result,
+ * and the reason the wrap was not left measuring the un-bracketed string.
+ *
+ * A token wider than the whole measure is hard-broken with a hyphen exactly as
+ * before, and the hyphen inherits the colour of the run it broke inside, so a
+ * name too wide for the bubble degrades into two tinted halves rather than into
+ * a colour seam.
+ */
+function wrapRuns(
+  tokens: readonly (readonly TextRun[])[],
+  width: number,
+): readonly (readonly TextRun[])[] {
+  // `width - 1` leaves room for the hyphen; the floor of 1 keeps a degenerate
+  // one-column measure from looping forever on a token it can never shrink.
+  const breakAt = Math.max(1, width - 1);
+  const lines: Array<readonly TextRun[]> = [];
+  let current: TextRun[] = [];
+  let currentLength = 0;
+  const push = (runs: readonly TextRun[]): void => {
+    lines.push(mergeRuns(runs));
+  };
+  for (const token of tokens) {
+    let rest = token;
+    while (runsLength(rest) > width) {
+      if (currentLength > 0) {
+        push(current);
+        current = [];
+        currentLength = 0;
+      }
+      const head = sliceRuns(rest, 0, breakAt);
+      const tail = head[head.length - 1];
+      push([...head, { text: "-", reference: tail?.reference ?? false }]);
+      rest = sliceRuns(rest, breakAt, runsLength(rest));
+    }
+    const restLength = runsLength(rest);
+    const candidateLength = currentLength === 0 ? restLength : currentLength + 1 + restLength;
+    if (candidateLength <= width) {
+      if (currentLength > 0) current.push({ text: " ", reference: false });
+      current.push(...rest);
+      currentLength = candidateLength;
+      continue;
+    }
+    if (currentLength > 0) push(current);
+    current = [...rest];
+    currentLength = restLength;
+  }
+  if (currentLength > 0) push(current);
+  return lines;
 }
 
 // ---------------------------------------------------------------------------
@@ -784,8 +1056,58 @@ export function textBubbleScale(
 
 /** Gap in world px between the addressee tag and the first line of the message. */
 const TAG_GAP = 3;
-/** A tag longer than this is not a name — it is a payload; keep the bubble sane. */
-const MAX_TAG_CHARS = 24;
+/**
+ * A tag longer than this is not a name — it is a payload; keep the bubble sane.
+ *
+ * 26, not the 24 it was before the brackets: `[to ` and `]` are five characters
+ * of structure, where the bare `to ` was three, so 26 leaves a name exactly the
+ * same 21-character budget it had. The cap moved so the NAME's budget would not.
+ */
+export const MAX_TAG_CHARS = 26;
+
+/** The bracketed tag's fixed structure: `[to ` opens it, `]` closes it. */
+const TAG_OPEN = "[to ";
+const TAG_CLOSE = "]";
+
+/**
+ * Compose the bracketed addressee tag for one directed line, or `undefined`.
+ *
+ * The brackets are what turn `to Dick` from the opening WORDS of a sentence into
+ * a tag ABOUT the sentence (Safi, 2026-08-26: "color code the and use [] for
+ * the [to dick] etc messages"). They are structure, so they are never the thing
+ * that gets cut: an over-long name is clamped and the pair still closes.
+ *
+ * Args:
+ *   name: The addressee's public display name, already scrubbed for public copy
+ *     upstream. `undefined`, empty, or whitespace-only means the payload named
+ *     nobody safe — and a bubble with nobody to address gets no tag at all,
+ *     never an empty `[to ]`.
+ *
+ * Returns:
+ *   `[to <name>]`, at most {@link MAX_TAG_CHARS} characters, or `undefined`.
+ */
+export function addresseeTag(name: string | undefined): string | undefined {
+  const trimmed = name === undefined ? "" : name.trim();
+  if (trimmed.length === 0) return undefined;
+  const budget = MAX_TAG_CHARS - TAG_OPEN.length - TAG_CLOSE.length;
+  return `${TAG_OPEN}${trimmed.slice(0, budget)}${TAG_CLOSE}`;
+}
+
+/**
+ * Clamp any tag to {@link MAX_TAG_CHARS} without amputating a closing bracket.
+ *
+ * {@link addresseeTag} already respects the cap, so this only fires for a tag
+ * composed elsewhere; it exists because a plain `slice` would leave `[to Verylo`
+ * open, and a tag that has lost its bracket has lost the one thing that makes it
+ * a tag.
+ */
+function clampTag(tag: string): string {
+  if (tag.length <= MAX_TAG_CHARS) return tag;
+  const clipped = tag.slice(0, MAX_TAG_CHARS);
+  return tag.endsWith(TAG_CLOSE)
+    ? `${clipped.slice(0, -TAG_CLOSE.length)}${TAG_CLOSE}`
+    : clipped;
+}
 
 export interface TextBubbleSpec {
   readonly kind: TextBubbleKind;
@@ -797,13 +1119,30 @@ export interface TextBubbleSpec {
   /** World px of tail lean toward the addressee, clamped to ±14. */
   readonly lean?: number;
   /**
-   * The addressee line drawn above the message, e.g. `"to Joe"`.
+   * The addressee line drawn above the message, e.g. `"[to Joe]"`.
+   *
+   * Bracketed and drawn in {@link TAG_INK} so it reads as a tag ABOUT the line
+   * rather than as the line's opening words. Compose it with
+   * {@link addresseeTag}, which is where that grammar lives.
    *
    * Present only when the event payload actually named a target. Undirected
    * speech and private self-talk carry no tag — a thought addressed to nobody
    * must not be captioned as if it were.
    */
   readonly tag?: string;
+  /**
+   * Public display names of the beings in the current frame.
+   *
+   * Every one of them that the message actually says is bracketed and drawn in
+   * the same {@link TAG_INK} as the addressee tag, so the bubble has ONE
+   * reference colour: `[to Allen]` above, `[Allen]` in the words below. Applies
+   * to every kind, self-talk included — a private thought can name another
+   * being, and that is still a reference.
+   *
+   * Left empty when the caller has no roster, which is simply a message with no
+   * references. See {@link markBeingReferences} for the matching rules.
+   */
+  readonly names?: readonly string[];
 }
 
 export interface BuiltSurface {
@@ -833,9 +1172,13 @@ export function buildTextBubble(spec: TextBubbleSpec): BuiltSurface {
   const normalisedTotal = spec.text.replace(/\s+/gu, " ").trim().length;
   const layout = layoutMessage(
     spec.text,
+    // Columns are chosen from the WORDS SAID, never from the bracketed result:
+    // the bubble's shape is a property of the utterance, so adding a reference
+    // makes the block a little taller rather than silently reshaping it.
     messageColumns(normalisedTotal, metrics.minColumns, metrics.maxColumns),
+    spec.names ?? [],
   );
-  const tag = spec.tag === undefined ? null : spec.tag.slice(0, MAX_TAG_CHARS);
+  const tag = spec.tag === undefined ? null : clampTag(spec.tag);
 
   const longest = layout.lines.reduce((max, line) => Math.max(max, line.length), 0);
   const contentWidth = Math.max(
@@ -909,14 +1252,25 @@ export function buildTextBubble(spec: TextBubbleSpec): BuiltSurface {
 
   const textX = originX + Math.round((boxWidth - contentWidth) / 2);
   let textY = Math.round((boxHeight - contentHeight) / 2);
-  // The addressee tag opens the bubble, in soft ink so it reads as an address
-  // line rather than as the first words spoken.
+  // The addressee tag opens the bubble on its OWN line — never folded into the
+  // message's wrap, so it can neither break across `[` and `]` nor be carried
+  // away from the words it belongs to — bracketed and in cool tag ink, so it
+  // reads as an address line rather than as the first words spoken.
   if (tag !== null) {
-    drawPixelText(surface, tag, textX, textY, OVERLAY_PALETTE.inkSoft);
+    drawPixelText(surface, tag, textX, textY, TAG_INK);
     textY += tagHeight;
   }
-  for (const line of layout.lines) {
-    drawPixelText(surface, line, textX, textY, OVERLAY_PALETTE.ink);
+  // The message is drawn run by run rather than line by line: every being the
+  // words name wears the SAME cool slate as the address line, so one glance
+  // finds every reference in the bubble (Safi, 2026-08-26 — "with a different
+  // color, it should name that reference"). The fixed 6px advance is what makes
+  // this free: a run's pen x is its character offset, never a measurement.
+  for (const line of layout.runs) {
+    let runX = textX;
+    for (const run of line) {
+      drawPixelText(surface, run.text, runX, textY, run.reference ? TAG_INK : OVERLAY_PALETTE.ink);
+      runX += run.text.length * FONT_ADVANCE;
+    }
     textY += FONT_LINE_HEIGHT;
   }
 

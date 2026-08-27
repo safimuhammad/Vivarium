@@ -20,6 +20,7 @@ import {
 import type { AnimatedEnvironmentKind, RegionKitId } from "../maps/biomeKits";
 import { feetAnchoredVisualRect } from "../productionGeometry";
 import {
+  addresseeTag,
   bubbleScale,
   buildBurst,
   buildPip,
@@ -27,8 +28,13 @@ import {
   hasFontGlyph,
   identityHue,
   layoutMessage,
+  MAX_TAG_CHARS,
   messageColumns,
+  OVERLAY_FAMILY_ACCENT,
   OVERLAY_GLYPH_NAMES,
+  OVERLAY_PALETTE,
+  type PixelSurface,
+  TAG_INK,
   TEXT_KIND_METRICS,
   TEXT_SCALE_FLOOR,
   textBubbleScale,
@@ -812,13 +818,20 @@ describe("EnvironmentSystem", () => {
     expect(layout.lines.join("").replace(/-/gu, "")).toContain("tail");
   });
 
-  it("tags directed speech with its addressee at the START, and tags nothing else", () => {
+  it("tags directed speech with its BRACKETED addressee at the START, in tag ink, and tags nothing else", () => {
     const text = "I have been watching how you tend this place.";
     const plain = buildTextBubble({ kind: "whisper", text, hue: "#9c4a33", accent: "#8a8270" });
-    const tagged = buildTextBubble({ kind: "whisper", text, hue: "#9c4a33", accent: "#8a8270", tag: "to Joe" });
+    const tagged = buildTextBubble({ kind: "whisper", text, hue: "#9c4a33", accent: "#8a8270", tag: "[to Joe]" });
     // The tag opens the bubble, so the box is exactly one type line taller.
     expect(tagged.surface.height).toBeGreaterThan(plain.surface.height);
     expect(tagged.layout!.lines.join(" ")).toBe(text);
+    // The tag ink is a real COLOUR set apart from the message's ink -- Safi's
+    // "color code the ... [to dick] etc messages" -- and it is the one COOL
+    // accent the overlay palette owns, so it reads as a label on warm vellum
+    // rather than as faded speech.
+    expect(TAG_INK).toBe(OVERLAY_FAMILY_ACCENT.body);
+    expect(TAG_INK).toBe("#5f7285");
+    expect(TAG_INK).not.toBe(OVERLAY_PALETTE.ink);
 
     // Undirected speech and private self-talk carry no addressee at all.
     const system = createSystem(recipeFor(world[0]!));
@@ -826,16 +839,184 @@ describe("EnvironmentSystem", () => {
     system.emit({ ...speech("briar", text), variant: "thought" }, 0);
     const canvas = recordingContext();
     system.draw(canvas.context, "air");
-    // Soft ink is used for the address line and nowhere else in the grammar.
-    expect(canvas.fills).toContain("#2f3a2b");
+    expect(canvas.fills).toContain(TAG_INK);
+    // The BRACKETS are drawn, not merely composed: the live system's tag ink
+    // spans the same width as a surface built with `[to Joe]`, and a width the
+    // bare `to Joe` form cannot produce.
+    const drawnTagWidth = colouredExtent(canvas, TAG_INK);
+    expect(drawnTagWidth).toBe(inkExtent(
+      buildTextBubble({ kind: "speech", text, hue: identityHue("aster"), accent: "#8a8270", tag: "[to Joe]" }).surface,
+      TAG_INK,
+    ));
+    expect(drawnTagWidth).not.toBe(inkExtent(
+      buildTextBubble({ kind: "speech", text, hue: identityHue("aster"), accent: "#8a8270", tag: "to Joe" }).surface,
+      TAG_INK,
+    ));
     system.dispose();
 
     const quiet = createSystem(recipeFor(world[0]!));
     quiet.emit({ ...speech("briar", text), variant: "thought" }, 0);
     const quietCanvas = recordingContext();
     quiet.draw(quietCanvas.context, "air");
-    expect(quietCanvas.fills).not.toContain("#2f3a2b");
+    expect(quietCanvas.fills).not.toContain(TAG_INK);
     quiet.dispose();
+  });
+
+  it("brackets the addressee tag, and never amputates a bracket off a long name", () => {
+    expect(addresseeTag("Joe")).toBe("[to Joe]");
+    // The payload's name is trimmed, never re-worded.
+    expect(addresseeTag("  Briar  ")).toBe("[to Briar]");
+    // No name, no tag -- and never an empty `[to ]`.
+    expect(addresseeTag(undefined)).toBeUndefined();
+    expect(addresseeTag("   ")).toBeUndefined();
+
+    // A name long enough to hit the budget loses NAME characters; the brackets
+    // are structure and survive.
+    const clamped = addresseeTag("Bartholomew Winterbourne the Third")!;
+    expect(clamped.length).toBeLessThanOrEqual(MAX_TAG_CHARS);
+    expect(clamped.startsWith("[to ")).toBe(true);
+    expect(clamped.endsWith("]")).toBe(true);
+
+    // The bubble builder's own defensive clamp is bracket-safe too: a tag handed
+    // in over-long still draws a closed bracket pair.
+    const text = "Yes.";
+    const spec = { kind: "speech" as const, text, hue: "#9c4a33", accent: "#8a8270" };
+    const overLong = `[to ${"z".repeat(MAX_TAG_CHARS)}]`;
+    const expected = `[to ${"z".repeat(MAX_TAG_CHARS - 5)}]`;
+    expect(inkExtent(buildTextBubble({ ...spec, tag: overLong }).surface, TAG_INK))
+      .toBe(inkExtent(buildTextBubble({ ...spec, tag: expected }).surface, TAG_INK));
+  });
+
+  it("brackets EVERY being named inside the message, and nothing that is not a being", () => {
+    // Safi's own example, from a live run (2026-08-26): "When the agent is
+    // talking to someone else, it says the name. Within the bubble it should do
+    // it within the block braces and then, with a different color, it should
+    // name that reference."
+    const text = "Joe, Dick, Allen—it is as I feared. Both the East and West are incredibly sparse.";
+    const roster = ["Joe", "Dick", "Allen", "Aster"];
+    const layout = layoutMessage(text, 200, roster);
+
+    // The names are bracketed; the punctuation that followed them is NOT.
+    expect(layout.lines.join("")).toBe(
+      "[Joe], [Dick], [Allen]—it is as I feared. Both the East and West are incredibly sparse.",
+    );
+    // "East" and "West" are REGIONS. Only the roster decides what is a being, so
+    // a capitalised word that names no being is left exactly as it was spoken.
+    expect(layout.lines.join("")).toContain("the East and West");
+    expect(layout.lines.join("")).not.toContain("[East]");
+    // A roster name nobody mentioned adds nothing.
+    expect(layout.lines.join("")).not.toContain("[Aster]");
+
+    const referenced = layout.runs.flat().filter((run) => run.reference).map((run) => run.text);
+    expect(referenced).toEqual(["[Joe]", "[Dick]", "[Allen]"]);
+
+    // The 5-7s band counts the WORDS SAID, never the brackets: the bubble clock
+    // and the scene clock are held in mechanical lockstep by `spokenCharacterCount`
+    // (Safi, 2026-08-26), and chrome has never driven either of them.
+    expect(layout.total).toBe(spokenCharacterCount(text));
+    expect(layout.total).toBe(layoutMessage(text, 200).total);
+  });
+
+  it("matches a being's name as a WHOLE WORD, case-sensitively, and never inside another word", () => {
+    const roster = ["Mae", "Al", "Allen", "Will"];
+    const marked = (text: string): string =>
+      layoutMessage(text, 400, roster).lines.join("");
+
+    // Never a substring of a longer word.
+    expect(marked("Maeve walked past.")).toBe("Maeve walked past.");
+    expect(marked("The alcove was empty.")).toBe("The alcove was empty.");
+    // Case-sensitive, and load-bearing: a being called "Will" must not paint
+    // every "will" in the world, and "Mae" must not paint a lowercase "mae".
+    expect(marked("I will go, Will.")).toBe("I will go, [Will].");
+    expect(marked("mae")).toBe("mae");
+    // Punctuation, em-dashes and possessives sit OUTSIDE the brackets: the tag
+    // is the name, and only the name.
+    expect(marked("Mae.")).toBe("[Mae].");
+    expect(marked("Mae—wait.")).toBe("[Mae]—wait.");
+    expect(marked("Mae's home")).toBe("[Mae]'s home");
+    expect(marked("(Mae)")).toBe("([Mae])");
+    // Longest-first: "Allen" wins over the "Al" that opens it, and the loser
+    // never re-enters through the leftovers.
+    expect(marked("Allen and Al spoke.")).toBe("[Allen] and [Al] spoke.");
+    // Every occurrence, not just the first.
+    expect(marked("Mae, Mae, Mae.")).toBe("[Mae], [Mae], [Mae].");
+  });
+
+  it("keeps a bracketed name whole across a wrap, and measures the brackets it drew", () => {
+    const roster = ["Allen"];
+    // A measure that would split "[Allen]" if the brackets were invisible to
+    // the wrap: the name is the last thing that fits, or it moves down whole.
+    const layout = layoutMessage("we saw Allen there", 10, roster);
+    expect(layout.lines.every((line) => line.length <= 10)).toBe(true);
+    expect(layout.lines.some((line) => line.includes("[Allen]"))).toBe(true);
+    for (const line of layout.lines) {
+      expect(line.includes("[") === line.includes("]")).toBe(true);
+    }
+
+    // With no roster the wrap is BYTE-IDENTICAL to what it always produced --
+    // the run-aware engine replaced the plain one, it did not change it.
+    const plain = "It is good to be here with you. The silence is profound.";
+    for (const columns of [8, 12, 18, 26, 44]) {
+      expect(layoutMessage(plain, columns).lines).toEqual(
+        layoutMessage(plain, columns, []).lines,
+      );
+    }
+    // A monster token still hard-breaks with a hyphen, roster or not.
+    const broken = layoutMessage(`${"z".repeat(60)} tail`, 14, roster);
+    expect(broken.lines.every((line) => line.length <= 14)).toBe(true);
+    expect(broken.lines[0]!.endsWith("-")).toBe(true);
+  });
+
+  it("draws every in-message reference in the SAME tag ink as the addressee tag", () => {
+    const text = "Allen, the north is sparse.";
+    const roster = ["Allen"];
+    const spec = { kind: "speech" as const, text, hue: "#9c4a33", accent: "#8a8270" };
+    const bare = buildTextBubble(spec);
+    const marked = buildTextBubble({ ...spec, names: roster });
+    // Nothing is tinted until a being is actually named.
+    expect(() => inkExtent(bare.surface, TAG_INK)).toThrow();
+    // The BRACKETS are drawn, not merely composed: the body reference spans the
+    // same tag ink as the string "[Allen]" drawn on a tag line, and a width the
+    // bare "Allen" cannot produce. (Measured, not computed: the 5x8 font's own
+    // glyphs decide the lit extent, so only a same-string bubble is a fair ruler.)
+    expect(inkExtent(marked.surface, TAG_INK))
+      .toBe(inkExtent(buildTextBubble({ ...spec, tag: "[Allen]" }).surface, TAG_INK));
+    expect(inkExtent(marked.surface, TAG_INK))
+      .not.toBe(inkExtent(buildTextBubble({ ...spec, tag: "Allen" }).surface, TAG_INK));
+
+    // ONE reference colour in the bubble, not two: the body reference and the
+    // addressee tag are the same cool slate, so a single sweep of the eye finds
+    // every being the bubble points at.
+    const both = buildTextBubble({ ...spec, names: roster, tag: "[to Allen]" });
+    expect(both.layout!.runs[0]![0]).toEqual({ text: "[Allen]", reference: true });
+    expect(inkExtent(both.surface, TAG_INK))
+      .toBeGreaterThanOrEqual(inkExtent(marked.surface, TAG_INK));
+
+    // Self-talk mentions other beings too, and gets the same treatment -- what
+    // it never gets is an addressee tag, because it is addressed to nobody.
+    const thought = buildTextBubble({ ...spec, kind: "thought", names: roster });
+    expect(inkExtent(thought.surface, TAG_INK))
+      .toBe(inkExtent(buildTextBubble({ ...spec, kind: "thought", tag: "[Allen]" }).surface, TAG_INK));
+  });
+
+  it("carries the frame's roster into the live bubble, and leaves an unknown name plain", () => {
+    const text = "Allen, the north is sparse.";
+    const system = createSystem(recipeFor(world[0]!));
+    system.emit({ ...speech("aster", text), knownBeingNames: ["Allen"] }, 0);
+    const canvas = recordingContext();
+    system.draw(canvas.context, "air");
+    expect(canvas.fills).toContain(TAG_INK);
+    system.dispose();
+
+    // An id or an unsafe name never reaches the roster upstream, so an
+    // unresolvable reference is simply left as plain text -- never bracketed,
+    // never tinted, never rewritten.
+    const unknown = createSystem(recipeFor(world[0]!));
+    unknown.emit({ ...speech("aster", text), knownBeingNames: ["agent_9f2c"] }, 0);
+    const plainCanvas = recordingContext();
+    unknown.draw(plainCanvas.context, "air");
+    expect(plainCanvas.fills).not.toContain(TAG_INK);
+    unknown.dispose();
   });
 
   it("makes a thought the quietest silhouette on screen: narrower than a whisper, which is narrower than speech", () => {
@@ -1492,6 +1673,41 @@ function paintedExtent(rectangles: readonly number[][]): Readonly<{
     right: Math.max(...rectangles.map(([x, , width]) => x! + width!)),
     bottom: Math.max(...rectangles.map(([, y, , height]) => y! + height!)),
   };
+}
+
+/**
+ * Width, in surface px, of everything painted in one colour on a built surface.
+ *
+ * {@link TAG_INK} is the bubble's ONE reference colour — the addressee tag and
+ * every being named inside the message wear it and nothing else does — so
+ * measuring it is the honest way to assert on the SHAPE of the strings that
+ * reached the type renderer without threading them back out of the build. On a
+ * surface carrying both, the measurement spans from the leftmost reference to
+ * the rightmost, which is why the tests below use bubbles carrying one kind at
+ * a time, or a tag wider than anything in the body.
+ */
+function inkExtent(surface: PixelSurface, colour: string): number {
+  let left = Number.POSITIVE_INFINITY;
+  let right = Number.NEGATIVE_INFINITY;
+  for (let y = 0; y < surface.height; y += 1) {
+    for (let x = 0; x < surface.width; x += 1) {
+      if (surface.at(x, y) !== colour) continue;
+      if (x < left) left = x;
+      if (x > right) right = x;
+    }
+  }
+  if (right < left) throw new Error(`nothing was painted in ${colour}`);
+  return right - left + 1;
+}
+
+/** The same measurement, taken off a recording canvas's run-length spans. */
+function colouredExtent(
+  canvas: Readonly<{ fills: readonly string[]; fillRects: readonly number[][] }>,
+  colour: string,
+): number {
+  const rectangles = canvas.fillRects.filter((_, index) => canvas.fills[index] === colour);
+  const box = paintedExtent(rectangles);
+  return box.right - box.x;
 }
 
 function _assertKitType(_kit: RegionKitId): void {

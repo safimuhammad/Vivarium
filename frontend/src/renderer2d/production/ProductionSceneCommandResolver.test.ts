@@ -553,6 +553,59 @@ describe("ProductionSceneCommandResolver", () => {
     }
   });
 
+  it("hands every bubble the frame's whole roster, so the words can name beings the line is not addressed to", () => {
+    // The `[to <Name>]` tag answers "who is this aimed at"; the roster answers
+    // "which words in it are beings". A line like "Joe, Dick, Allen -- it is as
+    // I feared" names three, is addressed to none of them in particular, and a
+    // self-talk names them with no addressee at all -- so the roster cannot be
+    // derived from the target, and rides on every bubble regardless of variant.
+    const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
+    const chained = resolver(namedFrame(scene({
+      effectIntents: [{
+        kind: "speech-bubble", sourceId: "aster", targetId: "briar",
+        text: "Joe, it is as I feared.", variant: "whisper",
+      }],
+    })));
+    const chainedRequest = (chained?.commands[0] as { request: Record<string, unknown> }).request;
+    expect(chainedRequest.knownBeingNames).toEqual(["Mae", "Joe"]);
+
+    // Self-talk: no addressee, still the full roster.
+    const alone = resolver(namedFrame(scene({
+      momentId: "1:21:single",
+      effectIntents: [{
+        kind: "speech-bubble", sourceId: "aster", targetId: null,
+        text: "Joe was right.", variant: "thought",
+      }],
+    })));
+    const aloneRequest = (alone?.commands[0] as { request: Record<string, unknown> }).request;
+    expect(aloneRequest.targetName).toBeUndefined();
+    expect(aloneRequest.knownBeingNames).toEqual(["Mae", "Joe"]);
+
+    // The overlay lane resolves the roster at the same choke point.
+    const overlayLane = resolver(namedFrame(null, {
+      utterances: [{
+        momentId: "m-9", cursor: 21, beingId: "aster", targetId: null, regionId: "worn",
+        text: "Joe, Mae -- the East is sparse.", variant: "spoken", eventType: "speak",
+      }],
+    }, 9));
+    expect(overlayLane?.commands).toContainEqual(expect.objectContaining({
+      kind: "environment",
+      request: expect.objectContaining({ knownBeingNames: ["Mae", "Joe"] }),
+    }));
+
+    // A frame with no named beings carries no roster at all, rather than an
+    // empty one: there is nothing a bubble could match, and nothing is invented.
+    const nameless = resolver(frame(scene({
+      momentId: "1:22:single",
+      effectIntents: [{
+        kind: "speech-bubble", sourceId: "aster", targetId: null,
+        text: "Quiet here.", variant: "spoken",
+      }],
+    })));
+    const namelessRequest = (nameless?.commands[0] as { request: Record<string, unknown> }).request;
+    expect(namelessRequest.knownBeingNames).toBeUndefined();
+  });
+
   it("flash-steps a conversational addressee without a scene, and turns both beings", () => {
     // The staging lane (`presentation/conversationStaging.ts`): a being spoken
     // to from across the region APPEARS beside the speaker. It is published
