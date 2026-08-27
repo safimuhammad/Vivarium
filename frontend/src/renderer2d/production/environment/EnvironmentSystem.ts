@@ -241,6 +241,17 @@ export interface EnvironmentDiagnostics {
    * human actually uses.
    */
   readonly overflowingBubbles: number;
+  /**
+   * Frame-draws of a text bubble the crowd solver could not place clear of the
+   * bubbles already down, and which was therefore drawn overlapping one.
+   *
+   * Overlap is the fallback, never the first choice: staging spaces conversing
+   * beings by bubble width and the solver lifts and shifts before giving up. The
+   * counter exists so a run can answer "is this happening constantly or rarely?"
+   * without guesswork. Counted per draw, like {@link overflowingBubbles}, and it
+   * is diagnostic only — nothing about the drawing changes because of it.
+   */
+  readonly collidedBubbles: number;
   readonly activeMarkers: number;
   readonly activeBursts: number;
   readonly activeGathers: number;
@@ -359,7 +370,15 @@ interface TextOverlaySlot extends OverlaySlotBase {
   readonly thread: OverlayThread | null;
   /** Whoever this line was addressed to, so the bubble never lands on them. */
   readonly targetId: string | null;
-  /** Low-zoom form: a quote mark for speech/whisper, an ellipsis for thought. */
+  /**
+   * The glyph this line leaves behind at its speaker's shoulder once it expires:
+   * a quote mark for speech/whisper, an ellipsis for thought.
+   *
+   * It is a form of HISTORY — "someone spoke here a moment ago" — and it is the
+   * only place a text overlay is ever reduced to a glyph. It was once also the
+   * low-zoom form of the live bubble; it is not any more (see
+   * {@link TEXT_ZOOM_THRESHOLD}).
+   */
   readonly studGlyph: OverlayGlyph;
 }
 
@@ -524,8 +543,13 @@ const CROWD_MAX_LIFTS = 5;
  */
 const CROWD_MAX_TEXT_LIFTS = 14;
 const CROWD_LATERAL_SHIFT_PX = 12;
-/** Global budget of live *text* bubbles on screen; the rest demote to pips. */
-const CROWD_TEXT_BUDGET = 6;
+// There is deliberately NO budget of live text bubbles. A `CROWD_TEXT_BUDGET`
+// of 6 used to demote every bubble past the sixth to a glyph stud; that is a
+// message hidden to tidy the screen, and the owner's rule is that a message
+// which is up is fully drawn (Safi, 2026-08-27). The pool capacity
+// (`TEXT_OVERLAY_POOL_CAPACITY`) and the 5-7s lifetime band are what bound how
+// many can be live at once; crowding is answered by placement, and, failing
+// that, by overlap.
 
 /**
  * Deterministic, scheduler-free regional ambient and restrained-particle state,
@@ -573,6 +597,7 @@ export class EnvironmentSystem {
   private suppressedEffects = 0;
   private neutralDiagnostics = 0;
   private overflowingBubbles = 0;
+  private collidedBubbles = 0;
   private disposed = false;
 
   constructor(options: Readonly<{
@@ -1316,6 +1341,7 @@ export class EnvironmentSystem {
       neutralDiagnostics: this.neutralDiagnostics,
       activeBubbles: countActive(this.texts),
       overflowingBubbles: this.overflowingBubbles,
+      collidedBubbles: this.collidedBubbles,
       activeMarkers: countActive(this.marks),
       activeBursts: countActive(this.bursts),
       activeGathers: countActive(this.gathers),
@@ -1452,7 +1478,14 @@ export class EnvironmentSystem {
 
     // The zoom ladder only applies when there is a real camera to reason about:
     // with no viewport the chrome draws at its authored 1x, full grammar.
-    const withText = view === undefined || view.zoom >= TEXT_ZOOM_THRESHOLD;
+    //
+    // It governs MARKS alone. A mark's meaning is its verb glyph, so a wide view
+    // shows the glyph and drops the banner label around it. A text bubble keeps
+    // its words at every zoom and simply shrinks with the world to blit scale 1
+    // (Safi, 2026-08-27: *"on zooming out do not show `""` show full bubbles"*,
+    // then *"scale down with the world, just make them small but still
+    // readable"*).
+    const markWords = view === undefined || view.zoom >= TEXT_ZOOM_THRESHOLD;
     const live = this.orderedOverlays();
 
     // 1. threads + receiver caps, under everything they connect.
@@ -1518,24 +1551,22 @@ export class EnvironmentSystem {
     }
 
     // 4. gathers — the opening phase, rebuilt each frame as its dots fill.
-    // Below the text threshold a gather has nothing to gather toward: the
-    // resolved form is itself only a glyph stud there, so an opening cloud
-    // would be noise over a world already reduced to coloured intent.
-    if (withText) {
-      for (const gather of this.gathers) {
-        if (gather === null) continue;
-        const phase = this.reducedMotion
-          ? 1
-          : Math.min(1, (this.nowMs - gather.startedAtMs) / GATHER_FILL_MS);
-        const at = this.liveAnchorFor(gather.ownerId, gather.at, "being");
-        if (at === null) continue;
-        buildGather(phase).surface.blit(
-          context,
-          toScreenX(at.x),
-          toScreenY(at.y - CONNECTOR_TIP_OFFSET_Y),
-          scale,
-        );
-      }
+    // Drawn at every zoom, because what it opens onto now arrives at every zoom:
+    // a bubble no longer collapses to a stud when the camera pulls out, so the
+    // cloud that announces it would be the only part of the beat that vanished.
+    for (const gather of this.gathers) {
+      if (gather === null) continue;
+      const phase = this.reducedMotion
+        ? 1
+        : Math.min(1, (this.nowMs - gather.startedAtMs) / GATHER_FILL_MS);
+      const at = this.liveAnchorFor(gather.ownerId, gather.at, "being");
+      if (at === null) continue;
+      buildGather(phase).surface.blit(
+        context,
+        toScreenX(at.x),
+        toScreenY(at.y - CONNECTOR_TIP_OFFSET_Y),
+        scale,
+      );
     }
 
     // 5. text + marks, deterministically de-collided.
@@ -1543,7 +1574,7 @@ export class EnvironmentSystem {
       context,
       live,
       scale,
-      withText,
+      markWords,
       zoom,
       safeFrame(view),
       canvasRect(view),
@@ -1581,14 +1612,26 @@ export class EnvironmentSystem {
   /**
    * Place and draw every live text/mark with the deterministic crowd solver of
    * `BUBBLE_UI.md` §7: snap to an 8px lattice, lift one row at a time, then
-   * shift laterally, then **demote to a pip** — never shrink text, because
-   * readability beats completeness. A KNELL is never demoted.
+   * shift laterally.
+   *
+   * **A message that is up is fully drawn** (Safi, 2026-08-27: *"Overlap is
+   * tolerable but at first the system itself should keep them apart so that
+   * their bubbles don't collide. If that even fails then it's the fallback not a
+   * first choice."*). Prevention is the whole search: lifts and lateral shifts
+   * exist to find a rectangle that clears every bubble already placed, and
+   * upstream of here `conversationStaging` stands conversing beings far enough
+   * apart that the search usually succeeds on its first candidate. When the
+   * search genuinely exhausts, the bubble is drawn anyway, overlapping, and
+   * counted in {@link EnvironmentDiagnostics.collidedBubbles} — never
+   * suppressed, truncated, or reduced to a stud. Only a MARK still demotes,
+   * because a mark's meaning is its glyph and the banner is a label; a KNELL
+   * mark is never demoted either.
    */
   private drawPlacedOverlays(
     context: CanvasRenderingContext2D,
     live: readonly (TextOverlaySlot | MarkOverlaySlot)[],
     scale: number,
-    withText: boolean,
+    markWords: boolean,
     zoom: number,
     frame: Rect | null,
     canvas: Rect | null,
@@ -1596,42 +1639,33 @@ export class EnvironmentSystem {
     toScreenY: (worldY: number) => number,
   ): void {
     const placed: Rect[] = [];
-    let textsPlaced = 0;
     for (const slot of live) {
       const isText = slot.kind === "text";
-      // A bubble already dissolving is a ghost: it is drawn, but it neither
-      // blocks the crowd solver nor spends the text budget. Otherwise the very
-      // line that superseded it would be lifted a row (or demoted to a stud)
-      // for the length of the fade and then drop back — a jump exactly where
-      // the viewer is looking.
+      // A bubble already dissolving is a ghost: it is drawn, but it does not
+      // block the crowd solver. Otherwise the very line that superseded it would
+      // be lifted a row for the length of the fade and then drop back — a jump
+      // exactly where the viewer is looking.
       const fade = isText ? textFadeAlpha(slot, this.nowMs) : 1;
       const dissolving = fade < 1;
-      const overBudget = isText && !dissolving
-        && textsPlaced >= CROWD_TEXT_BUDGET && slot.tier !== "knell";
-      // Below the text threshold EVERY silhouette collapses to a glyph stud on a
-      // short stem -- speech to a quote mark, thought to an ellipsis, an action
-      // to its verb glyph -- so a wide view reads as a field of coloured intent
-      // rather than a wall of chrome larger than the beings under it.
-      const surface = withText
+      // A text bubble always carries its words. A MARK below the threshold
+      // collapses to its verb glyph on a short stem, so a wide view of the world
+      // is a field of coloured intent rather than a wall of banners larger than
+      // the beings under them.
+      const surface = isText || markWords
         ? slot.built
-        : slot.kind === "text"
-          ? buildStud(slot.studGlyph, slot.hue).surface
-          : buildStud(slot.glyph, OVERLAY_FAMILY_ACCENT[slot.family]).surface;
+        : buildStud(slot.glyph, OVERLAY_FAMILY_ACCENT[slot.family]).surface;
       // No anchor, no chrome: a bubble is only ever legible over the head that
       // produced it, and a mark only on the thing it was planted in.
       const at = this.liveAnchorFor(slot.ownerId, slot.at, overlayOwnerKind(slot));
       if (at === null) continue;
       const anchorX = toScreenX(at.x);
       const anchorY = toScreenY(at.y - CONNECTOR_TIP_OFFSET_Y);
-      if (overBudget) {
-        this.drawDemoted(context, slot, anchorX, anchorY, scale, fade);
-        continue;
-      }
       // A text bubble carries the whole message, so its own scale is a separate
       // decision from the chrome's: the length ladder steps the type down to the
-      // legibility floor, and a frame too small for the result steps it down
-      // further rather than letting words fall off the screen.
-      const blitScale = isText && withText
+      // legibility floor, the camera steps it down to blit scale 1 when zoomed
+      // out, and a frame too small for the result steps it down further rather
+      // than letting words fall off the screen.
+      const blitScale = isText
         ? textBubbleScale(zoom, slot.layout.total, surface, frame ?? { width: Infinity, height: Infinity })
         : scale;
       const width = surface.width * blitScale;
@@ -1687,19 +1721,21 @@ export class EnvironmentSystem {
       const chosen = search(true) ?? search(false);
       let settled = chosen;
       if (settled === null) {
-        if (slot.tier !== "knell") {
+        // Prevention failed. For a MARK that is a demotion to its glyph — the
+        // glyph is the mark. For a MESSAGE there is no reduced form worth
+        // drawing, so it takes its home position and overlaps, and the run
+        // records that it had to.
+        if (!isText && slot.tier !== "knell") {
           this.drawDemoted(context, slot, anchorX, anchorY, scale, fade);
           continue;
         }
         settled = clampIntoFrame({ x: baseX, y: baseY, width, height }, anchored);
+        if (isText && !dissolving) this.collidedBubbles += 1;
       }
       if (isText && frame !== null && (width > frame.width || height > frame.height)) {
         this.overflowingBubbles += 1;
       }
-      if (!dissolving) {
-        placed.push(settled);
-        if (isText) textsPlaced += 1;
-      }
+      if (!dissolving) placed.push(settled);
       const alpha = (slot.kind === "text" ? TEXT_KIND_METRICS[slot.variant].alpha : 1) * fade;
       surface.blit(
         context,
@@ -1733,20 +1769,22 @@ export class EnvironmentSystem {
     };
   }
 
-  /** A demoted overlay still says *something*: its glyph stud, on a short stem. */
+  /**
+   * A crowded-out MARK still says everything that matters: its verb glyph, on a
+   * short stem, a step smaller than the banner would have been.
+   *
+   * Marks only. A text bubble is never demoted — losing its banner costs a mark
+   * a label, losing its words costs a message everything.
+   */
   private drawDemoted(
     context: CanvasRenderingContext2D,
-    slot: TextOverlaySlot | MarkOverlaySlot,
+    slot: MarkOverlaySlot,
     anchorX: number,
     anchorY: number,
     scale: number,
     fade = 1,
   ): void {
-    const glyph = slot.kind === "mark" ? slot.glyph : slot.studGlyph;
-    const accent = slot.kind === "mark"
-      ? OVERLAY_FAMILY_ACCENT[slot.family]
-      : slot.hue;
-    buildStud(glyph, accent).surface.blit(
+    buildStud(slot.glyph, OVERLAY_FAMILY_ACCENT[slot.family]).surface.blit(
       context,
       anchorX,
       anchorY,

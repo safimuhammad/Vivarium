@@ -483,18 +483,22 @@ export const BEAT_FRAME_HEADROOM_PX = TILE_SIZE * 3;
 /**
  * The zoom a beat frame must still reach after taking every participant in.
  *
- * This IS the legibility grammar's own text threshold, imported rather than restated. Below it
- * every bubble collapses to its glyph stud (`bubbleScale(zoom) = clamp(round(zoom), 1, 4)`, so
- * `TEXT_ZOOM_THRESHOLD` is the 1x->2x step and the first zoom at which the authored 5x8 type is
- * blitted at all), at which point co-framing has bought nothing: both beings are on screen and
- * neither one's mark can be read. Participants are therefore admitted only while the frame stays
- * at or above this, which is what stops one bystander -- or a genuinely distant second party --
- * from collapsing the shot to a world view.
+ * This IS the legibility grammar's own scale step, imported rather than restated:
+ * `bubbleScale(zoom) = clamp(round(zoom), 1, 4)`, so `TEXT_ZOOM_THRESHOLD` is the 1x->2x rung.
+ * A frame at or above it types every message at blit scale 2 and draws every action mark as a
+ * full banner; below it the type halves to its smallest legible size and a mark keeps only its
+ * verb glyph. Framing a beat exists to buy the reader the LARGER form of both, so participants
+ * are admitted only while the frame stays at or above this — which is also what stops one
+ * bystander, or a genuinely distant second party, from collapsing the shot to a world view.
  *
  * **It used to be a hand-written `1`**, with a docstring claiming the grammar dropped to studs
- * "below roughly 1:1". It drops at 1.5. Measured live, the beat frame therefore settled at 1.235
- * -- inside the band where, by the grammar's own rule, nothing it was framing could be read.
- * Two constants that must agree now cannot drift: there is one.
+ * "below roughly 1:1". The step is at 1.5. Measured live, the beat frame therefore settled at
+ * 1.235 -- below the step it was supposed to be buying. Two constants that must agree now
+ * cannot drift: there is one.
+ *
+ * What it is NOT, since 2026-08-27, is a legibility cliff. A beat that cannot fit its cast above
+ * this zoom still delivers every word: a bubble carries its whole message at every camera zoom.
+ * Missing the target costs the reader smaller type, not the text.
  */
 export const BEAT_FRAME_MIN_LEGIBLE_ZOOM = TEXT_ZOOM_THRESHOLD;
 
@@ -6727,8 +6731,8 @@ function compareText(left: string, right: string): number {
  * Sized so that this rect, once padded ({@link BEAT_FRAME_PADDING_PX} on every side plus
  * {@link BEAT_FRAME_HEADROOM_PX} above for chrome that hangs over heads), fits `Camera2D`'s beat
  * frame at exactly {@link BEAT_FRAME_MIN_LEGIBLE_ZOOM} -- which IS the legibility grammar's own
- * `TEXT_ZOOM_THRESHOLD`. Anything larger would be fitted below that zoom, where every bubble in
- * the frame is a glyph stud and the framing has bought nothing.
+ * `TEXT_ZOOM_THRESHOLD`. Anything larger is fitted below that zoom, where the grammar steps down
+ * to its smaller form: half-size type and a bare verb glyph in place of each mark's banner.
  *
  * Derived from the live canvas and the measured safe insets rather than a magic tile count, and it
  * mirrors `Camera2D.beatFrame()` exactly: horizontal insets on both sides, the top inset (where

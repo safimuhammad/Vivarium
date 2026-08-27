@@ -102,11 +102,20 @@ export function homeRouteExclusionRects(
  * counts as already in contact and is not made to shuffle sideways for
  * nothing.
  *
- * Deliberately the same number for conversation, combat, and a handover: a
- * larger conversational distance would be more polite and completely
- * illegible, because the beat director must frame both parties and every
- * extra tile of separation costs the zoom the overlay grammar needs to draw
- * its full form.
+ * It is a BODY distance: where a strike lands, where a gift changes hands,
+ * where two bodies read as touching. Combat, handovers and every other
+ * two-participant beat share it, and should.
+ *
+ * **Conversation no longer does** (2026-08-27). It once did, on the argument
+ * that "a larger conversational distance would be more polite and completely
+ * illegible, because the beat director must frame both parties and every extra
+ * tile of separation costs the zoom the overlay grammar needs to draw its full
+ * form." Both halves of that turned out to be wrong. The grammar draws its
+ * words at every zoom now, so pulling the frame wider costs smaller type rather
+ * than the text; and a sentence is not a body — a speech bubble is several
+ * times wider than the 22 px envelope, so a pair staged at arm's length wore
+ * each other's words. `conversationStaging.CONVERSATION_TOGETHER_PX` measures
+ * the bubble instead. Nothing here changed; only conversation left.
  */
 export const INTERACTION_CONTACT_TOLERANCE_PX = TILE_SIZE * 1.5;
 

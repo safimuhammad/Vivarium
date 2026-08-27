@@ -11,6 +11,13 @@ import { stableHash } from "../renderer2d/production/maps/directedTopology";
 import type { PlacementLedgerSnapshot } from "../renderer2d/production/placement/PlacementLedger";
 import { INTERACTION_CONTACT_TOLERANCE_PX } from "../renderer2d/production/placement/SpatialDirector";
 import {
+  PARAGRAPH_MESSAGE_CHARS,
+  TEXT_KIND_METRICS,
+  textBubbleWidthForLengthPx,
+} from "../renderer2d/production/environment/bubbleGrammar";
+import { conversationalContactCandidates } from "./choreography/interactionContact";
+import {
+  CONVERSATION_BUBBLE_CLEARANCE_PX,
   CONVERSATION_FLASH_STEP_MS,
   CONVERSATION_TOGETHER_PX,
   conversationalDistancePx,
@@ -26,15 +33,81 @@ const SPEAKER = "wanderer_003";
 const LISTENER = "wanderer_004";
 const NOBODY = new Set<string>();
 
+/**
+ * A fixture separation comfortably outside the together band, so a pair that is
+ * meant to need staging genuinely does — expressed against the constant rather
+ * than as a magic tile count, because the band is derived from the drawn bubble
+ * and moves whenever the bubble does.
+ */
+const APART_TILES = Math.ceil(CONVERSATION_TOGETHER_PX / TILE_SIZE) + 4;
+
 describe("conversational staging", () => {
-  it("reuses the world's own contact tolerance, and keeps the flash brief", () => {
-    // Not a tautology: this is the number that must never be privately
-    // re-invented here, because the rest of the system already commits to it.
-    expect(CONVERSATION_TOGETHER_PX).toBe(INTERACTION_CONTACT_TOLERANCE_PX);
+  it("stands a talking pair a whole speech bubble apart, and keeps the flash brief", () => {
+    // DERIVED from the drawn grammar, never hand-picked: a bubble is centred on
+    // its speaker's crown, so two speakers clear when the gap covers half of
+    // each bubble — one whole bubble width, measured at the grammar's own last
+    // length rung (which is also, within four characters, the median real line).
+    expect(CONVERSATION_BUBBLE_CLEARANCE_PX)
+      .toBe(textBubbleWidthForLengthPx("speech", PARAGRAPH_MESSAGE_CHARS));
+    // Strictly between the two answers that look principled and are not: the
+    // narrowest bubble the grammar draws clears fewer than one real line in
+    // twenty, and the widest would march a pair nine tiles apart to say "yes".
+    const narrowest = textBubbleWidthForLengthPx("speech", TEXT_KIND_METRICS.speech.minColumns);
+    const widest = textBubbleWidthForLengthPx("speech", 4_000);
+    expect(CONVERSATION_BUBBLE_CLEARANCE_PX).toBeGreaterThan(narrowest);
+    expect(CONVERSATION_BUBBLE_CLEARANCE_PX).toBeLessThan(widest);
+    // Rounded UP to a whole tile, because a body only stands on a tile centre:
+    // the nearest standing distance that actually clears, never one that falls a
+    // few px short of it.
+    expect(CONVERSATION_TOGETHER_PX % TILE_SIZE).toBe(0);
+    expect(CONVERSATION_TOGETHER_PX).toBeGreaterThanOrEqual(CONVERSATION_BUBBLE_CLEARANCE_PX);
+    expect(CONVERSATION_TOGETHER_PX - CONVERSATION_BUBBLE_CLEARANCE_PX).toBeLessThan(TILE_SIZE);
+    // And deliberately NOT the body-contact distance any more. That 1.5-tile
+    // number is where a strike lands and a gift changes hands, and it is still
+    // right for those; a sentence needs the room its bubble will occupy, which
+    // is several times a body.
+    expect(CONVERSATION_TOGETHER_PX).toBeGreaterThan(INTERACTION_CONTACT_TOLERANCE_PX);
     // Two 180ms fade phases — the actors' own vanish-and-appear, mirrored here
     // by convention rather than by importing a renderer constant upward. Short
     // enough to read as one deliberate step rather than a disappearance.
     expect(CONVERSATION_FLASH_STEP_MS).toBe(360);
+  });
+
+  it("offers no landing tile outside the together band, so an exchange cannot strobe", () => {
+    // THE invariant behind the whole lane: every tile the conversational
+    // resolver can possibly land on is within the same distance `stage` calls
+    // "already together". Were one candidate even a pixel beyond it, line two of
+    // an exchange would read the pair as apart and flash them again — and
+    // again, on every line.
+    const anchor = { column: 20, row: 14 };
+    const distancesFrom = (speakerPoint: Vec2): readonly number[] => {
+      const candidates = conversationalContactCandidates(
+        anchor,
+        speakerPoint,
+        CONVERSATION_TOGETHER_PX,
+      );
+      expect(candidates.length).toBeGreaterThan(0);
+      const distances = candidates
+        .map((tile) => conversationalDistancePx(tileCenter(tile), speakerPoint));
+      for (const distance of distances) {
+        expect(distance).toBeLessThanOrEqual(CONVERSATION_TOGETHER_PX);
+      }
+      // Farthest admissible FIRST: a talking pair wants the roomiest legal spot,
+      // and the ordering walks inward on its own when nothing far is legal.
+      expect([...distances].sort((left, right) => right - left)).toEqual(distances);
+      return distances;
+    };
+
+    // A being stands on a tile centre — every point this lane and the walk
+    // resolver ever hand out is one — and there the first choice clears a whole
+    // bubble, which is the point of all of it.
+    expect(distancesFrom(tileCenter(anchor))[0]!)
+      .toBeGreaterThanOrEqual(CONVERSATION_BUBBLE_CLEARANCE_PX);
+    // A speaker left somewhere off-grid is measured honestly against its real
+    // point, so the best tile can fall short — by less than the tile that
+    // quantised it, never more, and the solver's lift absorbs that remainder.
+    expect(distancesFrom({ x: 20 * TILE_SIZE + 11, y: 14 * TILE_SIZE + 29 })[0]!)
+      .toBeGreaterThan(CONVERSATION_BUBBLE_CLEARANCE_PX - TILE_SIZE);
   });
 
   it("agrees with the renderer's own orient derivation about which way a being looks", () => {
@@ -49,7 +122,7 @@ describe("conversational staging", () => {
   });
 
   it("flashes the addressee to the speaker's side, in one immediate publication", () => {
-    const world = twoBeings({ apartTiles: 3 });
+    const world = twoBeings({ apartTiles: APART_TILES });
     const staging = createConversationStaging(world.options);
     const decided = staging.stage({
       utterance: directedLine(1),
@@ -107,7 +180,7 @@ describe("conversational staging", () => {
   });
 
   it("does not re-step a rapid exchange: one flash, then four lines that stage nothing", () => {
-    const world = twoBeings({ apartTiles: 5 });
+    const world = twoBeings({ apartTiles: APART_TILES });
     const staging = createConversationStaging(world.options);
 
     const opening = staging.stage({
@@ -144,7 +217,7 @@ describe("conversational staging", () => {
   });
 
   it("flashes again once a later beat has moved them apart", () => {
-    const world = twoBeings({ apartTiles: 4 });
+    const world = twoBeings({ apartTiles: APART_TILES });
     const staging = createConversationStaging(world.options);
     const first = staging.stage({ utterance: directedLine(1), busyBeingIds: NOBODY, nowMs: 0 });
     expect(first.outcome).toBe("flash-step");
@@ -153,7 +226,7 @@ describe("conversational staging", () => {
     // Something else -- a harvest, a home beat, a region walk -- takes the
     // addressee away. Nothing is glued: the geometry is simply re-read, and the
     // memo retires on the ledger disagreeing with it.
-    world.moveTo(LISTENER, world.openPointNear(world.speakerPoint, 5));
+    world.moveTo(LISTENER, world.openPointNear(world.speakerPoint, APART_TILES + 2));
     const later = staging.stage({
       utterance: directedLine(2),
       busyBeingIds: NOBODY,
@@ -186,7 +259,7 @@ describe("conversational staging", () => {
   });
 
   it("does nothing spatial across regions", () => {
-    const world = twoBeings({ apartTiles: 4 });
+    const world = twoBeings({ apartTiles: APART_TILES });
     world.putInRegion(LISTENER, "ridge");
     const decided = createConversationStaging(world.options).stage({
       utterance: directedLine(1),
@@ -198,7 +271,7 @@ describe("conversational staging", () => {
   });
 
   it("fails soft to the cross-region behaviour when the addressee is not rendered", () => {
-    const world = twoBeings({ apartTiles: 4 });
+    const world = twoBeings({ apartTiles: APART_TILES });
     world.unplace(LISTENER);
     const decided = createConversationStaging(world.options).stage({
       utterance: directedLine(1),
@@ -210,7 +283,7 @@ describe("conversational staging", () => {
   });
 
   it("never takes a body the active scene already owns", () => {
-    const world = twoBeings({ apartTiles: 4 });
+    const world = twoBeings({ apartTiles: APART_TILES });
     const decided = createConversationStaging(world.options).stage({
       utterance: directedLine(1),
       busyBeingIds: new Set([LISTENER]),
@@ -221,7 +294,7 @@ describe("conversational staging", () => {
   });
 
   it("leaves a busy speaker's facing to its own scene while still stepping the addressee over", () => {
-    const world = twoBeings({ apartTiles: 4 });
+    const world = twoBeings({ apartTiles: APART_TILES });
     const decided = createConversationStaging(world.options).stage({
       utterance: directedLine(1),
       busyBeingIds: new Set([SPEAKER]),
@@ -263,7 +336,7 @@ describe("conversational staging", () => {
   });
 
   it("stages nothing under reduced motion, and delays nothing either", () => {
-    const world = twoBeings({ apartTiles: 4, reducedMotion: true });
+    const world = twoBeings({ apartTiles: APART_TILES, reducedMotion: true });
     const decided = createConversationStaging(world.options).stage({
       utterance: directedLine(1),
       busyBeingIds: NOBODY,
@@ -274,7 +347,7 @@ describe("conversational staging", () => {
   });
 
   it("ignores undirected speech and private thought entirely", () => {
-    const world = twoBeings({ apartTiles: 4 });
+    const world = twoBeings({ apartTiles: APART_TILES });
     const staging = createConversationStaging(world.options);
 
     expect(staging.stage({
@@ -316,7 +389,7 @@ describe("conversational staging", () => {
   });
 
   it("returns deeply frozen decisions", () => {
-    const world = twoBeings({ apartTiles: 4 });
+    const world = twoBeings({ apartTiles: APART_TILES });
     const decided = createConversationStaging(world.options).stage({
       utterance: directedLine(1),
       busyBeingIds: NOBODY,
@@ -395,7 +468,7 @@ function twoBeings(input: {
 }
 
 function threeBeings(): StagedWorld {
-  return buildWorld([SPEAKER, LISTENER, "wanderer_005"], 4, false);
+  return buildWorld([SPEAKER, LISTENER, "wanderer_005"], APART_TILES, false);
 }
 
 function buildWorld(

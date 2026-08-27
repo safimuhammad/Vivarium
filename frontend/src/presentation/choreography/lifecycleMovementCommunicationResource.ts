@@ -1621,8 +1621,9 @@ function withinPhysicalHandoffRange<T extends FamilyEventType>(
   // INTERACTION_CONTACT_TOLERANCE_PX (1.5 tiles) rather than exactly one tile:
   // a pair left DIAGONALLY adjacent by a previous beat sits 45.3px apart and
   // is plainly already in an interaction -- making them shuffle sideways to
-  // square up reads as a twitch, not as an approach. See the constant's own
-  // note for why conversation, combat and a handover all share one distance.
+  // square up reads as a twitch, not as an approach. This is a HANDOFF, so the
+  // body distance is the right one; conversation measures its own (wider)
+  // distance off the speech bubble. See the constant's own note.
   return Number.isFinite(separation) && separation <= INTERACTION_CONTACT_TOLERANCE_PX;
 }
 

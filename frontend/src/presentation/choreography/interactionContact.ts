@@ -204,6 +204,75 @@ export function exclusionAwareGrid(
   return { ...grid, collision };
 }
 
+/**
+ * Goal tiles for a CONVERSATIONAL approach: the farthest tile beside `anchor`
+ * that is still within `maxSeparationPx` of `speakerPoint`, first.
+ *
+ * Every other beat in the world wants arm's length. A conversation wants the
+ * opposite end of the same band, because two beings talking at arm's length
+ * wear each other's speech bubbles: a bubble is centred on its speaker's crown
+ * and is far wider than a body, so at 32 px apart the words overlap every time.
+ * Ordering the same candidate set by DESCENDING distance asks for the roomiest
+ * legal spot first and then walks inward on its own — a crowded corner where
+ * nothing far is legal still stages, one tile closer at a time, rather than
+ * failing and leaving the pair where they were.
+ *
+ * Every candidate returned is within `maxSeparationPx` of the speaker, which is
+ * the invariant that keeps an exchange still: the caller's "are they already
+ * together?" test uses the same distance, so the line after the step reads
+ * *together* and nobody flashes twice. Candidates are measured against the
+ * speaker's ACTUAL point rather than its tile centre, so a speaker standing
+ * off-grid cannot break that by half a tile.
+ *
+ * Ties keep {@link contactTileCandidates}' own order — east, west, south,
+ * north, then the diagonals — so a pair still squares up SIDE BY SIDE, which is
+ * what keeps both bodies wholly visible in feet-Y draw order and gives the
+ * clearest left/right facing.
+ *
+ * Args:
+ *   anchor: The tile the SPEAKER occupies; candidates surround it.
+ *   speakerPoint: The speaker's exact standing point, for measuring.
+ *   maxSeparationPx: The distance at or below which the pair reads as together.
+ *
+ * Returns:
+ *   Goal tiles in priority order, farthest admissible first. Empty when nothing
+ *   in range qualifies, which resolves as a fallback and stages nothing.
+ */
+export function conversationalContactCandidates(
+  anchor: TileCoord,
+  speakerPoint: Vec2,
+  maxSeparationPx: number,
+): readonly TileCoord[] {
+  // Its own ring range, NOT `contactTileCandidates`': that stops at
+  // `CONTACT_SEARCH_RADIUS_TILES` (4 tiles), which is inside the distance two
+  // bubbles need. Widening the shared one would push every strike and gift
+  // outward too. Per-ring direction order is kept identical — east, west,
+  // south, north, then the diagonals — so ties still resolve side by side.
+  const rings = Math.max(1, Math.ceil(maxSeparationPx / TILE_SIZE));
+  const ranked: { tile: TileCoord; distance: number; order: number }[] = [];
+  let order = 0;
+  for (let ring = 1; ring <= rings; ring += 1) {
+    for (const tile of [
+      { column: anchor.column + ring, row: anchor.row },
+      { column: anchor.column - ring, row: anchor.row },
+      { column: anchor.column, row: anchor.row + ring },
+      { column: anchor.column, row: anchor.row - ring },
+      { column: anchor.column + ring, row: anchor.row + ring },
+      { column: anchor.column - ring, row: anchor.row + ring },
+      { column: anchor.column + ring, row: anchor.row - ring },
+      { column: anchor.column - ring, row: anchor.row - ring },
+    ]) {
+      order += 1;
+      const centre = tileCenter(tile);
+      const distance = Math.hypot(centre.x - speakerPoint.x, centre.y - speakerPoint.y);
+      if (!(distance <= maxSeparationPx)) continue;
+      ranked.push({ tile, distance, order });
+    }
+  }
+  ranked.sort((left, right) => right.distance - left.distance || left.order - right.order);
+  return ranked.map(({ tile }) => tile);
+}
+
 /** A resolved approach, in the shape both choreography families already consume. */
 export interface LegalContactRoute {
   readonly status: "reached" | "fallback";
@@ -228,12 +297,25 @@ const NO_ROUTE = Object.freeze({ status: "fallback" as const, waypoints: [], con
  *
  * Returns a fallback (never a partial walk) when nothing legal is reachable,
  * so the caller keeps its existing evidence-visible non-physical motif.
+ *
+ * Args:
+ *   moverPoint: Where the body that will move currently stands.
+ *   targetPoint: The party or structure being approached.
+ *   recipe: The region whose ground and structures decide what is legal.
+ *   exclusions: Rendered footprints a standing body may not overlap.
+ *   goalCandidates: Goal tiles to try, in priority order, replacing the default
+ *     nearest-first {@link contactTileCandidates}. Conversation passes its own
+ *     ordering because a talking pair wants the FARTHEST tile that still reads
+ *     as together, not the nearest — see
+ *     {@link conversationalContactCandidates}. Every other caller wants arm's
+ *     length and omits it.
  */
 export function resolveLegalContactRoute(
   moverPoint: Vec2,
   targetPoint: Vec2,
   recipe: RegionMapRecipeV1,
   exclusions: readonly Rect[],
+  goalCandidates?: readonly TileCoord[],
 ): LegalContactRoute {
   const start = contactPointTile(moverPoint);
   if (!contactTileIsOpen(recipe.grid, start)) {
@@ -241,7 +323,7 @@ export function resolveLegalContactRoute(
   }
   const grid = exclusionAwareGrid(recipe.grid, exclusions, [start]);
   const occupied = contactPointTile(targetPoint);
-  for (const goal of contactTileCandidates(occupied)) {
+  for (const goal of goalCandidates ?? contactTileCandidates(occupied)) {
     if (!contactTileIsOpen(grid, goal)) continue;
     const goalPoint = tileCenter(goal);
     const result = findNavigationPath(grid, { start, goal });

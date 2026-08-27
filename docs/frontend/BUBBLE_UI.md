@@ -112,10 +112,12 @@ dialogue, all of which the old `\s+` wrap silently collapsed.
 >    keep the grammar's ordering: thought 14-38, whisper 16-40, speech 18-44. Past the
 >    band the block stops widening and grows downward.
 > 2. **The type steps down a ladder to a FLOOR, then stops.** Blit scale is
->    `min(bubbleScale(zoom), 4 | 3 | 2 by length at 110 / 260 chars)`. The floor is
->    **2** — a 10x16 px glyph cell, which is exactly the size `TEXT_ZOOM_THRESHOLD`
->    already certifies as the first legible one. Past the floor the BUBBLE grows; the
->    type never shrinks further.
+>    `min(bubbleScale(zoom), 4 | 3 | 2 by length at 110 / 260 chars)`. The LENGTH
+>    ladder's floor is **2** — a 10x16 px glyph cell: past it a long message grows the
+>    BUBBLE rather than shrinking its own type, so a confession is never typed smaller
+>    than the remark beside it. The CAMERA is not bound by that floor; zooming out takes
+>    every bubble to blit scale 1, the 5x8 authored cell, which is both the smallest
+>    the face reads at and the smallest `bubbleScale` can produce.
 > 3. **Only a viewport too small for the result may go below the floor**, one scale step
 >    at a time and never below the authored 1x face. That is the narrow/phone branch,
 >    and it is the honest trade: a bubble taller than the screen is less readable than a
@@ -370,13 +372,24 @@ physics:
 1. Candidate rect = anchor, snapped to an **8px screen lattice**.
 2. Placement order: **tier descending, then event sequence ascending.** No float
    tie-breaks — identical input produces identical layout, which replay requires.
-3. On collision: **lift one row (8px)**, up to 5 rows.
+3. On collision: **lift one row (8px)** — up to 5 rows for a mark, 14 for a text bubble,
+   which is tall enough to need the extra rungs to clear a 46px body.
 4. Still colliding: **shift laterally 12px** away from the nearest neighbouring being.
-5. Still colliding, or over budget: **demote to a pip.** Never shrink text *for crowding*
-   — readability beats completeness. (Since 2026-08-21 a message's own LENGTH does step
-   the type down a bounded ladder to a floor; see §2. Crowding still never does.)
-6. Global budget: **6 text bubbles** on screen. KNELL tier is never demoted; MURMUR
-   demotes first.
+5. Still colliding: a **MARK demotes to its glyph stud** (its meaning is the glyph; the
+   banner is a label). A **TEXT bubble never demotes** — it is drawn where it belongs,
+   overlapping, and the frame is counted in `EnvironmentDiagnostics.collidedBubbles`
+   (Safi, 2026-08-27: *"Overlap is tolerable but at first the system itself should keep
+   them apart... If that even fails then it's the fallback not a first choice."*). Never
+   shrink text *for crowding* — readability beats completeness. (A message's own LENGTH
+   does step the type down a bounded ladder to a floor; see §2. Crowding never does.)
+6. **No budget of live text bubbles.** A `CROWD_TEXT_BUDGET` of 6 used to demote every
+   bubble past the sixth; a message hidden to tidy the screen is a message unread. The
+   pool capacity and the 5-7s lifetime band are what bound how many are live at once.
+   KNELL tier is never demoted; among marks, MURMUR demotes first.
+7. **Prevention comes before all of this**, upstream: `conversationStaging` stands two
+   conversing beings `CONVERSATION_BUBBLE_CLEARANCE_PX` apart — one whole speech-bubble
+   width, measured from the drawn grammar — so the pair the viewer is actually reading
+   rarely reaches step 3 at all.
 
 This generalises the existing greedy sort-by-x-then-sequence, lift-until-clear helper in
 `EnvironmentSystem.drawSpeechBubbles()`.
@@ -393,10 +406,22 @@ Camera range is `MIN_ZOOM 0.5` → `MAX_ZOOM 4`.
   It is therefore *never* sub-pixel at any camera zoom — no blurred pixel art, no tail
   eroding to nothing. This is the structural fix for the rejected version's disappearing
   connector.
-- **Below zoom 1.5 there is no text at all.** Every bubble collapses to its **glyph stud
-  on a short 4px stem** — speech becomes a quote mark, thought an ellipsis, an action its
-  verb glyph. The world reads as a field of coloured intent rather than a wall of
-  unreadable type. Text returns on the way back in, and on selection at any zoom.
+- **A message keeps its words at every zoom** (Safi, 2026-08-27: *"on zooming out do not
+  show `""` show full bubbles"*, then *"scale down with the world, just make them small
+  but still readable"*). Zooming out shrinks a bubble with the world until blit scale
+  reaches 1 and then holds it there — `bubbleScale` clamps to an integer 1, so that is
+  the smallest a bubble can be drawn at all. The 5x8 face reads at that size because the
+  stage sets `image-rendering: pixelated`, so a CSS-px canvas is nearest-upscaled to the
+  device grid rather than blurred.
+- **Below zoom 1.5 a MARK drops its banner** and keeps its **glyph stud on a short 4px
+  stem**. A mark's meaning is its verb glyph and the banner is a label, so a wide view of
+  the world reads as a field of coloured intent rather than a wall of banners larger than
+  the beings under them. The banner returns on the way back in.
+- **Nothing is ever hidden to tidy the screen.** There is no cap on how many messages may
+  be up. Crowding is answered by placement — the solver lifts and shifts, and conversational
+  staging stands a talking pair a bubble's width apart before they ever speak — and when
+  placement genuinely fails the bubble is drawn overlapping and counted in
+  `EnvironmentDiagnostics.collidedBubbles`. Only a MARK still demotes under crowding.
 - Threads, caps and pips persist at all zooms; they are the cheapest and most
   downscale-robust parts of the language.
 
@@ -547,7 +572,7 @@ All at native resolution, real assets, verbatim payload text. `docs/frontend/moc
 | `05-harm-burst-2x.png` | strike on a being, breach on a wall |
 | `06-knell-birth-and-death-2x.png` | the only two inversions |
 | `07-crowd-seven-beings-2x.png` | seven live marks, zero collisions, residue pips |
-| `08-zoom-ladder-0p5x-1x-2x-4x.png` | degradation to glyph studs below 1.5x |
+| `08-zoom-ladder-0p5x-1x-2x-4x.png` | the blit-scale ladder (predates the 2026-08-27 rule that text survives every zoom) |
 | `09-grammar-sheet.png` | five silhouettes, six families, all glyphs |
 | `10-hero-1x.png` / `11-hero-4x.png` | the hero scene at the low and high extremes |
 

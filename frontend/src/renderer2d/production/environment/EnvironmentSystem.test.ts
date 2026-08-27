@@ -1370,32 +1370,116 @@ describe("EnvironmentSystem", () => {
     second.dispose();
   });
 
-  it("demotes the least significant mark to a stud under crowding, and never demotes a knell", () => {
+  it("never caps how many messages are up: ten speakers at once all keep their words", () => {
+    // There used to be a `CROWD_TEXT_BUDGET` of 6, past which every further
+    // bubble demoted to a glyph stud. A message hidden to tidy the screen is a
+    // message unread, and the owner's rule is that a message which is up is
+    // fully drawn (Safi, 2026-08-27). Crowding is answered by placement, and,
+    // failing that, by an overlap that is counted rather than concealed.
     const system = createSystem(recipeFor(world[0]!));
+    const line = "The silence holds us.";
     for (let index = 0; index < 9; index += 1) {
-      system.emit(speech(`being-${index}`, "The silence holds us."), index);
+      system.emit(speech(`being-${index}`, line), index);
     }
     system.emit({
       kind: "speech-bubble", at: { x: 100, y: 100 }, speakerId: "elder", variant: "speech",
       text: "I am here.", tailLean: 0, hue: "#9c4a33", accent: "#8a8270", tier: "knell",
     }, 10);
+
     const canvas = recordingContext();
-    system.draw(canvas.context, "air");
-    expect(canvas.fillRects.length).toBeGreaterThan(0);
+    system.draw(canvas.context, "air", {
+      zoom: 2, originX: 0, originY: 0, width: 1_440, height: 900,
+      insets: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
+
+    // A stud is 13x17 world px; a bubble around this line is an order of
+    // magnitude more painted spans. Ten full bubbles, not six and four studs.
+    const single = (() => {
+      const alone = createSystem(recipeFor(world[0]!));
+      alone.emit(speech("solo", line), 0);
+      const solo = recordingContext();
+      alone.draw(solo.context, "air", {
+        zoom: 2, originX: 0, originY: 0, width: 1_440, height: 900,
+        insets: { top: 0, right: 0, bottom: 0, left: 0 },
+      });
+      alone.dispose();
+      return solo.fillRects.length;
+    })();
+    expect(canvas.fillRects.length).toBeGreaterThan(single * 9);
     system.dispose();
   });
 
-  it("collapses every bubble to a glyph stud below zoom 1.5 and restores its words above it", () => {
+  it("draws an unplaceable message anyway, overlapping, and counts that it had to", () => {
+    // Prevention first: the crowd solver lifts and shifts to clear the bubbles
+    // already down, and upstream of it conversational staging stands a talking
+    // pair a bubble's width apart. Overlap is the FALLBACK, and when it happens
+    // the message is still drawn whole — never suppressed, truncated, or reduced
+    // to a stud — and the run records it so a later look can ask how often.
+    const system = createSystem(recipeFor(world[0]!));
+    const line = "The water is low again on the eastern shelf.";
+    for (const speaker of ["aster", "briar", "cedar"]) system.emit(speech(speaker, line), 0);
+    // A safe frame barely larger than one bubble: every lift and lateral shift
+    // clamps back onto the same rectangle, so the search genuinely exhausts.
+    const cramped = recordingContext();
+    system.draw(cramped.context, "air", {
+      zoom: 1, originX: 0, originY: 0, width: 260, height: 200,
+      insets: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
+
+    expect(system.diagnostics().collidedBubbles).toBeGreaterThan(0);
+    // Whole bubbles, all three of them, despite the collision.
+    const box = paintedExtent(cramped.fillRects);
+    expect(box.right - box.x).toBeGreaterThan(100);
+    system.dispose();
+
+    // The same three with room to breathe collide with nothing.
+    const roomy = createSystem(recipeFor(world[0]!));
+    for (const [index, speaker] of ["aster", "briar", "cedar"].entries()) {
+      roomy.setAnchorPositions(new Map([
+        ["aster", { x: 200, y: 700 }],
+        ["briar", { x: 700, y: 700 }],
+        ["cedar", { x: 1_200, y: 700 }],
+      ]));
+      roomy.emit({ ...speech(speaker, line), at: { x: 200 + index * 500, y: 700 } }, index);
+    }
+    const open = recordingContext();
+    roomy.draw(open.context, "air", {
+      zoom: 1, originX: 0, originY: 0, width: 1_440, height: 900,
+      insets: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
+    expect(roomy.diagnostics().collidedBubbles).toBe(0);
+    roomy.dispose();
+  });
+
+  it("keeps every word at every zoom, shrinking the bubble with the world instead", () => {
+    // Safi, 2026-08-27: *"on zooming out do not show `""` show full bubbles"*,
+    // then *"scale down with the world, just make them small but still
+    // readable"*. Below the 1.5 step the type is blitted at scale 1 — a 5x8
+    // CSS-px cell, drawn crisp because the stage is `image-rendering: pixelated`
+    // — which is the smallest a bubble can be drawn at all, since `bubbleScale`
+    // clamps to an integer 1. So the bubble halves once and then holds.
     const system = createSystem(recipeFor(world[0]!));
     system.emit(speech("aster", "It is good to be here with you, Allen."), 0);
 
-    const wide = recordingContext();
-    system.draw(wide.context, "air", { zoom: 1, originX: 0, originY: 0 });
-    const close = recordingContext();
-    system.draw(close.context, "air", { zoom: 2, originX: 0, originY: 0 });
+    const draw = (zoom: number): number[][] => {
+      const canvas = recordingContext();
+      system.draw(canvas.context, "air", { zoom, originX: 0, originY: 0 });
+      return canvas.fillRects;
+    };
+    const span = (rects: number[][]): number =>
+      Math.max(...rects.map((r) => r[0]! + r[2]!)) - Math.min(...rects.map((r) => r[0]!));
 
-    expect(wide.fillRects.length).toBeGreaterThan(0);
-    expect(close.fillRects.length).toBeGreaterThan(wide.fillRects.length);
+    const story = draw(2);
+    const oneOut = draw(1.4);
+    const world_ = draw(0.5);
+
+    // The SAME words are painted at every zoom: identical span count, because
+    // the surface is identical and only the blit scale differs.
+    expect(oneOut.length).toBe(story.length);
+    expect(world_.length).toBe(story.length);
+    // And it really is smaller — halved at the step, then held at the floor.
+    expect(span(oneOut)).toBeLessThan(span(story));
+    expect(span(world_)).toBe(span(oneOut));
     system.dispose();
   });
 

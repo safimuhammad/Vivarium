@@ -57,14 +57,40 @@
  *
  * ---
  *
+ * **Revision (Safi, 2026-08-27): the distance must clear the BUBBLES.**
+ *
+ * > *"Overlap is tolerable but at first the system itself should keep them
+ * > apart so that their bubbles don't collide. If that even fails then it's the
+ * > fallback not a first choice."*
+ *
+ * The flash was landing the addressee on the nearest legal tile — one tile,
+ * 32 px — because it borrowed `INTERACTION_CONTACT_TOLERANCE_PX`, the distance
+ * a body needs to strike or hand over an object. A sentence needs far more room
+ * than a body: a speech bubble is centred on the crown of the being that said
+ * it and, for the length these beings actually speak at, is around 189 world px
+ * wide — six tiles, four times the distance they were being staged at. So a
+ * pair wore each other's words for the whole exchange. That is the collision the
+ * owner was watching, and it was systematic rather than occasional — it happened
+ * every single time two beings talked.
+ *
+ * The lane now measures the bubble and stands them a bubble apart
+ * ({@link CONVERSATION_BUBBLE_CLEARANCE_PX}, rounded up to the tile a body can
+ * actually stand on), and asks the route resolver for the FARTHEST legal tile
+ * inside that band rather than the nearest. Prevention is first; the renderer's
+ * crowd solver, which lifts and shifts a bubble to clear the ones already down,
+ * is second; a drawn overlap is the last resort and is counted rather than
+ * hidden.
+ *
+ * ---
+ *
  * **Why this is nearly stateless, and why that is the point.**
  *
  * The rule is geometric, re-read per line: *are they already within
  * conversational distance?* If yes, nothing is staged. That single test answers
  * three of the hard cases on its own:
  *
- * - **Rapid back-and-forth.** After the first flash the two are adjacent, so
- *   lines two through five stage nothing and move nobody. They stay together
+ * - **Rapid back-and-forth.** After the first flash the two are inside the
+ *   together band, so lines two through five stage nothing and move nobody. They stay together
  *   for as long as the exchange lasts because nothing pulls them apart — beings
  *   in this world never move on their own; only a beat moves them.
  * - **The hold.** There is no hold timer, because there is nothing to hold.
@@ -106,10 +132,16 @@
  */
 
 import {
+  contactPointTile,
+  conversationalContactCandidates,
   homeExclusionsForRegion,
   resolveLegalContactRoute,
 } from "./choreography/interactionContact";
-import { INTERACTION_CONTACT_TOLERANCE_PX } from "../renderer2d/production/placement/SpatialDirector";
+import { TILE_SIZE } from "../renderer2d/map/regionMap";
+import {
+  PARAGRAPH_MESSAGE_CHARS,
+  textBubbleWidthForLengthPx,
+} from "../renderer2d/production/environment/bubbleGrammar";
 import type { PlacementLedgerSnapshot } from "../renderer2d/production/placement/PlacementLedger";
 import type { RegionMapRecipeV1 } from "../renderer2d/production/maps/RegionMapRecipe";
 import type {
@@ -120,17 +152,76 @@ import type {
 } from "./contracts";
 
 /**
- * How close two beings must already be for nobody to move.
+ * The world px two conversing beings must be apart for their bubbles to clear.
  *
- * Reused, not invented: `INTERACTION_CONTACT_TOLERANCE_PX` (1.5 tiles, 48px) is
- * already the distance at which every two-participant beat in the world — a
- * strike, a gift, a proposal — considers the parties to be *at* each other, and
- * the same number is what `resolveLegalContactRoute`'s nearest-first candidate
- * ordering lands a contact point on. Using a second, private notion of
- * "together" would let a being flash to a spot the rest of the system already
- * calls close enough, or refuse to when it is not.
+ * DERIVED from the drawn grammar, never picked: a speech bubble is centred on
+ * its speaker's crown, so two speakers clear when the gap between them covers
+ * half of each bubble — one whole bubble width. `textBubbleWidthForLengthPx`
+ * builds that bubble and measures it, so this number moves if the font, the
+ * padding or the measure band ever moves, the way `speechLifetime.ts` made the
+ * bubble and the scene clock share one source instead of drifting apart.
+ *
+ * **The length it is asked for is the whole argument.** A bubble's width is a
+ * function of the message, so "one bubble width" needs a message to mean
+ * anything, and the two obvious answers are both wrong:
+ *
+ * - The NARROWEST form (`minColumns`) is 123 px, four tiles. It looks principled
+ *   and it fails in practice: measured over 275 real lines from a recorded run,
+ *   it clears **4.7%** of them. Beings in this world do not speak in remarks.
+ * - The WIDEST form (`maxColumns`) is 275 px, nine tiles, and would march two
+ *   beings most of a screen apart to say "yes".
+ *
+ * {@link PARAGRAPH_MESSAGE_CHARS} is the honest middle, and it is not a fitted
+ * number: it is the grammar's own last length rung — where the type has already
+ * hit its floor and a longer message can only grow the box — and it lands within
+ * four characters of that same corpus's MEDIAN message. The grammar's idea of
+ * "long" and the world's actual speech agree, so the distance is read off the
+ * grammar rather than off any one run.
+ *
+ * It is scale-invariant where it matters. Chrome is blitted at
+ * `bubbleScale(zoom) = clamp(round(zoom), 1, 4)`, so at every integer camera
+ * zoom the bubble covers this same span of WORLD px; the requirement is the
+ * same at the story framing (zoom 2) as at zoom 1. Below zoom 1 the blit scale
+ * has bottomed out at 1 and cannot shrink further, so the bubble covers more and
+ * more world as the camera pulls out and two of them will eventually touch. That
+ * is the accepted fallback, not a failure of the derivation: past the floor, no
+ * separation short of absurd clears them.
  */
-export const CONVERSATION_TOGETHER_PX = INTERACTION_CONTACT_TOLERANCE_PX;
+export const CONVERSATION_BUBBLE_CLEARANCE_PX
+  = textBubbleWidthForLengthPx("speech", PARAGRAPH_MESSAGE_CHARS);
+
+/**
+ * How close two beings must already be for nobody to move — and the farthest a
+ * flash step may put them.
+ *
+ * The clearance rounded UP to a whole tile, because a body only ever stands on a
+ * tile centre: it is the nearest standing distance that actually clears
+ * {@link CONVERSATION_BUBBLE_CLEARANCE_PX} rather than falling a few px short of
+ * it. One number does both jobs on purpose. `conversationalContactCandidates`
+ * offers no tile beyond it and `stage` calls anything within it *together*, so a
+ * being that has just been stepped here reads as together on the very next line
+ * and an exchange never strobes.
+ *
+ * **This is deliberately no longer `INTERACTION_CONTACT_TOLERANCE_PX`.** That
+ * 1.5-tile number is a BODY distance — where a strike lands, where a gift is
+ * handed over — and it is still exactly right for those. It was wrong for
+ * conversation for one reason the constant's own note anticipated and got
+ * backwards: two beings at 48 px do not have room for the chrome they are
+ * about to produce. A strike is 22 px of body; a sentence is a bubble several
+ * times wider. Combat, gifts and handovers keep the old distance untouched.
+ *
+ * The cost is honest and visible, and it is the one thing here worth arguing
+ * about: a talking pair now stands **six tiles** apart rather than one and a
+ * half. It still reads as a conversation — they turn to face each other, a
+ * dotted thread runs between them, they are the only two bodies in that stretch
+ * of ground, and both their lines are legible instead of stacked — but it is
+ * *across a clearing*, not shoulder to shoulder. Measured on a recorded run's
+ * real lines, this is what it buys: at the story framing the placement solver
+ * falls back to an overlap on 4.1% of frames instead of 17.6%, and one step
+ * further out, 0%.
+ */
+export const CONVERSATION_TOGETHER_PX
+  = Math.ceil(CONVERSATION_BUBBLE_CLEARANCE_PX / TILE_SIZE) * TILE_SIZE;
 
 /**
  * How long one flash step is visibly in progress, in milliseconds.
@@ -347,11 +438,20 @@ export function createConversationStaging(
       const recipes = options.getRecipes();
       const recipe = recipes.get(regionId);
       if (recipe === undefined) return decision("no-route");
+      // Farthest-first within the together band, not the nearest-first ordering
+      // every other beat uses: a talking pair needs the room its bubbles will
+      // occupy, and everything the ordering offers is still close enough that
+      // the next line of the exchange stages nothing.
       const route = resolveLegalContactRoute(
         listenerAt,
         speakerAt,
         recipe,
         homeExclusionsForRegion(placement, recipes, regionId),
+        conversationalContactCandidates(
+          contactPointTile(speakerAt),
+          speakerAt,
+          CONVERSATION_TOGETHER_PX,
+        ),
       );
       if (route.status !== "reached" || route.waypoints.length < 2) {
         return decision("no-route");

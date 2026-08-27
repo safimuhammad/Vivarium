@@ -1005,17 +1005,36 @@ export type TextBubbleKind = keyof typeof TEXT_KIND_METRICS;
  * The smallest blit scale a message's own LENGTH may drive the type down to.
  *
  * The authored face is 5x8 world px, so scale 2 puts a glyph cell at 10x16
- * screen px (the canvas is CSS-px 1:1, no device-pixel scaling). That is
- * exactly the size {@link TEXT_ZOOM_THRESHOLD} already certifies as the first
- * legible one — below it the grammar shows no words at all — which makes it the
- * honest floor. Past this floor a longer message grows the BUBBLE; it never
- * shrinks the type further. Only a viewport too small to hold the bubble at
- * this scale may go lower (see `textBubbleScale`).
+ * screen px (the canvas is CSS-px 1:1, no device-pixel scaling). A long message
+ * stops shrinking its own type here and grows the BUBBLE instead — otherwise a
+ * confession would be typed smaller than the remark beside it purely for being
+ * long, which is a reason the reader cannot see.
+ *
+ * It is a floor on the LENGTH ladder only, never a floor on the type. The
+ * CAMERA still takes every bubble to blit scale 1 when it is zoomed out
+ * ({@link bubbleScale}), and scale 1 — a 5x8 CSS-px cell, drawn crisp because
+ * the stage sets `image-rendering: pixelated` — is the smallest size the
+ * authored face reads at. That is the size the whole world is typed at below
+ * {@link TEXT_ZOOM_THRESHOLD}. A viewport too small to hold the built surface
+ * may also step below this floor (see {@link textBubbleScale}).
  */
 export const TEXT_SCALE_FLOOR = 2;
 
 /** Message lengths at which the type steps down one blit scale. */
 const TEXT_SCALE_STEP_CHARS = Object.freeze([110, 260]);
+
+/**
+ * The length at which the grammar stops treating a message as a remark.
+ *
+ * It is the LAST rung of {@link TEXT_SCALE_STEP_CHARS} — past it the type has
+ * hit {@link TEXT_SCALE_FLOOR} and a longer message can only grow the bubble.
+ * Named and exported because it is also the honest stand-in for "how wide a
+ * bubble in this world actually is": measured over 275 real lines from a
+ * recorded run, the median message is 264 characters — within four characters
+ * of this rung. Beings in this world speak in paragraphs, not in remarks, and
+ * the grammar's own idea of "long" happens to agree with them.
+ */
+export const PARAGRAPH_MESSAGE_CHARS = TEXT_SCALE_STEP_CHARS[1]!;
 
 /**
  * The largest blit scale a message of `total` characters may be typed at.
@@ -1480,9 +1499,18 @@ export function buildCap(accent: string): BuiltSurface {
 }
 
 /**
- * Build the low-zoom form: a glyph stud on a short stem, still visibly owned by
- * one being. Below zoom 1.5 the world reads as a field of coloured intent
- * rather than a wall of unreadable type.
+ * Build the reduced form: a glyph stud on a short stem, still visibly owned by
+ * one being.
+ *
+ * **This is a form for MARKS, never for words.** An event mark's content IS its
+ * verb glyph — the banner beside it is a label — so a wide view of the world
+ * reads as a field of coloured intent rather than a wall of banners larger than
+ * the beings under them. A SPEECH, WHISPER or THOUGHT bubble is never studded:
+ * it carries a message, and a message reduced to a quote mark has said nothing
+ * (Safi, 2026-08-27: *"on zooming out do not show `\"\"` show full bubbles"*).
+ *
+ * It is drawn in exactly two places: a mark below {@link TEXT_ZOOM_THRESHOLD},
+ * and a crowded mark the placement solver could not fit.
  */
 export function buildStud(glyph: OverlayGlyph, accent: string): BuiltSurface {
   const pip = buildPip(glyph, accent).surface;
@@ -1515,8 +1543,75 @@ export function bubbleScale(zoom: number): number {
   return clamp(Math.round(zoom), 1, 4);
 }
 
-/** Below this camera zoom every bubble collapses to its glyph stud. */
+/**
+ * The camera zoom at which chrome steps between blit scale 1 and 2.
+ *
+ * It is `bubbleScale`'s own 1->2 rounding step, stated once so the pieces that
+ * must agree about it cannot drift. Two things read it:
+ *
+ * - **Marks** draw their banner at or above it and their {@link buildStud} form
+ *   below it. A mark's meaning is its verb glyph; the banner is a label.
+ * - **Beat framing** (`BEAT_FRAME_MIN_LEGIBLE_ZOOM`) still targets it, because
+ *   a shot that fits inside it buys the reader the LARGER type.
+ *
+ * It is emphatically **not** a floor on words. Since 2026-08-27 a text bubble
+ * carries its whole message at every camera zoom, typed at blit scale 1 below
+ * this step — the smallest size the authored 5x8 face reads at, and the
+ * smallest a bubble can be drawn at all, since `bubbleScale` clamps to an
+ * integer 1. Zooming out therefore shrinks a bubble with the world until it
+ * reaches that floor, and then holds it there.
+ */
 export const TEXT_ZOOM_THRESHOLD = 1.5;
+
+/**
+ * The width in world px a bubble of `kind` takes for a message of `characters`.
+ *
+ * BUILT, not restated: it lays the message out and measures the surface, so it
+ * cannot drift from {@link buildTextBubble}'s own box arithmetic the way a
+ * duplicated formula would. Memoised per (kind, length) — for a fixed length the
+ * result is a constant of the authored grammar, not of any one message.
+ *
+ * Its consumer is conversational staging, which must decide how far apart two
+ * beings have to stand for their bubbles to clear each other. A bubble is
+ * centred on its speaker's crown ({@link BuiltSurface}'s anchor is the tail),
+ * so two speakers clear when the gap between them covers half of each bubble —
+ * one whole bubble width.
+ *
+ * Ask it for {@link PARAGRAPH_MESSAGE_CHARS}, not for the narrowest form and not
+ * for the widest. The narrowest (`minColumns`) is 123 px and clears fewer than
+ * one line in twenty of a real run; the widest (`maxColumns`) is 275 px and
+ * would march two beings nine tiles apart to say "yes".
+ */
+export function textBubbleWidthForLengthPx(kind: TextBubbleKind, characters: number): number {
+  const key = `${kind}:${characters}`;
+  const cached = TEXT_BUBBLE_WIDTHS.get(key);
+  if (cached !== undefined) return cached;
+  const width = buildTextBubble({
+    kind,
+    text: measureText(characters),
+    hue: OVERLAY_PALETTE.ink,
+    accent: OVERLAY_PALETTE.ink,
+  }).surface.width;
+  TEXT_BUBBLE_WIDTHS.set(key, width);
+  return width;
+}
+
+const TEXT_BUBBLE_WIDTHS = new Map<string, number>();
+
+/**
+ * A message of exactly `characters` characters made of ordinary short words.
+ *
+ * Words, never one long run of `x`: {@link layoutMessage} wraps on whitespace,
+ * so an unbreakable 260-character token would measure as a single 1,559 px line
+ * and the answer would be nonsense. Five-character words are the corpus's own
+ * rough average and wrap the way real speech does.
+ */
+function measureText(characters: number): string {
+  const total = Math.max(0, Math.round(characters));
+  const words: string[] = [];
+  for (let written = 0; written < total; written += 5) words.push("xxxx");
+  return words.join(" ").slice(0, total);
+}
 
 function clamp(value: number, low: number, high: number): number {
   return value < low ? low : value > high ? high : value;

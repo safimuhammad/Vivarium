@@ -6038,12 +6038,18 @@ describe("CanvasPresentationRenderer", () => {
 
   // ---------------------------------------------------------------------------
   // BUBBLES-FIX 2026-08-21 — beat framing must land where the legibility grammar
-  // actually has words. `TEXT_ZOOM_THRESHOLD` (1.5) is the `bubbleScale` 1->2 step:
-  // below it every bubble collapses to a glyph stud. The camera's own floor said 1
-  // ("below roughly 1:1 the grammar drops to its low-zoom stud form"), so a beat
-  // could spend its whole framing budget and still deliver an unreadable frame; and
-  // the cast came from `overlayFocusRect()` — every live bubble in the REGION — so
-  // the more the world spoke the further out the shot pulled.
+  // draws its LARGER form. `TEXT_ZOOM_THRESHOLD` (1.5) is the `bubbleScale` 1->2
+  // step: at or above it a message is typed at blit scale 2 and an action mark
+  // gets its full banner; below it the type halves and a mark keeps only its verb
+  // glyph. The camera's own floor said 1 ("below roughly 1:1 the grammar drops to
+  // its low-zoom stud form"), so a beat could spend its whole framing budget and
+  // still land below the step it was buying; and the cast came from
+  // `overlayFocusRect()` — every live bubble in the REGION — so the more the world
+  // spoke the further out the shot pulled.
+  //
+  // Since 2026-08-27 missing the target is no longer a legibility cliff: a bubble
+  // carries its whole message at every camera zoom, so a frame below the step costs
+  // the reader smaller type, never the words.
   // ---------------------------------------------------------------------------
 
   it("sizes the legible beat extent so a maximal beat lands at the grammar's own text threshold", () => {
