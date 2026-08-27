@@ -510,6 +510,39 @@ export const BEAT_FRAME_MIN_LEGIBLE_ZOOM = TEXT_ZOOM_THRESHOLD;
  */
 const SELECTION_PICK_TOLERANCE_WORLD_PX = 44;
 
+/**
+ * FOR NOW: automatic framing never carries the viewer out of the region they are watching.
+ *
+ * Owner direction (Safi, 2026-08-27), watching the story director cut between regions on every
+ * beat: *"for the automatic, can we for now establish that it is not allowed to move region but
+ * stick within the region"*. Watching a PLACE is what he asked for; a director that jumps across
+ * the archipelago once a beat is not framing a story, it is channel-surfing — and it is what
+ * made the world feel as though it would not sit still.
+ *
+ * Two conditions, and the second is not a technicality:
+ *
+ * 1. The region authority is `visibleRegionId` — the region this renderer has actually MOUNTED.
+ *    That is the same region the stage reports out through `onWorldNavigationChange` and the
+ *    shell names in its chrome, so this is deliberately NOT a second notion of "current region".
+ * 2. It applies only at `worldViewScope === "region"`, i.e. while the viewer is INSIDE a region.
+ *    "Stick within the region" says nothing about a viewer standing above the whole archipelago
+ *    on the world sheet: up there every region is on screen at once, drawn from its snapshot,
+ *    and bringing the story's region up to full detail is serving them rather than dragging
+ *    them. A renderer built without the world sheet (`worldSheetSnapshots` off, which is every
+ *    unit harness) has no scope at all and is left exactly as it was.
+ *
+ * This restrains the DIRECTOR only, and only the one decision it makes here — which region to
+ * bring up for a beat. Every VIEWER movement between regions runs through `beginObserveRegion`
+ * instead and is untouched: the Atlas island click and the World drawer's pick, the `[`/`]`
+ * keys, the world-sheet descent, a Chronicle card's `travelToMoment`, Z3's camera-driven
+ * focus-follow, and a follow pursuit whose being crosses a border. Archive checkpoint travel is
+ * resolved above this rule for the same reason. A beat elsewhere still reaches the viewer: the
+ * Chronicle carries every region's events and always has, so nothing new has to be said.
+ *
+ * Flip to `false` to restore the wandering director. That is the whole lift.
+ */
+const STORY_FRAMING_HOLDS_THE_OBSERVED_REGION = true;
+
 /** The later of two optional absolute deadlines. */
 function maximumOrNull(left: number | null, right: number | null): number | null {
   if (left === null) return right;
@@ -4112,13 +4145,32 @@ export async function createCanvasPresentationRenderer(
     markDirty();
   };
 
+  /**
+   * Which region the GRAPH is drawing, when that is not the one the story is playing in.
+   *
+   * `null` means "work it out from the frame", and `resolveActiveRegion` then takes the story's
+   * own `scene.regionId`. That was always the right answer under automatic framing, because the
+   * visible region was RESOLVED FROM the story's region and the two could not come apart.
+   * {@link STORY_FRAMING_HOLDS_THE_OBSERVED_REGION} separates them: a viewer watching Warm
+   * Springs while the story plays in Nirvana now has a story region that is not the mounted one,
+   * and a graph left to work it out would build Nirvana's scene against Warm Springs' terrain
+   * cache -- committing a frame whose static layers cannot match, which surfaces as "The
+   * committed region art will be refreshed." over a half-drawn map.
+   *
+   * So the override is withheld only when the graph would land on the mounted region anyway.
+   * Every case that existed before this policy answers exactly as it did.
+   *
+   * Side effects: none.
+   */
   const graphObserverRegionOverride = (
     frame: PresentedObserverFrame,
     viewRegionId: string,
   ): string | null => (
     frame.checkpointFocus !== undefined && frame.checkpointFocus !== null
       ? null
-      : camera.snapshot().mode === "story" && frame.scene?.regionId !== undefined
+      : camera.snapshot().mode === "story"
+        && frame.scene?.regionId !== undefined
+        && frame.scene.regionId === viewRegionId
       ? null
       : viewRegionId
   );
@@ -4948,6 +5000,18 @@ export async function createCanvasPresentationRenderer(
   };
 
   /**
+   * Whether automatic framing must hold the region the viewer is watching.
+   *
+   * See {@link STORY_FRAMING_HOLDS_THE_OBSERVED_REGION}. Read live rather than captured,
+   * because the scope changes underneath the director as the viewer descends and ascends.
+   *
+   * Side effects: none.
+   */
+  const storyFramingHoldsRegion = (): boolean => (
+    STORY_FRAMING_HOLDS_THE_OBSERVED_REGION && worldViewScope === "region"
+  );
+
+  /**
    * Shared body for switching which region is live: the public `observeRegion` port method (a
    * user- or UI-driven switch) and Z3's camera-driven `syncRegionSheet` focus-follow hysteresis
    * both call this exact function, so a camera-triggered switch goes through the identical
@@ -5169,14 +5233,19 @@ export async function createCanvasPresentationRenderer(
       ? generation.frame
       : acceptedFrame ?? generation.frame;
     const regionId = mode === "story"
-      ? resolveRegionId(frame, "story", visibleRegionId)
+      ? resolveRegionId(frame, "story", visibleRegionId, null, storyFramingHoldsRegion())
       : visibleRegionId ?? generation.regionId;
     if (regionId === null) {
       abortLoading();
       return;
     }
     const observerOnly = mode === "story" ? true : generation.observerOnly;
-    const observerViewRegionId = mode === "story" ? null : regionId;
+    // Same separation as `graphObserverRegionOverride`: under the region hold a story frame can
+    // be playing somewhere other than the region being prepared, and the graph must be told.
+    const storyPlaysElsewhere = mode === "story"
+      && frame.scene?.regionId !== undefined
+      && frame.scene.regionId !== regionId;
+    const observerViewRegionId = mode === "story" && !storyPlaysElsewhere ? null : regionId;
     if (loadingIntentMatches(
       generation,
       frame,
@@ -5231,6 +5300,7 @@ export async function createCanvasPresentationRenderer(
         camera.snapshot().mode,
         visibleRegionId,
         checkpointReturnRegion(frame),
+        storyFramingHoldsRegion(),
       );
       if (regionId === null || !recipes.has(regionId)) {
         emitFailure({ kind: "canvas", retryable: false, publicMessage: "The selected region is unavailable." });
@@ -5392,7 +5462,13 @@ export async function createCanvasPresentationRenderer(
         releaseViewerCameraControl();
         camera.apply({ type: "return-story" });
         if (acceptedFrame !== null) {
-          const storyRegionId = resolveRegionId(acceptedFrame, "story", visibleRegionId);
+          const storyRegionId = resolveRegionId(
+            acceptedFrame,
+            "story",
+            visibleRegionId,
+            null,
+            storyFramingHoldsRegion(),
+          );
           if (storyRegionId !== null && recipes.has(storyRegionId)
             && storyRegionId !== visibleRegionId) {
             loadRegion(acceptedFrame, storyRegionId, true, acceptedBatch, null);
@@ -6198,11 +6274,14 @@ function resolveRegionId(
   cameraMode: CameraMode,
   visibleRegionId: string | null,
   checkpointReturnRegionId: string | null = null,
+  /** See {@link STORY_FRAMING_HOLDS_THE_OBSERVED_REGION}: keep the mounted region under Story. */
+  holdsObservedRegion = false,
 ): string | null {
   const checkpointRegionId = frame.checkpointFocus?.regionId;
   if (checkpointRegionId !== undefined) return checkpointRegionId;
   if (checkpointReturnRegionId !== null) return checkpointReturnRegionId;
-  if (visibleRegionId !== null && cameraMode !== "story") return visibleRegionId;
+  if (visibleRegionId !== null
+    && (cameraMode !== "story" || holdsObservedRegion)) return visibleRegionId;
   if (frame.scene?.regionId) return frame.scene.regionId;
   if (frame.selection?.kind === "region") return frame.selection.id;
   if (frame.selection?.kind === "agent") {

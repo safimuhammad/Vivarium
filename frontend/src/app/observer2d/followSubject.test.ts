@@ -101,6 +101,78 @@ describe("advanceFollow", () => {
     expect(started.state).toMatchObject({ kind: "waiting", name: "Rhea" });
   });
 
+  it("takes the camera back from a viewer who was already holding it", () => {
+    // The reported defect (Safi, 2026-08-27: *"the follow doesnt work well it stays on auto"*).
+    // `free` means the viewer is driving, and they are driving after any pan, any arrow key, and
+    // after every Atlas island click -- choosing a PLACE requests Free on purpose. A `free` that
+    // pre-dates the pick is not a pan away from the pick: vetoing on it dropped the choice with
+    // no effect, no request to the renderer and no notice, so the control read `Automatic` again
+    // at once and every later pick died the same way.
+    const started = requestFollow("agent_aster", input({ cameraMode: "free" }));
+
+    expect(started.effect).toEqual({ kind: "engage", agentKey: "agent_aster" });
+    expect(started.state).toMatchObject({ kind: "following", name: "Aster", confirmed: false });
+    expect(readFollowSubject(started.state).name).toBe("Aster");
+  });
+
+  it("carries a claim on the camera across a pursuit that has to travel", () => {
+    // The same pick, for a being in another region: the mode is still `free` for every tick the
+    // region takes to mount, so the claim has to survive the wait rather than only the first tick.
+    const started = requestFollow("agent_rhea", input({
+      cameraMode: "free",
+      observedRegionKey: "nirvana",
+    }));
+    expect(started.effect).toEqual({ kind: "observe-region", regionKey: "warm_springs" });
+
+    const mounting = advanceFollow(started.state, input({
+      cameraMode: "free",
+      observedRegionKey: "warm_springs",
+      followableKeys: new Set(),
+    }));
+    expect(mounting.state.kind).toBe("waiting");
+
+    const arrived = advanceFollow(mounting.state, input({
+      cameraMode: "free",
+      observedRegionKey: "warm_springs",
+      followableKeys: new Set(["agent_rhea"]),
+    }));
+    expect(arrived.effect).toEqual({ kind: "engage", agentKey: "agent_rhea" });
+  });
+
+  it("still ends silently on a PAN, which is the viewer taking the camera back", () => {
+    // b953c9d's interaction model, unchanged: a manual pan ends the pursuit and says nothing,
+    // because the viewer knows what they just did. What is new is only that the pursuit has to
+    // have HAD the camera first -- a pan is a change, not a standing condition.
+    const settled = following("agent_aster", "Aster", "nirvana", true);
+    const panned = advanceFollow(settled, input({ cameraMode: "free" }));
+
+    expect(panned.state).toBe(FOLLOW_OFF);
+    expect(panned.effect).toEqual({ kind: "none" });
+  });
+
+  it("ends on a pan that lands while a claimed pursuit is still travelling", () => {
+    // The claim is spent the moment the camera is seen out of `free` -- here, the pursuit takes
+    // it (`follow`) and the viewer then pans away. Without the hand-off the claim would outlive
+    // its purpose and a pan could never end a pursuit that began under Free.
+    const started = requestFollow("agent_rhea", input({
+      cameraMode: "free",
+      observedRegionKey: "nirvana",
+    }));
+    const engaged = advanceFollow(started.state, input({
+      cameraMode: "follow",
+      observedRegionKey: "warm_springs",
+      followableKeys: new Set(["agent_rhea"]),
+    }));
+    expect(engaged.state).toMatchObject({ kind: "following", confirmed: true });
+
+    const panned = advanceFollow(engaged.state, input({
+      cameraMode: "free",
+      observedRegionKey: "warm_springs",
+      followableKeys: new Set(["agent_rhea"]),
+    }));
+    expect(panned.state).toBe(FOLLOW_OFF);
+  });
+
   it("asks for a region ONCE, so ticking it from a render cannot spin", () => {
     // The shell ticks this after every render; a transition that mints a fresh
     // state object every time would be an infinite render loop, not a pursuit.
@@ -348,7 +420,7 @@ describe("readFollowSubject", () => {
     expect(readFollowSubject(FOLLOW_OFF)).toEqual({ key: null, name: null, pending: false });
     expect(readFollowSubject({
       kind: "waiting", agentKey: "agent_rhea", name: "Rhea",
-      regionKey: "warm_springs", deadlineMs: 10, asked: true,
+      regionKey: "warm_springs", deadlineMs: 10, asked: true, claimingCamera: false,
     })).toEqual({ key: "agent_rhea", name: "Rhea", pending: true });
     expect(readFollowSubject(following("agent_aster", "Aster", "nirvana", true)))
       .toEqual({ key: "agent_aster", name: "Aster", pending: false });
@@ -361,7 +433,7 @@ function following(
   regionKey: string,
   confirmed: boolean,
 ): FollowState {
-  return { kind: "following", agentKey, name, regionKey, confirmed };
+  return { kind: "following", agentKey, name, regionKey, confirmed, claimingCamera: false };
 }
 
 function subject(

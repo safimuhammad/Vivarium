@@ -192,6 +192,27 @@ export type FollowState =
        * render — which is a spin. Asked once; the deadline is the backstop.
        */
       readonly asked: boolean;
+      /**
+       * True while this pursuit is still taking the camera BACK from a viewer
+       * who was already holding it when they chose this being.
+       *
+       * `free` means "the viewer is driving". A `free` that ARRIVES during a
+       * pursuit is a pan, and ends it silently — the viewer chose that. A `free`
+       * that PRE-DATES the choice is not a pan away from anything: it is merely
+       * the state the world happened to be in when they picked from the
+       * dropdown. Vetoing on it dropped every pick made after a canvas drag, an
+       * arrow key, the Free button, or an Atlas island click (which requests
+       * Free by design, because choosing a PLACE is a viewer movement) — dropped
+       * with no effect, no request to the renderer and no notice, so the control
+       * snapped straight back to `Automatic` and stayed there for the rest of
+       * the session. Owner report, Safi, 2026-08-27: *"the follow doesnt work
+       * well it stays on auto"*.
+       *
+       * Cleared the moment the camera mode is seen to be anything but `free` —
+       * the pursuit has taken the camera — after which a pan ends it exactly as
+       * before.
+       */
+      readonly claimingCamera: boolean;
     }
   | {
       readonly kind: "following";
@@ -200,7 +221,12 @@ export type FollowState =
       readonly regionKey: string;
       /** True once the renderer has ACCEPTED `follow`, not merely been asked. */
       readonly confirmed: boolean;
+      /** See the `waiting` variant: a stale `free` is not a pan. */
+      readonly claimingCamera: boolean;
     };
+
+/** A pursuit that is under way: chosen, and not yet ended one way or the other. */
+export type FollowPursuit = Extract<FollowState, { kind: "waiting" | "following" }>;
 
 export const FOLLOW_OFF: FollowState = Object.freeze({ kind: "off", adoptable: true });
 
@@ -273,6 +299,21 @@ function outcome(state: FollowState, effect: FollowEffect = NO_EFFECT): FollowOu
   return { state, effect };
 }
 
+/**
+ * Re-reads a live pursuit's camera claim against the mode the world is now in.
+ *
+ * Returns the IDENTICAL state object unless the claim actually changed, because
+ * the shell ticks {@link advanceFollow} from a render: a fresh object on every
+ * tick is a spin, not a pursuit. The claim only ever falls (true to false, the
+ * once), so this settles after a single transition and is stable thereafter.
+ *
+ * Side effects: none.
+ */
+function withCameraClaim(state: FollowPursuit, claiming: boolean): FollowPursuit {
+  if (state.claimingCamera === claiming) return state;
+  return { ...state, claimingCamera: claiming };
+}
+
 function abandon(name: string, because: string): FollowOutcome {
   return outcome(FOLLOW_RELEASED, {
     kind: "abandon",
@@ -306,6 +347,11 @@ export function requestFollow(
     regionKey: fact.regionKey,
     deadlineMs: input.nowMs + FOLLOW_ARRIVAL_TIMEOUT_MS,
     asked: false,
+    // The viewer may well have been holding the camera when they chose: an
+    // Atlas island click leaves the camera Free by design, and so does any pan.
+    // Choosing a being is them handing it back, not a pan away from the choice
+    // they are making in the same gesture.
+    claimingCamera: input.cameraMode === "free",
   }, input);
 }
 
@@ -340,8 +386,14 @@ export function advanceFollow(state: FollowState, input: FollowTickInput): Follo
       name: adopted.fact.name,
       regionKey: adopted.regionKey,
       confirmed: true,
+      claimingCamera: false,
     });
   }
+
+  // Whether this pursuit is still taking the camera back from the viewer, read
+  // fresh against the mode the world is in NOW. Everything below works from
+  // `pursuit` rather than `state` so the claim is settled exactly once.
+  const pursuit = withCameraClaim(state, state.claimingCamera && input.cameraMode === "free");
 
   // The viewer re-aimed the live follow by hand, by clicking someone else.
   //
@@ -349,8 +401,8 @@ export function advanceFollow(state: FollowState, input: FollowTickInput): Follo
   // while the mode is `follow`, and nothing tells this module. Left unheard, the
   // HUD would go on naming the being the camera walked away from — the exact lie
   // this control exists to end.
-  if (state.kind === "following" && input.cameraMode === "follow"
-    && input.selectedSubject !== null && input.selectedSubject.id !== state.agentKey) {
+  if (pursuit.kind === "following" && input.cameraMode === "follow"
+    && input.selectedSubject !== null && input.selectedSubject.id !== pursuit.agentKey) {
     if (input.selectedSubject.kind === "home") {
       // A home is not on a roster of BEINGS. Standing down lets the shell name it
       // as a subject this control did not choose, rather than claiming a being.
@@ -364,12 +416,13 @@ export function advanceFollow(state: FollowState, input: FollowTickInput): Follo
         name: retargeted.fact.name,
         regionKey: retargeted.regionKey,
         confirmed: true,
+        claimingCamera: false,
       });
     }
   }
 
-  const fact = input.roster.byKey.get(state.agentKey);
-  if (fact === undefined) return abandon(state.name, "is no longer in the world.");
+  const fact = input.roster.byKey.get(pursuit.agentKey);
+  if (fact === undefined) return abandon(pursuit.name, "is no longer in the world.");
   if (fact.dead) return abandon(fact.name, "has died.");
   if (!fact.living) return abandon(fact.name, "is no longer living.");
   if (fact.regionKey === null) return abandon(fact.name, "is not anywhere the view can reach.");
@@ -380,11 +433,14 @@ export function advanceFollow(state: FollowState, input: FollowTickInput): Follo
   //
   // `free` is a PAN, and ends a pursuit at any stage — including one still on its
   // way, which would otherwise snatch the camera back the moment it arrived.
-  // Anything else only counts once the camera has actually been following: while
-  // a pursuit is still in flight the mode is legitimately `story`, because the
-  // director has not been asked to let go yet.
+  // UNLESS the pursuit is still claiming the camera, in which case that `free` is
+  // the state the viewer chose FROM and not a pan away from their own choice; see
+  // `claimingCamera`. Anything else only counts once the camera has actually been
+  // following: while a pursuit is still in flight the mode is legitimately
+  // `story`, because the director has not been asked to let go yet.
   if (input.cameraMode === "free"
-    || (state.kind === "following" && state.confirmed && input.cameraMode !== "follow")) {
+    ? !pursuit.claimingCamera
+    : (pursuit.kind === "following" && pursuit.confirmed && input.cameraMode !== "follow")) {
     return outcome(FOLLOW_OFF);
   }
 
@@ -397,67 +453,71 @@ export function advanceFollow(state: FollowState, input: FollowTickInput): Follo
     // reason and, because each re-issue would mint a new state object, spin the
     // render that ticks this. If the region never arrives, the deadline below is
     // what ends the pursuit -- honestly, and out loud.
-    if (state.kind === "waiting" && state.asked && state.regionKey === fact.regionKey
-      && state.name === fact.name) {
-      return input.nowMs >= state.deadlineMs
+    if (pursuit.kind === "waiting" && pursuit.asked && pursuit.regionKey === fact.regionKey
+      && pursuit.name === fact.name) {
+      return input.nowMs >= pursuit.deadlineMs
         ? abandon(fact.name, "could not be brought into view.")
-        : outcome(state);
+        : outcome(pursuit);
     }
     const next: FollowState = {
       kind: "waiting",
-      agentKey: state.agentKey,
+      agentKey: pursuit.agentKey,
       name: fact.name,
       regionKey: fact.regionKey,
-      deadlineMs: state.kind === "waiting" && state.regionKey === fact.regionKey
-        ? state.deadlineMs
+      deadlineMs: pursuit.kind === "waiting" && pursuit.regionKey === fact.regionKey
+        ? pursuit.deadlineMs
         : input.nowMs + FOLLOW_ARRIVAL_TIMEOUT_MS,
       asked: true,
+      claimingCamera: pursuit.claimingCamera,
     };
     return outcome(next, { kind: "observe-region", regionKey: fact.regionKey });
   }
 
-  if (!input.followableKeys.has(state.agentKey)) {
-    if (state.kind === "following" && !state.confirmed) {
+  if (!input.followableKeys.has(pursuit.agentKey)) {
+    if (pursuit.kind === "following" && !pursuit.confirmed) {
       // Asked but not yet accepted, and the being has slipped out of the scene:
       // fall back to waiting so the deadline can end this honestly.
       return outcome({
         kind: "waiting",
-        agentKey: state.agentKey,
+        agentKey: pursuit.agentKey,
         name: fact.name,
         regionKey: fact.regionKey,
         deadlineMs: input.nowMs + FOLLOW_ARRIVAL_TIMEOUT_MS,
         asked: false,
+        claimingCamera: pursuit.claimingCamera,
       });
     }
-    if (state.kind === "waiting" && input.nowMs >= state.deadlineMs) {
+    if (pursuit.kind === "waiting" && input.nowMs >= pursuit.deadlineMs) {
       return abandon(fact.name, "could not be brought into view.");
     }
-    if (state.kind === "following") {
+    if (pursuit.kind === "following") {
       return outcome({
         kind: "waiting",
-        agentKey: state.agentKey,
+        agentKey: pursuit.agentKey,
         name: fact.name,
         regionKey: fact.regionKey,
         deadlineMs: input.nowMs + FOLLOW_ARRIVAL_TIMEOUT_MS,
         asked: false,
+        claimingCamera: pursuit.claimingCamera,
       });
     }
-    return outcome(state);
+    return outcome(pursuit);
   }
 
-  if (state.kind === "waiting") {
+  if (pursuit.kind === "waiting") {
     return outcome({
       kind: "following",
-      agentKey: state.agentKey,
+      agentKey: pursuit.agentKey,
       name: fact.name,
       regionKey: fact.regionKey,
       confirmed: input.cameraMode === "follow",
-    }, { kind: "engage", agentKey: state.agentKey });
+      claimingCamera: pursuit.claimingCamera,
+    }, { kind: "engage", agentKey: pursuit.agentKey });
   }
 
-  const confirmed = state.confirmed || input.cameraMode === "follow";
-  if (confirmed === state.confirmed && fact.name === state.name) return outcome(state);
-  return outcome({ ...state, name: fact.name, confirmed });
+  const confirmed = pursuit.confirmed || input.cameraMode === "follow";
+  if (confirmed === pursuit.confirmed && fact.name === pursuit.name) return outcome(pursuit);
+  return outcome({ ...pursuit, name: fact.name, confirmed });
 }
 
 /** What the HUD says about the pursuit right now. */

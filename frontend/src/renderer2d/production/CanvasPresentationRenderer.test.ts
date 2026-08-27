@@ -2680,6 +2680,116 @@ describe("CanvasPresentationRenderer", () => {
    *
    * See `.superpowers/sdd/world-navigation-report.md`.
    */
+  /**
+   * Automatic framing stays in the region the viewer is watching.
+   *
+   * Owner direction (Safi, 2026-08-27), after watching the director cut between regions on
+   * every beat: *"for the automatic, can we for now establish that it is not allowed to move
+   * region but stick within the region"*. See `STORY_FRAMING_HOLDS_THE_OBSERVED_REGION`, which
+   * is the one place this is decided and the one place to lift it again.
+   */
+  describe("automatic framing holds the observed region", () => {
+    /** A renderer parked inside "worn" on a live sheet, one frame drawn, camera on Story. */
+    const insideWorn = async (): Promise<Awaited<ReturnType<typeof harness>>> => {
+      const fixture = await harness({ worldSheetSnapshots: true });
+      fixture.renderer.resize(800, 600);
+      fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "worn" }));
+      await settle();
+      fixture.driver.fire(16);
+      expect(fixture.debug().visibleRegionId).toBe("worn");
+      expect(fixture.debug().worldNavigation.scope).toBe("region");
+      expect(fixture.debug().camera.mode).toBe("story");
+      return fixture;
+    };
+
+    it("keeps the viewer where they are when the story moves to another region", async () => {
+      const fixture = await insideWorn();
+
+      fixture.renderer.updatePresentation(frame({ revision: 2, sceneRegion: "spring" }));
+      await settle();
+      fixture.driver.fire(32);
+      await settle();
+      fixture.driver.fire(48);
+
+      // The beat is still RECEIVED -- the frame handed to the graph still carries the story's
+      // own scene, off in "spring", and the Chronicle still lists it. What must not happen is
+      // the camera being carried off to watch it.
+      expect(fixture.graph.frames.at(-1)?.scene?.regionId).toBe("spring");
+      expect(fixture.debug()).toMatchObject({
+        visibleRegionId: "worn",
+        loadingRegionId: null,
+      });
+      expect(fixture.debug().camera.mode).toBe("story");
+      fixture.renderer.dispose();
+    });
+
+    it("does not relocate the viewer when framing is handed back to the director", async () => {
+      // Returning to Automatic means "you choose what to show me HERE", not "take me to
+      // wherever the story is". The story region load on the Story-return path is the same
+      // decision and gets the same answer.
+      const fixture = await insideWorn();
+      fixture.renderer.updatePresentation(frame({ revision: 2, sceneRegion: "spring" }));
+      await settle();
+      fixture.driver.fire(32);
+      await settle();
+
+      fixture.renderer.setCameraMode("free");
+      fixture.renderer.setCameraMode("story");
+      await settle();
+      fixture.driver.fire(48);
+      await settle();
+
+      expect(fixture.debug()).toMatchObject({
+        visibleRegionId: "worn",
+        loadingRegionId: null,
+      });
+      fixture.renderer.dispose();
+    });
+
+    it("still lets the VIEWER move between regions -- the restriction is on the director", async () => {
+      // Every viewer path between regions arrives here: the Atlas island click and the World
+      // drawer's pick, the `[`/`]` keys, a Chronicle card's travel, and a follow pursuit whose
+      // being crosses a border. None of them may be caught by the director's restraint.
+      const fixture = await insideWorn();
+      fixture.renderer.updatePresentation(frame({ revision: 2, sceneRegion: "spring" }));
+      await settle();
+      fixture.driver.fire(32);
+      await settle();
+      expect(fixture.debug().visibleRegionId).toBe("worn");
+
+      fixture.renderer.observeRegion("spring");
+      await settle();
+      fixture.driver.fire(48);
+      await settle();
+
+      expect(fixture.debug()).toMatchObject({
+        visibleRegionId: "spring",
+        loadingRegionId: null,
+      });
+      fixture.renderer.dispose();
+    });
+
+    it("leaves a renderer with no world sheet exactly as it was", async () => {
+      // "Stick within the region" is a statement about being INSIDE one. A renderer built
+      // without the sheet has no scope at all, so the director is untouched there -- which is
+      // what keeps every other case in this file exercising the behaviour it was written for.
+      const fixture = await harness();
+      fixture.renderer.resize(800, 600);
+      fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "worn" }));
+      await settle();
+      fixture.driver.fire(16);
+      expect(fixture.debug().worldNavigation.scope).toBeNull();
+
+      fixture.renderer.updatePresentation(frame({ revision: 2, sceneRegion: "spring" }));
+      await settle();
+      fixture.driver.fire(32);
+      await settle();
+
+      expect(fixture.debug().visibleRegionId).toBe("spring");
+      fixture.renderer.dispose();
+    });
+  });
+
   describe("world-view navigation model", () => {
     /** A renderer observing "worn" on a live two-region sheet, one frame drawn. */
     const navFixture = async (): Promise<Awaited<ReturnType<typeof harness>>> => {
