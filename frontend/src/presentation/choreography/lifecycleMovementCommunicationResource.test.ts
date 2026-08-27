@@ -31,6 +31,23 @@ import type { ChoreographyContext, ChoreographyPlan } from "./contracts";
 import { getChronicleManifest, type ChronicleId } from "../fixtures/chronicleCatalog";
 import { LIFECYCLE_MOVEMENT_COMMUNICATION_RESOURCE_DEFINITIONS } from "./lifecycleMovementCommunicationResource";
 import { createProductionSceneCommandResolver } from "../../renderer2d/production/ProductionSceneCommandResolver";
+import {
+  bubbleTextLifetimeMs,
+  TEXT_FADE_OUT_MS,
+} from "../../renderer2d/production/environment/EnvironmentSystem";
+import { spokenCharacterCount } from "../../shared/speechLifetime";
+
+/**
+ * A real median-length utterance: exactly 385 characters, the measured median
+ * message length the 5-7s band saturates at (rounded to 400 in the curve).
+ * This is the length the drift showed up at live.
+ */
+const MEDIAN_UTTERANCE = "I drift, content. The world outside is a distant, flickering memory; "
+  + "here, in the sanctuary of the warm springs, there is only the rhythmic pulse "
+  + "of our breathing. I am held by the presence of my companions, and by the "
+  + "quiet that has settled over this place since the morning, and I find that I "
+  + "want nothing else from the day than to stay exactly here and let it pass "
+  + "over me unhurried";
 
 const FAMILY_TYPES = Object.freeze([
   "agent_born",
@@ -466,6 +483,99 @@ describe("Task 9 lifecycle, movement, communication, and resource choreography",
     const plan = definitionFor("speak").resolve(context);
 
     expect(plan.phases.flatMap((phase) => phase.actorIntents).some((intent) => intent.kind === "move")).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // DRIFT GUARD: the scene clock and the bubble clock are ONE clock.
+  //
+  // These two durations have now drifted apart twice -- once when the bubble was
+  // floored at the scene length, and again when `dfba968` cut the bubble to the
+  // owner's hard 5-7s band and left the scene on its old `clamp(3000 + 80 x
+  // chars, 3000, 14000)` curve. At the measured median (385 chars) that gave a
+  // 14_000 ms scene against a 6_925 ms bubble: the being stood there for the
+  // last 7_075 ms -- more than half its own moment -- with nothing above its
+  // head. Safi's decision (2026-08-26) was to bring the SCENE down to the
+  // BUBBLE. These tests are what make the third drift impossible: they call the
+  // renderer's REAL exported bubble rule, so a change to either formula fails
+  // here rather than showing up live months later.
+  // ---------------------------------------------------------------------------
+
+  it.each([
+    // chars -> the one duration BOTH clocks produce, beside what the RETIRED
+    // 3-14s scene curve, `clamp(3000 + 80 x chars, 3000, 14000)`, used to give.
+    { chars: 3, message: "Hm.", expectedMs: 5_015, retiredSceneMs: 3_240 },
+    { chars: 40, message: "a".repeat(40), expectedMs: 5_200, retiredSceneMs: 6_200 },
+    { chars: 385, message: MEDIAN_UTTERANCE, expectedMs: 6_925, retiredSceneMs: 14_000 },
+    { chars: 400, message: "a".repeat(400), expectedMs: 7_000, retiredSceneMs: 14_000 },
+    { chars: 1_153, message: "a".repeat(1_153), expectedMs: 7_000, retiredSceneMs: 14_000 },
+  ])(
+    "a speech scene ends when its words do: $chars chars -> $expectedMs ms, not the retired $retiredSceneMs ms",
+    ({ chars, message, expectedMs, retiredSceneMs }) => {
+      expect(spokenCharacterCount(message)).toBe(chars);
+      // The pinned value IS the bubble's own rule, evaluated by the renderer.
+      expect(bubbleTextLifetimeMs(chars, false)).toBe(expectedMs);
+      // ... and the retired curve, kept as arithmetic so the size of the gap
+      // that was closed stays legible.
+      expect(Math.min(14_000, Math.max(3_000, 3_000 + message.length * 80))).toBe(retiredSceneMs);
+
+      // An UNTARGETED broadcast has no approach walk, so `routeAwareTiming`
+      // leaves the base duration alone and the scene is exactly the curve.
+      const spoken = definitionFor("speak").resolve(
+        contextFor("speak", false, { payload: { message, target_id: null } }),
+      );
+      expect(spoken.durationMs).toBe(expectedMs);
+
+      // self_talk is deliberately NOT diverged: a private thought is carried by
+      // the same bubble through the same rule, so a separate curve would simply
+      // recreate this drift for thoughts. Nothing walks, so it is exact too.
+      const thought = definitionFor("self_talk").resolve(
+        contextFor("self_talk", false, { payload: { message } }),
+      );
+      expect(thought.durationMs).toBe(expectedMs);
+    },
+  );
+
+  it("keeps the scene out of the bubble's reduced-motion carve-out, deliberately", () => {
+    // Reduced motion stretches the BUBBLE by 1.3 (6.5-9.1s). That is an
+    // accessibility contract on the reading surface -- less animation, never
+    // less information -- not a property of the utterance, and it is the benign
+    // direction: words outliving the moment was never the failure. The scene
+    // does not follow, so `speechDuration` stays context-free and no
+    // reduced-motion capture budget moves.
+    const message = MEDIAN_UTTERANCE;
+    const chars = spokenCharacterCount(message);
+    expect(bubbleTextLifetimeMs(chars, true)).toBe(9_003);
+    expect(bubbleTextLifetimeMs(chars, true)).toBeGreaterThan(bubbleTextLifetimeMs(chars, false));
+
+    for (const reducedMotion of [false, true]) {
+      expect(definitionFor("speak").resolve(
+        contextFor("speak", reducedMotion, { payload: { message, target_id: null } }),
+      ).durationMs).toBe(6_925);
+      expect(definitionFor("self_talk").resolve(
+        contextFor("self_talk", reducedMotion, { payload: { message } }),
+      ).durationMs).toBe(6_925);
+    }
+  });
+
+  it("keeps the 5s floor above the smallest scene its own phases can carry", () => {
+    // The old floor was 3_000. The bubble band raises it to 5_000, and there is
+    // no per-phase absolute minimum to collide with: `phaseBoundaries` is purely
+    // proportional (18/24/16/24/18%), and `routeAwareTiming` only ever STRETCHES
+    // enter/consequence to cover a real walk. So the real floor is 5_000 ms
+    // (5_005 for the shortest utterance that is not literally empty), which buys
+    // 900/1_202/800/1_202/901 ms -- every phase wider than the 400 ms bubble
+    // fade and the 180 ms actor vanish/appear it has to contain.
+    const definition = definitionFor("speak");
+    expect(definition.duration.minMs).toBe(5_000);
+    expect(definitionFor("self_talk").duration).toEqual({ minMs: 5_000, maxMs: 7_000 });
+
+    const plan = definition.resolve(
+      contextFor("speak", false, { payload: { message: ".", target_id: null } }),
+    );
+    expect(plan.durationMs).toBe(5_005);
+    const spans = plan.phaseWindows.map(({ endMs, startMs }) => endMs - startMs);
+    expect(spans).toEqual([900, 1_202, 800, 1_202, 901]);
+    expect(Math.min(...spans)).toBeGreaterThan(TEXT_FADE_OUT_MS);
   });
 
   it("BUBBLE-FIX: bakes private-thought dialogue into the plan regardless of selection at resolve() time", () => {

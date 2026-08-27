@@ -4,6 +4,7 @@ import type {
   OverlayTier,
 } from "../../../presentation/eventLegibilityMap";
 import { OVERLAY_TIER_HOLD_MS, OVERLAY_TIER_RANK } from "../../../presentation/eventLegibilityMap";
+import { speechLifetimeMs } from "../../../shared/speechLifetime";
 import type { Rect, Vec2 } from "../../contracts";
 import {
   type NativeFrameRef,
@@ -407,7 +408,7 @@ const GATHER_POOL_CAPACITY = 8;
 const RESIDUE_POOL_CAPACITY = 24;
 const FLYING_ITEM_POOL_CAPACITY = 12;
 
-/**
+/*
  * Bubble lifetime is **wall-clock** and is deliberately NOT divided by the
  * simulation speed multiplier.
  *
@@ -416,28 +417,14 @@ const FLYING_ITEM_POOL_CAPACITY = 12;
  * slightly ahead of its captions. At 2x speed the sim outpaces the bubbles and
  * the residue pips carry the tail of memory, so nothing is lost.
  *
- * **Owner decision (Safi, 2026-08-26), replacing the reading-budget model:**
- *
- * > *"if another message comes in then the prev should fade away if not then
- * > keep it for 5-7sec based on length on message longer message means max
- * > time."*
- *
- * So a bubble is no longer sized to be *read* in place — it lives 5s to 7s and
- * then fades, and the Chronicle feed carries the full text for reading. The
- * curve is the simplest one that honours "longer message means max time": a
- * flat 5s floor plus 5ms a character, saturating at 7s once a message reaches
- * {@link TEXT_LIFETIME_FULL_LENGTH_CHARS}, which is the measured MEDIAN message
- * length — so a typical line already earns close to the ceiling and only the
- * genuinely short ones sit at the floor.
+ * The band itself — the owner's 5-7s curve (Safi, 2026-08-26) that replaced
+ * the reading-budget model — now lives in `shared/speechLifetime.ts`, because
+ * the speaker's SCENE is cut from the same cloth and the two had already
+ * drifted apart twice while they were kept in numeric lockstep by convention.
+ * `shared/` is a leaf, so reading it here does not point the renderer at the
+ * choreography layer. Only the reduced-motion carve-out below is the
+ * renderer's own.
  */
-const TEXT_LIFETIME_MIN_MS = 5_000;
-const TEXT_LIFETIME_MAX_MS = 7_000;
-const TEXT_LIFETIME_BASE_MS = TEXT_LIFETIME_MIN_MS;
-/** Where the 5s→7s ramp saturates: the measured median message (385 chars), rounded. */
-const TEXT_LIFETIME_FULL_LENGTH_CHARS = 400;
-/** 5ms a character — the ramp derived from the band and its saturation length, never guessed. */
-const TEXT_LIFETIME_PER_CHAR_MS =
-  (TEXT_LIFETIME_MAX_MS - TEXT_LIFETIME_MIN_MS) / TEXT_LIFETIME_FULL_LENGTH_CHARS;
 /**
  * How long a bubble takes to dissolve, in milliseconds.
  *
@@ -979,30 +966,11 @@ export class EnvironmentSystem {
   /**
    * How long a bubble stays up before it fades, in milliseconds.
    *
-   * `clamp(5000 + 5 x visibleChars, 5000, 7000)` — wall-clock, and deliberately
-   * NOT divided by the simulation speed multiplier. Owner-set band (see
-   * {@link TEXT_LIFETIME_BASE_MS}): a bubble is the live pulse of a conversation,
-   * not the record of it, and it saturates at 7s once a message reaches the
-   * measured median length.
-   *
-   * The previous model asked a bubble to be *readable in place* — up to 30s,
-   * and floored at the length of the speaker's own scene — and the owner has
-   * replaced it after watching a live run. The consequence is deliberate and
-   * accepted: a long line is no longer fully readable above a head, and the
-   * Chronicle feed is where it is read.
-   *
-   * Reduced motion still stretches the result by
-   * {@link REDUCED_MOTION_LIFETIME_FACTOR}. That is the one carve-out kept from
-   * the old model, and it is an accessibility contract rather than a reading
-   * budget: less animation, never less information.
+   * Delegates to {@link bubbleTextLifetimeMs} with this system's own reduced
+   * motion setting.
    */
   private textLifetimeMs(layout: MessageLayout): number {
-    const visible = layout.lines.reduce((total, line) => total + line.length, 0);
-    const held = Math.min(
-      TEXT_LIFETIME_MAX_MS,
-      Math.max(TEXT_LIFETIME_MIN_MS, TEXT_LIFETIME_BASE_MS + visible * TEXT_LIFETIME_PER_CHAR_MS),
-    );
-    return Math.round(held * (this.reducedMotion ? REDUCED_MOTION_LIFETIME_FACTOR : 1));
+    return bubbleTextLifetimeMs(layout.total, this.reducedMotion);
   }
 
   private tierLifetimeMs(tier: OverlayTier): number {
@@ -1928,6 +1896,38 @@ function frameKey(slot: AmbientSlot): string {
 function effectKey(slot: EffectSlot): string {
   const label = slot.label === null ? "" : `:${slot.label.recipientId}=${slot.label.value}`;
   return `${slot.sequence}:${slot.kind}:${slot.at.x},${slot.at.y}:${slot.startedAtMs}-${slot.expiresAtMs}${label}`;
+}
+
+/**
+ * How long a bubble of `characterCount` characters stays up before it fades.
+ *
+ * `clamp(5000 + 5 x characterCount, 5000, 7000)` — the owner's band, read from
+ * `shared/speechLifetime.ts` rather than restated here, because the speaker's
+ * SCENE is cut from the same curve (`speechDuration` in
+ * `presentation/choreography/lifecycleMovementCommunicationResource.ts`) and
+ * the two drifted apart twice while the lockstep was a convention. A bubble is
+ * the live pulse of a conversation, not the record of it; the Chronicle feed is
+ * where a long line is read.
+ *
+ * The count is `MessageLayout.total` — the whitespace-normalised message, the
+ * WORDS SAID — not the sum of the wrapped lines. A line therefore lasts the
+ * same time whether it lands in a wide speech bubble or a narrow thought puff,
+ * and it is a count the choreography layer can compute from the raw payload
+ * without importing this file's per-variant column metrics.
+ *
+ * Reduced motion stretches the result by {@link REDUCED_MOTION_LIFETIME_FACTOR}.
+ * That carve-out is the renderer's alone and is deliberately NOT mirrored by
+ * the scene: it is an accessibility contract on the reading surface — less
+ * animation, never less information — not a property of the utterance.
+ *
+ * @param characterCount - `MessageLayout.total`, or `spokenCharacterCount(text)`.
+ * @param reducedMotion - Whether the viewer asked for reduced motion.
+ * @returns Whole wall-clock milliseconds.
+ */
+export function bubbleTextLifetimeMs(characterCount: number, reducedMotion: boolean): number {
+  return Math.round(
+    speechLifetimeMs(characterCount) * (reducedMotion ? REDUCED_MOTION_LIFETIME_FACTOR : 1),
+  );
 }
 
 /**

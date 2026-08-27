@@ -8,6 +8,12 @@ import {
 } from "../../renderer2d/production/navigation/navigation";
 import { decideParticipantFallback } from "../../renderer2d/production/failurePolicy";
 import {
+  SPEECH_LIFETIME_MAX_MS,
+  SPEECH_LIFETIME_MIN_MS,
+  speechLifetimeMs,
+  spokenCharacterCount,
+} from "../../shared/speechLifetime";
+import {
   INTERACTION_CONTACT_TOLERANCE_PX,
   homeExclusionsForRegion,
   resolveLegalContactRoute,
@@ -540,7 +546,11 @@ function speakDefinition(): ChoreographyDefinition<"speak"> {
     // this definition needs the same generous route budget they already
     // declare (see productionLocomotionTiming.ts's CONTACT_ROUTE_MAX_MS doc
     // comment for the failure mode this prevents).
-    duration: { minMs: 3_000, maxMs: CONTACT_ROUTE_MAX_MS },
+    //
+    // minMs follows `speechDuration` down to the bubble's own floor (3_000 ->
+    // SPEECH_LIFETIME_MIN_MS): the shortest possible line now buys a 5s scene,
+    // never a 3s one.
+    duration: { minMs: SPEECH_LIFETIME_MIN_MS, maxMs: CONTACT_ROUTE_MAX_MS },
     resolve: (context) => {
       const { payload } = context.event;
       const targetId = payload.target_id;
@@ -652,7 +662,12 @@ function selfTalkDefinition(): ChoreographyDefinition<"self_talk"> {
     requiredAnchors: ["current-position"],
     contactMarker: "thought-visible",
     consequenceMarker: "thought-commit",
-    duration: { minMs: 3_000, maxMs: 14_000 },
+    // A private thought is bounded by the SAME band as public speech
+    // (3_000-14_000 -> 5_000-7_000): it is carried by the same thought-bubble
+    // through the same `bubbleTextLifetimeMs`, so letting it keep the old
+    // 3-14s curve would simply recreate the drift for thoughts. Nothing here
+    // walks, so `routeAwareTiming` never stretches past the 7s ceiling.
+    duration: { minMs: SPEECH_LIFETIME_MIN_MS, maxMs: SPEECH_LIFETIME_MAX_MS },
     resolve: (context) => {
       const { payload } = context.event;
       const selected = context.frame.selection?.kind === "agent" && context.frame.selection.id === payload.agent_id;
@@ -1656,8 +1671,42 @@ function visibleDialogue(
   };
 }
 
+/**
+ * How long a being's speaking/thinking scene runs, in milliseconds.
+ *
+ * **The same curve, from the same constants, as the bubble that carries the
+ * words** (`shared/speechLifetime.ts`, read by
+ * `renderer2d/production/environment/EnvironmentSystem.ts`'s
+ * `bubbleTextLifetimeMs`) — so a being's moment ends when its words do.
+ *
+ * This used to be its own formula, `clamp(3000 + 80 x chars, 3000, 14000)`,
+ * kept in numeric lockstep with the bubble by convention. It drifted twice.
+ * Most recently `dfba968` cut the bubble to the owner's hard 5-7s band and left
+ * this at 3-14s: a 385-character line — the measured median — bought a 14s
+ * scene and a 6.9s bubble, and live that showed as a being standing
+ * mid-conversation with nothing above its head for the last two thirds of its
+ * own moment. Safi's decision (2026-08-26) was to bring the SCENE down to the
+ * BUBBLE rather than restore the floor, because he shortened the bubble
+ * precisely because the piece felt slow, and this was the other half of that
+ * slowness. `shared/` is a leaf module, so reading the curve from there keeps
+ * the renderer from ever depending upward on this layer — the thing the old
+ * convention existed to protect.
+ *
+ * The character count is the whitespace-normalised message, matching the
+ * bubble's `MessageLayout.total` exactly; `speechLifetimeMs.test.ts` fails if
+ * the two ever disagree again.
+ *
+ * The floor is now {@link SPEECH_LIFETIME_MIN_MS} (5s), up from 3s. Phases are
+ * proportional (`phaseBoundaries`, 18/24/16/24/18%), so 5s still fits every
+ * phase comfortably — 900/1_200/800/1_200/900 ms — and `routeAwareTiming` only
+ * ever stretches enter/consequence to cover a real approach walk, never shrinks
+ * them.
+ *
+ * @param message - The raw utterance from the event payload.
+ * @returns Whole milliseconds inside the 5s-7s band, before any route stretch.
+ */
 function speechDuration(message: string): number {
-  return Math.min(14_000, Math.max(3_000, 3_000 + message.length * 80));
+  return speechLifetimeMs(spokenCharacterCount(message));
 }
 
 /** A compact "+N energy, +M materials" label for a FLYING ITEM loot payout, omitting either side that's zero. */

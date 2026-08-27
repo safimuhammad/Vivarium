@@ -35,7 +35,9 @@ import {
   textScaleForLength,
 } from "./bubbleGrammar";
 import { createProductionRegionMapRecipe } from "../maps/ProductionRegionMapRecipe";
+import { spokenCharacterCount } from "../../../shared/speechLifetime";
 import {
+  bubbleTextLifetimeMs,
   EnvironmentSystem,
   ENVIRONMENT_POOL_CAPACITIES,
   TEXT_FADE_OUT_MS,
@@ -809,6 +811,43 @@ describe("EnvironmentSystem", () => {
     calm.advanceTo(5_021);
     expect(calm.diagnostics().activeBubbles).toBe(1);
     calm.dispose();
+  });
+
+  it("counts the WORDS SAID, not the wrapped lines, so a bubble's life is its own length", () => {
+    // The lifetime basis is `MessageLayout.total` -- the whitespace-normalised
+    // message -- not the sum of the wrapped lines. Two reasons, both load-bearing:
+    //
+    //  1. The same sentence must last the same time in a wide speech bubble and a
+    //     narrow thought puff. Line-sum made lifetime a function of the bubble's
+    //     column metrics, so a thought silently outlived (or undercut) the identical
+    //     line spoken aloud.
+    //  2. It is a count the choreography layer can compute from the raw payload,
+    //     which is what lets a being's SCENE be exactly as long as its words without
+    //     importing this file's wrap metrics. See `speechDuration` and the drift
+    //     guard in `presentation/choreography/lifecycleMovementCommunicationResource.test.ts`.
+    //
+    // `"a".repeat(40)` is chosen because it is HARD-WRAPPED: no spaces to break on,
+    // so `layoutMessage` hyphenates and the line sum exceeds the message length.
+    // A line-sum basis therefore cannot produce 5_200 here.
+    const hardWrapped = "a".repeat(40);
+    expect(spokenCharacterCount(hardWrapped)).toBe(40);
+    expect(bubbleTextLifetimeMs(40, false)).toBe(5_200);
+    const wrapped = layoutMessage(
+      hardWrapped,
+      messageColumns(40, TEXT_KIND_METRICS.speech.minColumns, TEXT_KIND_METRICS.speech.maxColumns),
+    );
+    expect(wrapped.total).toBe(40);
+    expect(wrapped.lines.reduce((sum, line) => sum + line.length, 0)).toBeGreaterThan(40);
+
+    for (const variant of ["speech", "whisper", "thought"] as const) {
+      const system = createSystem(recipeFor(world[0]!));
+      system.emit({ ...speech("aster", hardWrapped), variant }, 0);
+      system.advanceTo(5_199);
+      expect(system.diagnostics().activeBubbles).toBe(1);
+      system.advanceTo(5_200);
+      expect(system.diagnostics().activeBubbles).toBe(0);
+      system.dispose();
+    }
   });
 
   it("fades a being's previous bubble out when their next one arrives, then leaves residue", () => {
