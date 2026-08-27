@@ -130,6 +130,21 @@ export interface Vivarium2DAppProps {
    * fixture, a recording or a capture is handed nothing and grows no control.
    */
   readonly runLifecycle?: RunLifecycleCapability;
+  /**
+   * Where a viewer goes once the run they were watching is confirmed over.
+   *
+   * The observer reports the ending; it does not decide what follows. It cannot:
+   * it does not know whether it was reached from the gateway (which never
+   * navigated — the live world is a state inside it) or from the `?renderer=2d`
+   * deep link (which is a route). So the surface that mounted it owns the
+   * destination, and a surface that passes nothing simply stays on the ended
+   * world reading "Ended" — which is what a recording or a QA route wants.
+   *
+   * Called at most once, and only after `GET /api/run` itself reports a terminal
+   * status for a stop this viewer asked for. A refused stop, or a world still
+   * winding down, leaves the viewer exactly where they are.
+   */
+  readonly onRunEnded?: () => void;
 }
 
 interface OwnedRuntimeView {
@@ -197,6 +212,7 @@ export function Vivarium2DApp({
   chronicleSourceControls,
   chronicleBufferMs,
   runLifecycle,
+  onRunEnded,
 }: Vivarium2DAppProps): ReactElement {
   const appRef = useRef<HTMLElement>(null);
   const debugStateRef = useRef<OwnedRuntimeView["snapshot"]>(null);
@@ -310,6 +326,7 @@ export function Vivarium2DApp({
   const runStop = useRunStopController({
     enabled: snapshot?.frame?.source === "live",
     ...(runLifecycle === undefined ? {} : { client: runLifecycle }),
+    ...(onRunEnded === undefined ? {} : { onEnded: onRunEnded }),
   });
   const safeFrame = useMeasuredObserverSafeFrame(
     appRef,

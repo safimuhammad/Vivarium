@@ -2730,6 +2730,7 @@ function validEnvironmentRequest(candidate: EnvironmentEffectRequest): boolean {
     case "event-mark":
       return validFinitePoint(request.at)
         && validString(request.ownerId)
+        && validOverlayOwnerKind(request.ownerKind)
         && validString(request.glyph)
         && validOverlayFamily(request.family)
         && validOverlayTier(request.tier)
@@ -2767,7 +2768,13 @@ function validOverlayThread(value: unknown): boolean {
   return validFinitePoint(value.to)
     && (value.mode === "aim" || value.mode === "severed")
     && validString(value.accent)
-    && validString(value.hue);
+    && validString(value.hue)
+    && validOverlayOwnerKind(value.toKind);
+}
+
+/** Optional everywhere it appears; omitted means the overlay hangs on a being. */
+function validOverlayOwnerKind(value: unknown): boolean {
+  return value === undefined || value === "being" || value === "structure";
 }
 
 function validPlacementContext(candidate: ProductionSceneCommand extends infer _Command ? unknown : never): boolean {

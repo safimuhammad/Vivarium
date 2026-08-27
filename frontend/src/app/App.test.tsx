@@ -23,7 +23,10 @@ afterEach(async () => {
   vi.resetModules();
 });
 
-let productionProps: { readonly runLifecycle?: unknown }[] = [];
+let productionProps: {
+  readonly runLifecycle?: unknown;
+  readonly onRunEnded?: unknown;
+}[] = [];
 
 async function renderApp(search: string) {
   productionProps = [];
@@ -43,7 +46,10 @@ async function renderApp(search: string) {
   vi.doMock("./Vivarium2DApp", () => {
     productionImport();
     return {
-      Vivarium2DApp: (props: { readonly runLifecycle?: unknown }) => {
+      Vivarium2DApp: (props: {
+        readonly runLifecycle?: unknown;
+        readonly onRunEnded?: unknown;
+      }) => {
         productionProps.push(props);
         return <main data-testid="vivarium-2d-production" />;
       },
@@ -84,6 +90,36 @@ describe("App renderer boundary", () => {
     expect(typeof granted?.getLifecycle).toBe("function");
     // And nothing wider than that: no way to START a run from the observer.
     expect(Object.keys(granted ?? {}).sort()).toEqual(["getLifecycle", "stop"]);
+  });
+
+  it("returns the deep-linked viewer to the way in once their run has ended", async () => {
+    // The gateway needs no navigation for this -- its live world is a state
+    // inside it and the URL never left "/". This route is the one case that
+    // genuinely IS a route, so the return is a real one: the renderer is dropped
+    // and the surface for "/" takes over. `replaceState`, not `pushState`,
+    // because the entry it replaces named a run that no longer exists.
+    await renderApp("?renderer=2d");
+    expect(container?.querySelector('[data-testid="vivarium-2d-production"]')).not.toBeNull();
+
+    const ended = productionProps.at(-1)?.onRunEnded as (() => void) | undefined;
+    expect(typeof ended).toBe("function");
+    await act(async () => ended?.());
+
+    expect(container?.querySelector('[data-testid="gateway"]')).not.toBeNull();
+    expect(container?.querySelector('[data-testid="vivarium-2d-production"]')).toBeNull();
+    expect(window.location.search).toBe("");
+  });
+
+  it("keeps every other thing the deep link said on the way back", async () => {
+    // Only the renderer is dropped, so a viewer who deep-linked at a seam --
+    // `?api=mock`, say -- comes back to the way in at that same seam.
+    await renderApp("?renderer=2d&api=mock");
+
+    const ended = productionProps.at(-1)?.onRunEnded as (() => void) | undefined;
+    await act(async () => ended?.());
+
+    expect(container?.querySelector('[data-testid="gateway"]')).not.toBeNull();
+    expect(window.location.search).toBe("?api=mock");
   });
 
   it("mounts only the production 2d observer for the exact route", async () => {

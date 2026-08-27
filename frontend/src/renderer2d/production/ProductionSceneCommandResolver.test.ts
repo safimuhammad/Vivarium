@@ -423,7 +423,12 @@ describe("ProductionSceneCommandResolver", () => {
         family: "harm",
         tier: "strike",
         micro: "27",
-        threads: [{ to: { x: 96, y: 64 }, toId: "briar", mode: "aim", accent: "#9c3b26", hue: identityHue("briar") }],
+        // `toKind` rides with every far end: the receiver cap hangs over a
+        // being, and a being that has left the stage is not drawn a cap.
+        threads: [{
+          to: { x: 96, y: 64 }, toId: "briar", toKind: "being",
+          mode: "aim", accent: "#9c3b26", hue: identityHue("briar"),
+        }],
       }),
     }));
   });

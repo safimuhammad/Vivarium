@@ -20,9 +20,16 @@
  * for the ordinary case; this exists for the case the heartbeat cannot cover —
  * a stream that closes as the run winds down, leaving the last status it ever
  * reported as "running".
+ *
+ * The same rule governs *leaving* the world. Whoever mounted this observer may
+ * pass `onEnded`, and it is called exactly once, when the server has confirmed a
+ * terminal status for a stop this viewer asked for — never on the local fact
+ * that a button was pressed, and never on a run that ended by itself. So a stop
+ * that is refused, or a world still winding down, keeps the viewer where they
+ * are; only a run the server has reported over takes them anywhere.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { RunLifecycleStatus } from "../gateway/runConfig";
 
@@ -78,6 +85,18 @@ export interface RunStopControllerOptions {
   readonly client?: RunLifecycleCapability;
   /** Poll interval override, for tests. */
   readonly pollMs?: number;
+  /**
+   * What to do once this run is confirmed over.
+   *
+   * Called at most once per mount, and only after a stop this viewer asked for
+   * reaches a terminal status the server itself reported. The observer does not
+   * decide what happens next — it has no idea whether it was reached from the
+   * gateway or from a deep link — so the surface that mounted it owns that:
+   * the gateway returns to its own landing screen, the deep-link route drops the
+   * renderer from the URL. A seam that passes nothing simply stays put and goes
+   * on reading "Ended", which is what a recording or a QA route wants.
+   */
+  readonly onEnded?: () => void;
 }
 
 /**
@@ -89,7 +108,7 @@ export interface RunStopControllerOptions {
  * false or before a stop has been asked for.
  */
 export function useRunStopController(options: RunStopControllerOptions): RunStopController {
-  const { enabled, client, pollMs = RUN_STOP_POLL_MS } = options;
+  const { enabled, client, pollMs = RUN_STOP_POLL_MS, onEnded } = options;
   const [confirmedStatus, setConfirmedStatus] = useState<RunLifecycleStatus | null>(null);
   const [requested, setRequested] = useState(false);
   const [sending, setSending] = useState(false);
@@ -105,6 +124,10 @@ export function useRunStopController(options: RunStopControllerOptions): RunStop
    */
   const [polls, setPolls] = useState(0);
   const active = enabled && client !== undefined;
+  /** Held in a ref so a caller re-creating the callback cannot end a run twice. */
+  const onEndedRef = useRef(onEnded);
+  onEndedRef.current = onEnded;
+  const announcedRef = useRef(false);
 
   const requestStop = useCallback((): void => {
     if (!active || client === undefined) return;
@@ -145,6 +168,14 @@ export function useRunStopController(options: RunStopControllerOptions): RunStop
       clearTimeout(timer);
     };
   }, [active, client, confirmedStatus, polls, pollMs, requested]);
+
+  // The run is over, and it was this viewer who ended it. Said once.
+  useEffect(() => {
+    if (!requested || confirmedStatus === null || !TERMINAL.has(confirmedStatus)) return;
+    if (announcedRef.current) return;
+    announcedRef.current = true;
+    onEndedRef.current?.();
+  }, [confirmedStatus, requested]);
 
   return {
     confirmedStatus,

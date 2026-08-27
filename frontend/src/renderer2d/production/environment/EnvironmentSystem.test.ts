@@ -37,6 +37,7 @@ import {
 import { createProductionRegionMapRecipe } from "../maps/ProductionRegionMapRecipe";
 import { spokenCharacterCount } from "../../../shared/speechLifetime";
 import {
+  ANCHOR_DEPARTURE_GRACE_MS,
   bubbleTextLifetimeMs,
   EnvironmentSystem,
   ENVIRONMENT_POOL_CAPACITIES,
@@ -687,6 +688,110 @@ describe("EnvironmentSystem", () => {
         && box.y < body.bottom && box.bottom > body.y;
       expect(overlaps).toBe(false);
     }
+    system.dispose();
+  });
+
+  it("takes a being's chrome off the map when that being leaves the stage", () => {
+    // The bug Safi caught in a live run: a quote-mark chip hanging over empty
+    // grass. An overlay resolves its anchor through the published roster and
+    // used to fall back to the point it was EMITTED at when the owner was not
+    // in it -- so a being who spoke and then walked out of the region left its
+    // words, and then its residue pip, standing on the grass it had left.
+    const system = createSystem(recipeFor(world[0]!));
+    const stood = { x: 400, y: 400 };
+    system.setAnchorPositions(new Map([["aster", stood]]));
+    system.emit({ ...speech("aster", "I will look to the east."), at: stood }, 0);
+    system.emit({
+      kind: "event-mark", at: stood, ownerId: "aster",
+      glyph: "gather", family: "exchange", tier: "beat",
+    }, 0);
+
+    // On stage: both the words and the mark are painted.
+    const onStage = recordingContext();
+    system.draw(onStage.context, "air");
+    expect(onStage.fillRects.length).toBeGreaterThan(0);
+
+    // The being leaves the region. The host's next roster simply does not name
+    // it -- exactly what `ProductionSceneGraph`'s `refreshEnvironmentExclusions`
+    // publishes once the being drops out of `visibleActorIds`.
+    system.setAnchorPositions(new Map());
+    const departed = recordingContext();
+    system.draw(departed.context, "air");
+    expect(departed.fillRects).toEqual([]);
+
+    // ...and the chrome is not merely hidden: once the absence outlasts the
+    // grace that covers a one-frame transition, the slots are retired outright,
+    // leaving no residue pip behind for an owner who is not there to wear it.
+    system.advanceTo(ANCHOR_DEPARTURE_GRACE_MS);
+    expect(system.diagnostics().activeBubbles).toBe(0);
+    expect(system.diagnostics().activeMarkers).toBe(0);
+    expect(system.diagnostics().activeResidue).toBe(0);
+    expect(system.overlayFocusRect()).toBeNull();
+    system.dispose();
+  });
+
+  it("keeps a being's chrome through a one-frame absence, which is a transition and not a departure", () => {
+    // The fallback exists for a reason: a being can be missing from a single
+    // published roster mid-transition (an arrival's staging is discarded and
+    // re-staged) without having gone anywhere. That must cost it its slot.
+    const system = createSystem(recipeFor(world[0]!));
+    const stood = { x: 400, y: 400 };
+    system.setAnchorPositions(new Map([["aster", stood]]));
+    system.emit({ ...speech("aster", "Still here."), at: stood }, 0);
+    system.setAnchorPositions(new Map());
+    system.advanceTo(ANCHOR_DEPARTURE_GRACE_MS - 1);
+    system.setAnchorPositions(new Map([["aster", stood]]));
+    system.advanceTo(ANCHOR_DEPARTURE_GRACE_MS * 2);
+
+    // The whole window is 1.2s against this line's own 5.055s lifetime (the
+    // 5s floor plus 5ms a character), so nothing here is expiry: the bubble
+    // survives because the absence was a transition, not a departure.
+    expect(system.diagnostics().activeBubbles).toBe(1);
+    const back = recordingContext();
+    system.draw(back.context, "air");
+    expect(back.fillRects.length).toBeGreaterThan(0);
+    system.dispose();
+  });
+
+  it("never paints words for a being who is not on this stage at all", () => {
+    // The utterance lane is not region-gated (`ProductionSceneCommandResolver`'s
+    // `effectPoint` reads the multi-region placement ledger), so a line from a
+    // being standing in another region can reach the mounted region's overlay
+    // carrying that other region's coordinates. Words belong over a head; with a
+    // roster published and no such head on this stage, there is nothing to say
+    // them over.
+    const system = createSystem(recipeFor(world[0]!));
+    system.setAnchorPositions(new Map([["briar", { x: 200, y: 200 }]]));
+    system.emit({ ...speech("aster", "Far from here, I speak."), at: { x: 400, y: 400 } }, 0);
+
+    const canvas = recordingContext();
+    system.draw(canvas.context, "air");
+    expect(canvas.fillRects).toEqual([]);
+    system.dispose();
+  });
+
+  it("still plants a home's mark on its doorstep when the roster never named that home", () => {
+    // The counterweight to the rule above, and the reason it is owner-KIND and
+    // not owner-history: a home cannot walk away. When the placement ledger has
+    // learned no door for a structure, the resolver deliberately anchors the
+    // beat at the acting being's own doorstep point rather than dropping it, and
+    // the roster may never name that home at all. A structure's emitted point
+    // stays legitimate forever.
+    const system = createSystem(recipeFor(world[0]!));
+    system.setAnchorPositions(new Map([["aster", { x: 100, y: 100 }]]));
+    system.emit({
+      kind: "event-mark", at: { x: 320, y: 260 }, ownerId: "shelter_004",
+      ownerKind: "structure", glyph: "build", family: "dwell", tier: "beat",
+    }, 0);
+
+    const canvas = recordingContext();
+    system.draw(canvas.context, "air");
+    const box = paintedExtent(canvas.fillRects);
+    // Painted at the doorstep it was emitted at, nowhere near the one being the
+    // roster does name.
+    expect(box.x).toBeGreaterThan(200);
+    expect(system.diagnostics().activeMarkers).toBe(1);
+    system.advanceTo(ANCHOR_DEPARTURE_GRACE_MS * 4);
     system.dispose();
   });
 

@@ -49,22 +49,23 @@ function capability(statuses: readonly RunLifecycleStatus[]): RunLifecycleCapabi
 
 let latest: RunStopController | null = null;
 
-function Probe(props: {
+interface ProbeProps {
   readonly enabled: boolean;
   readonly client?: RunLifecycleCapability;
-}): ReactElement {
+  readonly onEnded?: () => void;
+}
+
+function Probe(props: ProbeProps): ReactElement {
   latest = useRunStopController({
     enabled: props.enabled,
     ...(props.client === undefined ? {} : { client: props.client }),
+    ...(props.onEnded === undefined ? {} : { onEnded: props.onEnded }),
     pollMs: 10,
   });
   return <span data-status={latest.confirmedStatus ?? "none"} />;
 }
 
-async function mount(props: {
-  readonly enabled: boolean;
-  readonly client?: RunLifecycleCapability;
-}): Promise<void> {
+async function mount(props: ProbeProps): Promise<void> {
   await act(async () => root.render(<Probe {...props} />));
 }
 
@@ -127,6 +128,62 @@ describe("useRunStopController", () => {
     expect(latest?.error).toBe("/api/run/stop returned HTTP 409");
     // The run is still breathing, so the viewer must be able to try again.
     expect(latest?.requested).toBe(false);
+  });
+
+  it("tells its owner the run has ended -- once, and only after the server said so", async () => {
+    const onEnded = vi.fn();
+    const client = capability(["stopping", "stopped"]);
+    await mount({ enabled: true, client, onEnded });
+
+    await act(async () => { latest?.requestStop(); });
+    // A 202 is an accepted request, not an ending. Nothing has ended yet.
+    expect(onEnded).not.toHaveBeenCalled();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(15); });
+    expect(latest?.confirmedStatus).toBe("stopping");
+    expect(onEnded).not.toHaveBeenCalled();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(15); });
+    expect(latest?.confirmedStatus).toBe("stopped");
+    expect(onEnded).toHaveBeenCalledOnce();
+
+    // Whatever else re-renders, a run ends exactly once.
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    await act(async () => root.render(<Probe enabled client={client} onEnded={onEnded} />));
+    expect(onEnded).toHaveBeenCalledOnce();
+  });
+
+  it("a run whose end is only ASKED for is not an ended run", async () => {
+    // The world takes as long as it takes to wind down. Until the server says
+    // otherwise the viewer stays with it -- being moved off a world that is
+    // still breathing would be the same lie as the label reading "Ended".
+    const onEnded = vi.fn();
+    const client = capability(["stopping"]);
+    await mount({ enabled: true, client, onEnded });
+
+    await act(async () => { latest?.requestStop(); });
+    for (let poll = 0; poll < 5; poll += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(15); });
+    }
+
+    expect(client.getLifecycle.mock.calls.length).toBe(5);
+    expect(latest?.confirmedStatus).toBe("stopping");
+    expect(onEnded).not.toHaveBeenCalled();
+  });
+
+  it("never says the run ended when the stop could not even be sent", async () => {
+    const onEnded = vi.fn();
+    const client = capability(["stopped"]);
+    client.stop.mockRejectedValueOnce(new Error("/api/run/stop returned HTTP 409"));
+    await mount({ enabled: true, client, onEnded });
+
+    await act(async () => { latest?.requestStop(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+
+    // The world is still running and the viewer must not lose it.
+    expect(latest?.error).toBe("/api/run/stop returned HTTP 409");
+    expect(client.getLifecycle).not.toHaveBeenCalled();
+    expect(onEnded).not.toHaveBeenCalled();
   });
 
   it("treats an unanswerable poll as silence, never as evidence of an ending", async () => {

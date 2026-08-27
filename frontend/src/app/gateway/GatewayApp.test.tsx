@@ -1,8 +1,9 @@
-import { act } from "react";
+import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GatewayApp } from "./GatewayApp";
+import { useRunStopController } from "../observer2d/runStopController";
 import { createMockRunLifecycleClient, MOCK_RUN_DEFAULTS_PAYLOAD } from "./mockRunLifecycleClient";
 import { RunStartRejectedError } from "./runLifecycleClient";
 import {
@@ -421,6 +422,111 @@ describe("pressing let's go live", () => {
       "seed",
     ]);
     expect(sent.beings).toHaveLength(4);
+  });
+});
+
+/**
+ * The observer's real stop seam, mounted by the gateway the way production
+ * mounts it: granted the gateway's own client, and reporting the ending back
+ * through the callback the gateway handed down. Nothing here is a stand-in for
+ * the rule under test — only the world it draws is missing.
+ */
+function StopProbe(props: {
+  readonly client: RunLifecycleClient;
+  readonly onRunEnded: () => void;
+}): ReactElement {
+  const stop = useRunStopController({
+    enabled: true,
+    client: props.client,
+    onEnded: props.onRunEnded,
+    pollMs: 10,
+  });
+  return (
+    <main data-testid="observer">
+      <button type="button" onClick={stop.requestStop}>End this run</button>
+      <span data-testid="stop-error">{stop.error ?? ""}</span>
+    </main>
+  );
+}
+
+describe("ending the run", () => {
+  it("comes back to the way in, ready for a NEW world", async () => {
+    // Safi, during his own live test: "end run should bring back to the home
+    // selection screen". The live world was never a route -- it is a state
+    // inside this component -- so coming back is a state transition, not a
+    // navigation, and it has to leave nothing of the ended run behind.
+    let clock = 0;
+    const getDefaults = vi.fn(() => Promise.resolve(defaults()));
+    const getLifecycle = vi.fn(() => Promise.resolve<RunLifecycle>({
+      run_id: "run-1",
+      status: "running",
+      raw_status: "running",
+    }));
+    await mount({
+      now: () => clock,
+      client: stubClient({ getDefaults, getLifecycle }),
+      renderObserver: (runId, onRunEnded) => (
+        <>
+          <main data-testid="observer">{runId}</main>
+          <button type="button" onClick={onRunEnded}>The run has ended</button>
+        </>
+      ),
+    });
+
+    await click("Set the conditions");
+    expect(getDefaults).toHaveBeenCalledOnce();
+    await click("Let's go live");
+    clock = 5_000;
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); });
+    expect(container?.querySelector('[data-testid="observer"]')).not.toBeNull();
+
+    const asked = getLifecycle.mock.calls.length;
+    await click("The run has ended");
+
+    expect(container?.querySelector('[data-testid="observer"]')).toBeNull();
+    expect(text()).toContain("A world that never ends");
+    expect(text()).toContain("Set the conditions");
+    // It is told, quietly, that the world ended -- otherwise a world vanishing
+    // and the way-in appearing is indistinguishable from something breaking.
+    expect(text()).toContain("That world has ended");
+
+    // And nothing is still attached to the dead run.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); });
+    expect(getLifecycle.mock.calls.length).toBe(asked);
+
+    // The next world is set from the world's own dials, read again -- not from
+    // the sheet the ended run was started with.
+    await click("Set the conditions");
+    expect(getDefaults).toHaveBeenCalledTimes(2);
+    expect(text()).not.toContain("That world has ended");
+  });
+
+  it("keeps the world when the stop itself fails", async () => {
+    // A stop that never happened must never cost the viewer the world: they
+    // would have lost it without having ended it.
+    const client = stubClient({
+      stop: () => Promise.reject(new Error("/api/run/stop returned HTTP 500")),
+    });
+    vi.useFakeTimers();
+    await mount({
+      client,
+      renderObserver: (_runId, onRunEnded) => (
+        <StopProbe client={client} onRunEnded={onRunEnded} />
+      ),
+    });
+
+    await click("Set the conditions");
+    await click("Let's go live");
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    expect(container?.querySelector('[data-testid="observer"]')).not.toBeNull();
+
+    await click("End this run");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+
+    expect(container?.querySelector('[data-testid="stop-error"]')?.textContent)
+      .toBe("/api/run/stop returned HTTP 500");
+    expect(container?.querySelector('[data-testid="observer"]')).not.toBeNull();
+    expect(text()).not.toContain("That world has ended");
   });
 });
 

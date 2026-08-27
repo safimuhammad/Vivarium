@@ -60,6 +60,19 @@ export type SpeechBubbleVariant = TextBubbleKind;
 export type CarriableIconKind = "energy" | "materials" | "loot" | "gift";
 
 /**
+ * Whether an overlay's owner is a thing that can walk away from the point its
+ * beat happened at.
+ *
+ * The whole difference between chrome that may keep its emitted point and
+ * chrome that may not. A being moves, so an overlay hung on one is only ever
+ * legible over that being's actual head — off stage, there is no head, and the
+ * emitted point is the grass it used to stand on. A structure does not move, so
+ * its door is where its beat happened whether or not the host's roster ever
+ * names it (see {@link setAnchorPositions}).
+ */
+export type OverlayOwnerKind = "being" | "structure";
+
+/**
  * A dotted aim-thread from a mark to a receiver cap above whoever the event was
  * aimed at, so "who it happened to" never needs a label. `severed` halts the
  * thread at 55% and strikes it through with two cut-ticks: a refusal is a bond
@@ -69,6 +82,11 @@ export interface OverlayThread {
   readonly to: Vec2;
   /** The being or structure aimed at, so the cap follows them while they move. */
   readonly toId?: string;
+  /**
+   * What {@link toId} names. Defaults to `"being"`: every thread but a home
+   * beat's runs to somebody, and a far end nobody is standing at is not drawn.
+   */
+  readonly toKind?: OverlayOwnerKind;
   readonly mode: "aim" | "severed";
   /** Family accent — the colour of a severed thread's cut-ticks. */
   readonly accent: string;
@@ -112,6 +130,12 @@ export type EnvironmentEffectRequest =
       at: Vec2;
       /** The being or home this banner is planted on; one live mark per owner. */
       ownerId: string;
+      /**
+       * What {@link ownerId} names. Defaults to `"being"` — the common case, and
+       * the safe one: a being's mark is retired with it rather than left
+       * standing on the ground it walked off.
+       */
+      ownerKind?: OverlayOwnerKind;
       glyph: OverlayGlyph;
       family: OverlayFamily;
       tier: OverlayTier;
@@ -331,6 +355,8 @@ interface TextOverlaySlot extends OverlaySlotBase {
 interface MarkOverlaySlot extends OverlaySlotBase {
   readonly kind: "mark";
   readonly ownerId: string;
+  /** Whether {@link ownerId} is a being (which can leave) or a structure (which cannot). */
+  readonly ownerKind: OverlayOwnerKind;
   readonly glyph: OverlayGlyph;
   readonly family: OverlayFamily;
   readonly built: PixelSurface;
@@ -356,6 +382,8 @@ interface GatherSlot extends OverlaySlotBase {
 interface ResidueSlot {
   readonly sequence: number;
   readonly ownerId: string;
+  /** Carried from the overlay this pip collapsed out of; see {@link OverlayOwnerKind}. */
+  readonly ownerKind: OverlayOwnerKind;
   readonly at: Vec2;
   readonly glyph: OverlayGlyph;
   readonly accent: string;
@@ -437,6 +465,19 @@ const FLYING_ITEM_POOL_CAPACITY = 12;
  * that lingers while the next line is already up reads as a leak, not a fade.
  */
 export const TEXT_FADE_OUT_MS = 400;
+/**
+ * How long an owner may be missing from the published anchor roster before its
+ * chrome is retired outright, in milliseconds.
+ *
+ * NOT a tolerance for drawing chrome at a stale point — a missing owner's
+ * overlay is hidden on the very first frame it is missing, in lockstep with the
+ * being itself, which the scene graph has also stopped drawing. This governs
+ * only when the SLOT is freed, and it exists because "missing" has two meanings:
+ * a being can drop out of a single roster mid-transition (an arrival's staging
+ * discarded and re-staged) without having gone anywhere. Comfortably longer than
+ * the actors' 180ms x 2 vanish-and-appear, so no transition can outlast it.
+ */
+export const ANCHOR_DEPARTURE_GRACE_MS = 600;
 /** Reduced motion extends every lifetime: less animation, never less information. */
 const REDUCED_MOTION_LIFETIME_FACTOR = 1.3;
 const RESIDUE_LIFETIME_MS = 6_000;
@@ -510,6 +551,10 @@ export class EnvironmentSystem {
   private presentation: ReturnType<typeof conditionPresentation>;
   private exclusionZones: Rect[] = [];
   private anchorPositions: ReadonlyMap<string, Vec2> = new Map();
+  /** False until a host publishes its first roster; see {@link setAnchorPositions}. */
+  private anchorRosterPublished = false;
+  /** Owners a published roster named once and has since dropped, and when it dropped them. */
+  private readonly departedOwners = new Map<string, number>();
   private nowMs = 0;
   private effectSequence = 0;
   private droppedEffects = 0;
@@ -601,19 +646,86 @@ export class EnvironmentSystem {
    * can run for tens of seconds, so chrome pinned to the emit-time point visibly
    * detaches from the head it belongs to. Positions are refreshed by the scene
    * graph on the same tick it refreshes exclusion zones, from the actors it has
-   * already ordered — no new source of truth, and an id that is absent simply
-   * keeps its last known point rather than inventing one.
+   * already ordered — no new source of truth.
+   *
+   * **The roster is also a census.** It names everything currently ON STAGE, so
+   * an id it does not name is a being the host is not drawing either. That is
+   * what makes a missing owner actionable rather than merely unknown: see
+   * {@link liveAnchorFor} for what each kind of owner does with the miss, and
+   * {@link ANCHOR_DEPARTURE_GRACE_MS} for when the slot is finally freed.
+   * Departures are stamped with this system's current presentation time, which
+   * {@link advanceTo} refreshes every frame, before the roster is published.
    */
   setAnchorPositions(positions: ReadonlyMap<string, Vec2>): void {
     if (this.disposed) return;
-    this.anchorPositions = new Map(
+    const next = new Map<string, Vec2>(
       [...positions].map(([id, point]) => [id, snapPoint(point)]),
     );
+    for (const id of this.anchorPositions.keys()) {
+      if (!next.has(id) && !this.departedOwners.has(id)) this.departedOwners.set(id, this.nowMs);
+    }
+    for (const id of next.keys()) this.departedOwners.delete(id);
+    this.anchorPositions = next;
+    this.anchorRosterPublished = true;
   }
 
-  /** The live point for an owned overlay, falling back to where it was emitted. */
-  private anchorFor(ownerId: string, emitted: Vec2): Vec2 {
-    return this.anchorPositions.get(ownerId) ?? emitted;
+  /**
+   * Where an owned overlay is drawn *this frame*, or `null` when its owner is
+   * not on stage to wear it.
+   *
+   * Three answers, and the middle one is the whole fix:
+   *
+   * 1. **The roster names the owner** — its live point, so chrome follows a
+   *    being that walks, flash-steps, or is repositioned mid-scene.
+   * 2. **The roster is live and does not name a being** — `null`. A being that
+   *    has left the stage takes its words, its mark and its residue with it.
+   *    Falling back to the emitted point here is what left a quote-mark chip
+   *    standing over the grass a being had walked out of, attributing a line to
+   *    nobody — the grammar's one hard rule, broken.
+   * 3. **A structure, or no roster at all** — the emitted point, which is still
+   *    the honest answer. A home cannot walk away from its own doorstep, and the
+   *    command resolver deliberately anchors a home beat at the acting being's
+   *    doorstep point when the placement ledger has learned no door, so a home
+   *    the roster never names must still be drawn. A host that publishes no
+   *    roster (unit fixtures, any embedding that does not drive the scene graph)
+   *    has expressed no opinion about who is on stage, and its emitted points
+   *    are the only truth there is.
+   */
+  private liveAnchorFor(ownerId: string, emitted: Vec2, kind: OverlayOwnerKind): Vec2 | null {
+    const live = this.anchorPositions.get(ownerId);
+    if (live !== undefined) return live;
+    if (!this.anchorRosterPublished || kind === "structure") return emitted;
+    return null;
+  }
+
+  /** Free every slot belonging to an owner a live roster stopped naming long enough ago. */
+  private retireDepartedOwners(): void {
+    for (const [ownerId, departedAtMs] of [...this.departedOwners]) {
+      if (this.nowMs - departedAtMs < ANCHOR_DEPARTURE_GRACE_MS) continue;
+      this.departedOwners.delete(ownerId);
+      this.retireOwnerChrome(ownerId);
+    }
+  }
+
+  /**
+   * Drop an owner's live and historical chrome without leaving residue.
+   *
+   * The one retirement path that mints nothing on the way out: a pip is a note
+   * pinned to a shoulder, and there is no shoulder left to pin it to.
+   */
+  private retireOwnerChrome(ownerId: string): void {
+    for (let index = 0; index < this.texts.length; index += 1) {
+      if (this.texts[index]?.ownerId === ownerId) this.texts[index] = null;
+    }
+    for (let index = 0; index < this.marks.length; index += 1) {
+      if (this.marks[index]?.ownerId === ownerId) this.marks[index] = null;
+    }
+    for (let index = 0; index < this.gathers.length; index += 1) {
+      if (this.gathers[index]?.ownerId === ownerId) this.gathers[index] = null;
+    }
+    for (let index = 0; index < this.residue.length; index += 1) {
+      if (this.residue[index]?.ownerId === ownerId) this.residue[index] = null;
+    }
   }
 
   /** Add a bounded transient effect, or record deterministic suppression/saturation. */
@@ -757,6 +869,7 @@ export class EnvironmentSystem {
       kind: "mark",
       sequence: this.effectSequence,
       ownerId: request.ownerId,
+      ownerKind: request.ownerKind ?? "being",
       at,
       tier: request.tier,
       glyph: request.glyph,
@@ -933,6 +1046,11 @@ export class EnvironmentSystem {
    * shoulder, keeping at most {@link RESIDUE_PER_OWNER} — oldest first out.
    */
   private pushResidue(slot: TextOverlaySlot | MarkOverlaySlot): void {
+    const ownerKind = overlayOwnerKind(slot);
+    // A pip is pinned to a shoulder. An overlay whose owner has left the stage
+    // expires with nobody to wear its history, and minting one here would put
+    // back the very chip {@link liveAnchorFor} exists to take away.
+    if (this.liveAnchorFor(slot.ownerId, slot.at, ownerKind) === null) return;
     const glyph = slot.kind === "mark" ? slot.glyph : slot.studGlyph;
     const accent = slot.kind === "mark"
       ? OVERLAY_FAMILY_ACCENT[slot.family]
@@ -953,6 +1071,7 @@ export class EnvironmentSystem {
     this.residue[availableIndex] = {
       sequence: this.effectSequence,
       ownerId: slot.ownerId,
+      ownerKind,
       at: slot.at,
       glyph,
       accent,
@@ -991,6 +1110,7 @@ export class EnvironmentSystem {
     expireByDeadline(this.gathers, nowMs);
     expireByDeadline(this.residue, nowMs);
     expireByDeadline(this.flyingItems, nowMs);
+    this.retireDepartedOwners();
   }
 
   /** Expire owned overlays, leaving a residue pip behind rather than nothing. */
@@ -1319,13 +1439,21 @@ export class EnvironmentSystem {
     const live = this.orderedOverlays();
 
     // 1. threads + receiver caps, under everything they connect.
+    // A thread is a line between two things. Either end off stage and the line
+    // is a stroke across empty ground: skip the whole thread rather than draw
+    // half of it. A thread with no `toId` runs to a fixed world point and is
+    // never in question.
     for (const slot of live) {
       const threads = slot.kind === "mark"
         ? slot.threads
         : slot.thread === null ? [] : [slot.thread];
-      const from = this.anchorFor(slot.ownerId, slot.at);
+      const from = this.liveAnchorFor(slot.ownerId, slot.at, overlayOwnerKind(slot));
+      if (from === null) continue;
       for (const thread of threads) {
-        const to = thread.toId === undefined ? thread.to : this.anchorFor(thread.toId, thread.to);
+        const to = thread.toId === undefined
+          ? thread.to
+          : this.liveAnchorFor(thread.toId, thread.to, thread.toKind ?? "being");
+        if (to === null) continue;
         this.drawThread(
           context,
           toScreenX(from.x),
@@ -1349,11 +1477,14 @@ export class EnvironmentSystem {
     const shoulders = new Map<string, number>();
     for (const pip of [...this.residue].filter((slot): slot is ResidueSlot => slot !== null)
       .sort((left, right) => left.sequence - right.sequence)) {
+      // Resolved BEFORE the shoulder column is claimed: a pip nobody is there
+      // to wear must not shift its neighbours along as though it were.
+      const at = this.liveAnchorFor(pip.ownerId, pip.at, pip.ownerKind);
+      if (at === null) continue;
       const column = shoulders.get(pip.ownerId) ?? 0;
       shoulders.set(pip.ownerId, column + 1);
       const age = this.nowMs - pip.startedAtMs;
       const alpha = Math.max(0.15, 1 - age / RESIDUE_LIFETIME_MS);
-      const at = this.anchorFor(pip.ownerId, pip.at);
       buildPip(pip.glyph, pip.accent, pip.invert).surface.blit(
         context,
         toScreenX(at.x + 9) + column * (14 * residueScale),
@@ -1379,7 +1510,8 @@ export class EnvironmentSystem {
         const phase = this.reducedMotion
           ? 1
           : Math.min(1, (this.nowMs - gather.startedAtMs) / GATHER_FILL_MS);
-        const at = this.anchorFor(gather.ownerId, gather.at);
+        const at = this.liveAnchorFor(gather.ownerId, gather.at, "being");
+        if (at === null) continue;
         buildGather(phase).surface.blit(
           context,
           toScreenX(at.x),
@@ -1468,7 +1600,10 @@ export class EnvironmentSystem {
         : slot.kind === "text"
           ? buildStud(slot.studGlyph, slot.hue).surface
           : buildStud(slot.glyph, OVERLAY_FAMILY_ACCENT[slot.family]).surface;
-      const at = this.anchorFor(slot.ownerId, slot.at);
+      // No anchor, no chrome: a bubble is only ever legible over the head that
+      // produced it, and a mark only on the thing it was planted in.
+      const at = this.liveAnchorFor(slot.ownerId, slot.at, overlayOwnerKind(slot));
+      if (at === null) continue;
       const anchorX = toScreenX(at.x);
       const anchorY = toScreenY(at.y - CONNECTOR_TIP_OFFSET_Y);
       if (overBudget) {
@@ -1707,10 +1842,21 @@ function clampIntoFrame(rect: Rect, frame: Rect | null): Rect {
   };
 }
 
+/**
+ * Whether a live overlay hangs on something that can leave the stage.
+ *
+ * A bubble's owner is its SPEAKER, and only a being speaks, so text is always
+ * being-owned; a mark carries the kind its request declared.
+ */
+function overlayOwnerKind(slot: TextOverlaySlot | MarkOverlaySlot): OverlayOwnerKind {
+  return slot.kind === "mark" ? slot.ownerKind : "being";
+}
+
 function copyThread(thread: OverlayThread): OverlayThread {
   return {
     to: snapPoint(thread.to),
     ...(thread.toId === undefined ? {} : { toId: thread.toId }),
+    ...(thread.toKind === undefined ? {} : { toKind: thread.toKind }),
     mode: thread.mode,
     accent: thread.accent,
     hue: thread.hue,

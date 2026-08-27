@@ -15,6 +15,15 @@
  * The API client is a seam. `?api=mock` swaps the HTTP client for an in-memory
  * stand-in so the screen is demonstrable and testable before the run-lifecycle
  * endpoints exist.
+ *
+ * Note what the observer is, here: **a view of this component, not a route**.
+ * Nothing navigates when a world opens — the URL is the bare `/` it always was
+ * and `view` becomes `observing`. So when the viewer ends that run there is no
+ * navigation to undo: coming back to the way in is the same state transition
+ * run backwards (owner direction, Safi, during a live test: "end run should
+ * bring back to the home selection screen"). It is deliberately a full reset —
+ * an idle launch, freshly-read dials — because what follows is a NEW world, not
+ * a resumption of the one that just ended.
  */
 
 import {
@@ -30,6 +39,7 @@ import {
 } from "react";
 
 import { LandingScreen } from "./LandingScreen";
+import { RUN_ENDED_NOTE } from "./copy";
 import { RunConfigScreen } from "./RunConfigScreen";
 import { createHttpRunLifecycleClient, RunStartRejectedError } from "./runLifecycleClient";
 import type { RunLifecycleClient } from "./runLifecycleClient";
@@ -77,8 +87,13 @@ export interface GatewayAppProps {
   readonly now?: () => number;
   /** Injected dice, so the land a test draws is pinned. */
   readonly random?: () => number;
-  /** Renders the live observer; injected so a test needs no renderer. */
-  readonly renderObserver?: (runId: string) => ReactNode;
+  /**
+   * Renders the live observer; injected so a test needs no renderer.
+   *
+   * The second argument is what the observer calls once the run it is watching
+   * is confirmed over — the same callback production hands to `Vivarium2DApp`.
+   */
+  readonly renderObserver?: (runId: string, onRunEnded: () => void) => ReactNode;
   /** Renders the recorded observer; injected so a test needs no renderer. */
   readonly renderRecording?: (base: string) => ReactNode;
 }
@@ -101,6 +116,8 @@ export function GatewayApp({
   const [defaultsState, setDefaultsState] = useState<DefaultsState>({ kind: "idle" });
   const [launch, dispatch] = useReducer(reduceLaunch, IDLE_LAUNCH);
   const [recordingAvailable, setRecordingAvailable] = useState<boolean | null>(null);
+  /** Set only on the way back from a run this viewer ended; cleared on the way out. */
+  const [endedNote, setEndedNote] = useState<string | null>(null);
   const nowRef = useRef(now);
   nowRef.current = now;
 
@@ -113,8 +130,29 @@ export function GatewayApp({
   }, [probeRecording, recordingBase]);
 
   const openConfiguration = useCallback(() => {
+    setEndedNote(null);
     setView("configuring");
     setDefaultsState((current) => (current.kind === "ready" ? current : { kind: "loading" }));
+  }, []);
+
+  /**
+   * Comes back from an ended world to the way in.
+   *
+   * Called by the observer once `GET /api/run` has itself reported the run
+   * terminal — never on the local fact that a stop was asked for, so a stop that
+   * failed or a world still winding down leaves the viewer with their world.
+   *
+   * Everything the ended run left behind goes with it: the launch returns to
+   * idle (so the waiting screen's poll is not still running, and the dead run's
+   * id is not still the one being observed) and the dials go back to unread, so
+   * the next world is configured from what the server says now rather than from
+   * the sheet the last one was started with.
+   */
+  const returnToGateway = useCallback((): void => {
+    dispatch({ kind: "reset" });
+    setDefaultsState({ kind: "idle" });
+    setView("landing");
+    setEndedNote(RUN_ENDED_NOTE);
   }, []);
 
   useEffect(() => {
@@ -200,7 +238,7 @@ export function GatewayApp({
 
   if (view === "observing" && launch.kind === "live") {
     return renderObserver !== undefined
-      ? <>{renderObserver(launch.runId)}</>
+      ? <>{renderObserver(launch.runId, returnToGateway)}</>
       : (
         <Suspense fallback={<GatewayLoading label="Opening the world" />}>
           {/*
@@ -210,7 +248,7 @@ export function GatewayApp({
             endpoint -- so without this hand-down the only way to stop a world
             was to kill the process.
           */}
-          <LazyVivarium2DApp runLifecycle={resolvedClient} />
+          <LazyVivarium2DApp runLifecycle={resolvedClient} onRunEnded={returnToGateway} />
         </Suspense>
       );
   }
@@ -265,8 +303,12 @@ export function GatewayApp({
 
   return (
     <LandingScreen
+      note={endedNote}
       onConfigure={openConfiguration}
-      onWatchRecording={recordingAvailable === false ? null : () => setView("watching")}
+      onWatchRecording={recordingAvailable === false ? null : () => {
+        setEndedNote(null);
+        setView("watching");
+      }}
       recordingNote="No recording is published on this machine yet."
     />
   );

@@ -875,6 +875,71 @@ describe("Vivarium2DApp", () => {
     expect(container.querySelector(".chronicle-killfeed__live")?.textContent).toContain("Ended");
   });
 
+  it("hands the ending back to whoever mounted it, only once the server confirms it", async () => {
+    // The observer has no idea whether it was reached from the gateway or from a
+    // deep link, so it does not decide where a viewer goes when the world ends --
+    // it reports the ending and the surface that mounted it owns the rest.
+    const onRunEnded = vi.fn();
+    const runLifecycle = {
+      stop: vi.fn(async () => ({ run_id: "public-test-run", status: "stopping", warnings: [] })),
+      getLifecycle: vi.fn(async () => ({ status: "stopped" as const })),
+    };
+    const fixture = runtimeFixture();
+    vi.useFakeTimers();
+    await act(async () => root.render(
+      <Vivarium2DApp
+        createRuntime={() => fixture.runtime}
+        runLifecycle={runLifecycle}
+        onRunEnded={onRunEnded}
+      />,
+    ));
+    await act(async () => fixture.runtime.ready);
+
+    // Nothing was asked, so nothing is polled and nobody is taken anywhere.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(runLifecycle.getLifecycle).not.toHaveBeenCalled();
+    expect(onRunEnded).not.toHaveBeenCalled();
+
+    await act(async () => required<HTMLButtonElement>(".observer-hud__stop").click());
+    await act(async () => required<HTMLButtonElement>(".observer-run-confirm__go").click());
+    // Asked for, not yet confirmed: the viewer stays with the world.
+    expect(onRunEnded).not.toHaveBeenCalled();
+    expect(required<HTMLButtonElement>(".observer-hud__stop").textContent).toBe("Ending…");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+    expect(onRunEnded).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the viewer with the world when the stop could not be sent", async () => {
+    // Losing the world WITHOUT having stopped it is the worst outcome here: the
+    // run is still breathing and the viewer has been taken away from it.
+    const onRunEnded = vi.fn();
+    const runLifecycle = {
+      stop: vi.fn(async () => { throw new Error("/api/run/stop returned HTTP 500"); }),
+      getLifecycle: vi.fn(async () => ({ status: "stopped" as const })),
+    };
+    const fixture = runtimeFixture();
+    vi.useFakeTimers();
+    await act(async () => root.render(
+      <Vivarium2DApp
+        createRuntime={() => fixture.runtime}
+        runLifecycle={runLifecycle}
+        onRunEnded={onRunEnded}
+      />,
+    ));
+    await act(async () => fixture.runtime.ready);
+
+    await act(async () => required<HTMLButtonElement>(".observer-hud__stop").click());
+    await act(async () => required<HTMLButtonElement>(".observer-run-confirm__go").click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+
+    expect(onRunEnded).not.toHaveBeenCalled();
+    expect(required(".observer-hud__run-error").textContent)
+      .toBe("/api/run/stop returned HTTP 500");
+    // And the control is back, because the run is still there to end.
+    expect(required<HTMLButtonElement>(".observer-hud__stop").textContent).toBe("End run");
+  });
+
   it("returns focus to the stable Selection trigger after inspecting from World", async () => {
     const fixture = runtimeFixture();
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));

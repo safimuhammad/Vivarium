@@ -4,6 +4,7 @@ import {
   BANNED_VIEWER_WORDS,
   LANDING_COPY,
   personaDisclaimer,
+  RUN_ENDED_NOTE,
   SEED_NOTE,
 } from "./copy";
 
@@ -68,12 +69,21 @@ describe("landing copy", () => {
       ...LANDING_COPY.body,
       ...LANDING_COPY.ways.flatMap((way) => [way.title, way.blurb, way.action]),
       SEED_NOTE,
+      RUN_ENDED_NOTE,
       ...personaDisclaimer(12),
     ].join(" ").toLowerCase();
 
     for (const word of BANNED_VIEWER_WORDS) {
       expect(surfaces).not.toMatch(new RegExp(`\\b${word}\\b`));
     }
+  });
+
+  it("acknowledges an ended run without congratulating anyone on it", () => {
+    // Shown on the way back from a run the viewer ended. It says what happened
+    // and where it went; there is no outcome here to be pleased about.
+    expect(RUN_ENDED_NOTE).toContain("has ended");
+    expect(RUN_ENDED_NOTE).toContain("chronicle");
+    expect(RUN_ENDED_NOTE.toLowerCase()).not.toMatch(/success|complete|finished|well done/);
   });
 
   it("offers exactly two ways in, the recording first", () => {

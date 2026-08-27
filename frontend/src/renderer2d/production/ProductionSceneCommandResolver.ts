@@ -1029,6 +1029,10 @@ function overlayCommands(
       kind: "event-mark",
       at,
       ownerId: anchorId,
+      // A home beat hangs on a structure, which cannot walk away from its own
+      // doorstep; everything else hangs on a being, whose mark leaves the map
+      // when it does (`EnvironmentSystem`'s `OverlayOwnerKind`).
+      ownerKind: mapping.anchor === "home" ? "structure" : "being",
       glyph: mapping.glyph,
       family: mapping.family,
       tier: mapping.tier,
@@ -1093,7 +1097,14 @@ function overlayThreads(
       const point = placement.agents.get(id)?.point;
       return point === undefined
         ? []
-        : [{ to: { ...point }, toId: id, mode, accent, hue: identityHue(id) } satisfies OverlayThread];
+        : [{
+            to: { ...point },
+            toId: id,
+            toKind: "being",
+            mode,
+            accent,
+            hue: identityHue(id),
+          } satisfies OverlayThread];
     });
   }
   // The thread always runs to the *other* party: from the actor's mark to the
@@ -1103,9 +1114,20 @@ function overlayThreads(
     ? facts.subjectId ?? facts.homeId
     : facts.actorId ?? facts.homeId;
   if (targetId === null) return [];
-  const point = placement.agents.get(targetId)?.point ?? placement.homes.get(targetId)?.door;
+  const being = placement.agents.get(targetId)?.point;
+  const point = being ?? placement.homes.get(targetId)?.door;
   if (point === undefined) return [];
-  return [{ to: { ...point }, toId: targetId, mode, accent, hue: identityHue(targetId) }];
+  // A thread's far end is drawn as a receiver cap ABOVE whatever it names, so
+  // the renderer needs the same being/structure distinction the mark itself
+  // carries: a cap over a being who has left the stage is furniture.
+  return [{
+    to: { ...point },
+    toId: targetId,
+    toKind: being === undefined ? "structure" : "being",
+    mode,
+    accent,
+    hue: identityHue(targetId),
+  }];
 }
 
 /**

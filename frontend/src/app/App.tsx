@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactElement } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState, type ReactElement } from "react";
 
 import { parseRendererMode } from "./rendererMode";
 import type { Vivarium2DAppProps } from "./Vivarium2DApp";
@@ -62,6 +62,33 @@ export function App({ production2dProps }: AppProps = {}) {
     window.addEventListener("popstate", readRoute);
     return () => window.removeEventListener("popstate", readRoute);
   }, []);
+  /**
+   * Where a deep-linked viewer goes when the run they were watching has ended.
+   *
+   * The gateway needs nothing like this: its live world is a state inside it and
+   * the URL never left `/`, so it simply goes back to its own way in. This route
+   * is the one place a live world genuinely IS a route, so returning is a real
+   * navigation — and the honest one is to stop naming the renderer, which lands
+   * the viewer on whatever `/` serves. Everything else the deep link said is
+   * kept, so a viewer who came in at a seam comes back to the way in at that
+   * same seam.
+   *
+   * `replaceState`, because the entry it replaces names a run that no longer
+   * exists — a Back button that returns to a world that has ended is a dead
+   * link, not a way back. Nothing calls this on a surface with no run to end:
+   * fixtures, recordings and the capture harness are granted no stop capability
+   * and never report an ending.
+   */
+  const returnToGateway = useCallback((): void => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("renderer");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+    setSearch(window.location.search);
+  }, []);
   const mode = parseRendererMode(search);
   if (mode === "2d-slice") {
     return (
@@ -73,7 +100,7 @@ export function App({ production2dProps }: AppProps = {}) {
   if (mode === "2d") {
     return (
       <Suspense fallback={<main aria-label="Loading production 2D world" />}>
-        <LazyVivarium2DApp {...production2dProps} />
+        <LazyVivarium2DApp onRunEnded={returnToGateway} {...production2dProps} />
       </Suspense>
     );
   }

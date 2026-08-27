@@ -44,6 +44,18 @@ export const BANNED_VIEWER_WORDS: readonly string[] = [
   "npcs",
 ];
 
+/**
+ * What the way-in says to a viewer who has just ended a run.
+ *
+ * A world vanishing and the landing page appearing is, on its own,
+ * indistinguishable from something having broken. One line fixes that: it
+ * confirms the ending was the thing they asked for, and says where what happened
+ * went. It is shown only on the way back from an ended run and is gone the
+ * moment they move on.
+ */
+export const RUN_ENDED_NOTE
+  = "That world has ended. What happened in it stays in the chronicle.";
+
 /** Ordinals for the cadences the server actually offers; anything else falls back to digits. */
 const WRITTEN_ORDINALS: Readonly<Record<number, string>> = {
   6: "sixth",

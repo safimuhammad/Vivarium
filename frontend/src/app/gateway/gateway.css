@@ -159,6 +159,21 @@
   line-height: 1.6;
 }
 
+/*
+ * The homecoming line, shown only when a viewer has just ended a run.
+ * Quiet on purpose: it acknowledges, it does not congratulate.
+ */
+.landing-note {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 20px;
+  padding: 8px 0 8px 14px;
+  border-left: 2px solid var(--gold);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .landing-ways {
   display: flex;
   flex-direction: column;

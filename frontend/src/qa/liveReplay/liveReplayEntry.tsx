@@ -7,13 +7,22 @@
  * `openEventStream` inward is production code; see `recordedLiveBridge.ts` for
  * the exact list of impersonated seams.
  *
+ * `&gateway=1` mounts the whole way in around that same replayed world — the
+ * real `GatewayApp` over the mock lifecycle client, with the replayed observer
+ * injected where the live one goes. That is the only way to see the full
+ * journey (conditions → world → End run → back to the way in) by eye without a
+ * server and without a live run.
+ *
  * It is a dev-only route: it is not one of the built HTML inputs in
  * `vite.config.ts`, so it costs the shipped bundle nothing.
  */
 
+import type { ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Vivarium2DApp } from "../../app/Vivarium2DApp";
+import { GatewayApp } from "../../app/gateway/GatewayApp";
+import { createMockRunLifecycleClient } from "../../app/gateway/mockRunLifecycleClient";
 import { createProductionObserverSession } from "../../app/observer2d/createProductionObserverSession";
 import {
   createObserverShellRuntime,
@@ -68,6 +77,7 @@ async function boot(): Promise<void> {
   const rate = Number(query.get("rate") ?? "1");
   const runId = query.get("run") ?? "seed";
   const realCheckpoints = query.get("checkpoints") === "1";
+  const throughGateway = query.get("gateway") === "1";
 
   const [eventsText, snapshotsText] = await Promise.all([
     fetchText(`${base}/events.jsonl`),
@@ -123,11 +133,39 @@ async function boot(): Promise<void> {
     },
   };
 
-  createRoot(root).render(
-    <Vivarium2DApp createRuntime={createRuntime} runLifecycle={runLifecycle} />,
+  const driver = createReplayDriver({ recording, bridge, rate });
+  // The session opens its stream during `ready`; delivering before that would
+  // simply be counted as undelivered. Through the gateway the observer mounts
+  // only once a viewer has clicked through, so the wait starts from there.
+  let driverStarted = false;
+  const startDriver = (): void => {
+    if (driverStarted) return;
+    driverStarted = true;
+    window.setTimeout(() => driver.start(), 1_200);
+  };
+
+  const observer = (onRunEnded?: () => void): ReactElement => (
+    <Vivarium2DApp
+      createRuntime={createRuntime}
+      runLifecycle={runLifecycle}
+      {...(onRunEnded === undefined ? {} : { onRunEnded })}
+    />
   );
 
-  const driver = createReplayDriver({ recording, bridge, rate });
+  createRoot(root).render(
+    throughGateway
+      ? (
+        <GatewayApp
+          client={createMockRunLifecycleClient({ startingMs: 1_500 })}
+          renderObserver={(_runId, onRunEnded) => {
+            startDriver();
+            return observer(onRunEnded);
+          }}
+        />
+      )
+      : observer(),
+  );
+  if (!throughGateway) startDriver();
   window.__vivariumLiveReplay = {
     runId: recording.runId,
     events: recording.recorded.entries.length,
@@ -141,9 +179,6 @@ async function boot(): Promise<void> {
     runLifecycleCalls: () => [...lifecycleCalls],
     setRunStatus: (status: string) => { runStatus = status as RunLifecycleStatus; },
   };
-  // The session opens its stream during `ready`; delivering before that would
-  // simply be counted as undelivered.
-  window.setTimeout(() => driver.start(), 1_200);
 }
 
 void boot().catch((error: unknown) => {
