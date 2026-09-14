@@ -385,6 +385,126 @@ describe("CanvasPresentationRenderer hostile integration REDs", () => {
     },
   );
 
+  it("settles an unseen typed remote arrival while Auto keeps its local dwell", async () => {
+    const remoteRegions = [
+      region("worn", "a once-heavenly landscape, now thinning and picked-over", ["spring"]),
+      region("spring", "hot spring lakes", ["worn", "remote"]),
+      region("remote", "a quiet far ridge", ["spring"]),
+    ] as const;
+    const remoteRecipes = remoteRegions.map((value) =>
+      createRegionMapRecipe(createRegionMapIdentity(171, value, remoteRegions)));
+    const remoteRecipeMap = new Map(remoteRecipes.map((recipe) => [recipe.regionId, recipe]));
+    const resident = agentSnapshot("resident", "worn");
+    const traveler = agentSnapshot("traveler", "remote");
+    const placement = PlacementLedger.reconstruct(remoteRecipes, {
+      agents: [resident, traveler],
+      homes: [],
+    });
+    const contract = arrivalContract(traveler.id, "remote", "spring", remoteRecipeMap, 760);
+    let pool!: ScriptedAtlasPool;
+    pool = new ScriptedAtlasPool((id) => Promise.resolve(pool.newLease(id)));
+    const driver = new FakeFrameDriver();
+    const renderer = await createCanvasPresentationRenderer({
+      canvas: document.createElement("canvas"),
+      callbacks: {},
+      manifest: PRODUCTION_ASSET_MANIFEST,
+      factories: REAL_FACTORIES,
+      placement,
+      recipes: remoteRecipeMap,
+      atlasPool: pool,
+      frameDriver: driver,
+      wakeScheduler: new FakeWakeScheduler(),
+      visibilityTarget: new FakeVisibilityTarget(),
+      resolveSceneCommands: (next) => {
+        if (next.scene?.execution?.eventType === "agent_entered_region") {
+          return arrivalBatch(next, contract);
+        }
+        return {
+          identity: {
+            runId: next.runId,
+            sourceKey: next.sourceKey,
+            revision: next.revision,
+            firstCursor: next.firstCursor,
+            lastCursor: next.lastCursor,
+          },
+          sceneToken: contract.sceneToken - 1,
+          commands: [],
+        };
+      },
+    }) as CanvasPresentationRenderer;
+
+    const local = frame({
+      revision: 1,
+      regionId: "worn",
+      agents: [resident, traveler],
+      regions: remoteRegions,
+    });
+    renderer.updatePresentation({
+      ...local,
+      scene: {
+        ...local.scene!,
+        momentId: "local-work",
+        focus: { kind: "agent", id: resident.id },
+        execution: {
+          sceneToken: contract.sceneToken - 1,
+          programId: "choreography:local-work:resource_changed",
+          eventType: "resource_changed",
+        },
+      },
+    });
+    await settle();
+    expect(renderer.debug()).toMatchObject({
+      visibleRegionId: "worn",
+      graph: { activeRegion: { id: "worn" } },
+    });
+
+    const remoteArrival = (
+      revision: 2 | 3 | 4,
+      phase: "enter" | "hold" | "consequence",
+      value: AgentSnapshot,
+    ): PresentedObserverFrame => {
+      const next = arrivalFrame(revision, phase, value, contract, remoteRegions, false);
+      return {
+        ...next,
+        world: {
+          ...next.world,
+          agents: [exact(resident), exact(value)],
+        },
+      };
+    };
+
+    driver.fire(1);
+    renderer.updatePresentation(remoteArrival(2, "enter", traveler));
+    await settle();
+    driver.fire(2);
+    renderer.updatePresentation(remoteArrival(3, "hold", traveler));
+    await settle();
+    driver.fire(3);
+    renderer.updatePresentation(remoteArrival(4, "consequence", { ...traveler, position: "spring" }));
+    await settle();
+
+    const settled = renderer.debug();
+    expect(settled).toMatchObject({
+      visibleRegionId: "worn",
+      graph: {
+        activeRegion: { id: "worn" },
+        regionTransitions: [expect.objectContaining({
+          actorId: traveler.id,
+          fromRegion: "remote",
+          toRegion: "spring",
+          position: contract.gate,
+        })],
+      },
+    });
+    expect(settled.graph.actors.some(({ id }) => id === traveler.id)).toBe(false);
+    expect(placement.snapshot().agents.get(traveler.id)).toMatchObject({
+      regionId: "spring",
+      anchorKind: "arrival:remote",
+      point: contract.routeEnd,
+    });
+    renderer.dispose();
+  });
+
   it.each([false, true])(
     "RED: commits arrival while Free observes the source and returns the same routed traveller (reduced=%s)",
     async (reducedMotion) => {

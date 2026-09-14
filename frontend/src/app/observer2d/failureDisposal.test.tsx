@@ -91,7 +91,7 @@ describe("production observer failure and lifecycle composition", () => {
     expect(fixture.runtime.returnToLive).not.toHaveBeenCalled();
   });
 
-  it("keeps one Canvas through Live and Archive churn and rejects callbacks from the replaced run", async () => {
+  it("keeps one renderer through Live and Archive churn and rejects callbacks from the replaced run", async () => {
     const first = mutableRuntimeFixture("run-a");
     const replacement = mutableRuntimeFixture("run-b");
     const renderers = [fakeRenderer(), fakeRenderer()];
@@ -112,7 +112,7 @@ describe("production observer failure and lifecycle composition", () => {
     ));
     await settle();
     const staleCallbacks = createRenderer.mock.calls[0]![0].callbacks;
-    expect(container.querySelectorAll("canvas")).toHaveLength(1);
+    expect(container.querySelectorAll("canvas")).toHaveLength(2);
 
     await act(async () => first.publishSource("archive", 2));
     await settle();
@@ -120,7 +120,7 @@ describe("production observer failure and lifecycle composition", () => {
     await settle();
 
     expect(createRenderer).toHaveBeenCalledOnce();
-    expect(container.querySelectorAll("canvas")).toHaveLength(1);
+    expect(container.querySelectorAll("canvas")).toHaveLength(2);
     expect(renderers[0]!.updatePresentation).toHaveBeenLastCalledWith(
       first.runtime.frameSource.getSnapshot(),
     );
@@ -134,7 +134,7 @@ describe("production observer failure and lifecycle composition", () => {
     expect(first.unsubscribe).toHaveBeenCalledOnce();
     expect(renderers[0]!.dispose).toHaveBeenCalledOnce();
     expect(createRenderer).toHaveBeenCalledTimes(2);
-    expect(container.querySelectorAll("canvas")).toHaveLength(1);
+    expect(container.querySelectorAll("canvas")).toHaveLength(2);
     expect(renderers[1]!.updatePresentation).toHaveBeenLastCalledWith(
       replacement.runtime.frameSource.getSnapshot(),
     );
@@ -162,7 +162,7 @@ describe("production observer failure and lifecycle composition", () => {
     expect(first.setCameraMode).not.toHaveBeenCalled();
     expect(replacement.select).not.toHaveBeenCalled();
     expect(replacement.setCameraMode).not.toHaveBeenCalled();
-    expect(container.querySelectorAll("canvas")).toHaveLength(1);
+    expect(container.querySelectorAll("canvas")).toHaveLength(2);
     expect(required(".vivarium-2d-app").getAttribute("data-presented-source")).toBe("live");
   });
 
@@ -200,7 +200,7 @@ describe("production observer failure and lifecycle composition", () => {
     expect(createRenderer.mock.calls[1]![0].signal).not.toBe(
       createRenderer.mock.calls[0]![0].signal,
     );
-    expect(container.querySelectorAll("canvas")).toHaveLength(1);
+    expect(container.querySelectorAll("canvas")).toHaveLength(2);
     expect(required(".presentation-world-stage").getAttribute("data-ready")).toBe("true");
   });
 

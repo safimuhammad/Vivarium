@@ -43,6 +43,9 @@
   --killfeed-band: clamp(15rem, 18vw, 22rem);
   --killfeed-gap: 14px;
   --killfeed-reserve: calc(var(--killfeed-rail) + var(--killfeed-band) + var(--killfeed-gap));
+  --observer-active-drawer-width: var(--killfeed-band);
+  --observer-active-drawer-right: calc(var(--killfeed-rail) + env(safe-area-inset-right));
+  --observer-active-drawer-gap: var(--killfeed-gap);
 }
 
 .chronicle-killfeed.observer-drawer {
@@ -626,13 +629,16 @@ select) {
 .chronicle-killfeed__card.is-knell .chronicle-killfeed__line { font-weight: 700; }
 
 .chronicle-killfeed .chronicle-killfeed__quote {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
   margin: 2px 0 0 22px;
   padding-left: 6px;
   border-left: 2px solid rgb(236 226 204 / 22%);
   font-size: 0.7rem;
   line-height: 1.3;
-  color: rgb(243 235 206 / 72%);
+  color: rgb(243 235 206 / 88%);
 }
 
 .chronicle-killfeed__quote.is-thought { border-left-style: dashed; }
@@ -643,8 +649,8 @@ select) {
   flex-wrap: wrap;
   gap: 2px 5px;
   margin: 1px 0 0 22px;
-  font-size: 0.58rem;
-  color: rgb(236 226 204 / 42%);
+  font-size: 0.64rem;
+  color: var(--killfeed-muted);
 }
 
 .chronicle-killfeed .chronicle-killfeed__figures {
@@ -810,10 +816,10 @@ select) {
   gap: 8px;
   padding: 4px 7px;
   border-bottom: 1px solid rgb(236 226 204 / 10%);
-  font-size: 0.54rem;
+  font-size: 0.6rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: rgb(236 226 204 / 34%);
+  color: var(--killfeed-muted);
 }
 
 .chronicle-killfeed__detail-type { color: var(--accent); }
@@ -849,19 +855,19 @@ select) {
 .chronicle-killfeed .chronicle-killfeed__said span {
   display: block;
   margin-bottom: 2px;
-  font-size: 0.52rem;
+  font-size: 0.6rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: rgb(236 226 204 / 28%);
+  color: var(--killfeed-muted);
 }
 
 .chronicle-killfeed .chronicle-killfeed__detail h3 {
   margin: 5px 0 2px;
-  font-size: 0.52rem;
+  font-size: 0.6rem;
   font-weight: 500;
   letter-spacing: 0.2em;
   text-transform: uppercase;
-  color: rgb(236 226 204 / 26%);
+  color: var(--killfeed-muted);
 }
 
 .chronicle-killfeed__detail dl { margin: 0; }
@@ -871,7 +877,7 @@ select) {
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
-  padding: 1px 0;
+  padding: 5px 0;
   border-bottom: 1px solid rgb(236 226 204 / 5%);
 }
 
@@ -882,11 +888,11 @@ select) {
   background: rgb(228 189 92 / 12%);
 }
 
-.chronicle-killfeed__detail dt { font-size: 0.62rem; color: rgb(236 226 204 / 46%); }
+.chronicle-killfeed__detail dt { font-size: 0.7rem; color: var(--killfeed-muted); }
 
 .chronicle-killfeed .chronicle-killfeed__detail dd {
   margin: 0;
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: rgb(236 226 204 / 88%);
@@ -908,7 +914,7 @@ select) {
   font-size: 0.48rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: rgb(236 226 204 / 28%);
+  color: var(--killfeed-muted);
 }
 
 .chronicle-killfeed__chain ul { margin: 0; padding: 0; list-style: none; }
@@ -917,18 +923,18 @@ select) {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 0.62rem;
-  color: rgb(236 226 204 / 55%);
+  font-size: 0.7rem;
+  color: var(--killfeed-muted);
 }
 
 .chronicle-killfeed__chain svg { color: var(--accent); align-self: center; }
-.chronicle-killfeed__chain b { font-size: 0.56rem; color: rgb(236 226 204 / 32%); }
+.chronicle-killfeed__chain b { font-size: 0.56rem; color: var(--killfeed-muted); }
 
 .chronicle-killfeed .chronicle-killfeed__chain p {
   margin: 4px 0 0;
-  font-size: 0.52rem;
+  font-size: 0.6rem;
   font-style: italic;
-  color: rgb(236 226 204 / 26%);
+  color: var(--killfeed-muted);
 }
 
 /* --- the transport cluster: what the old bottom bar used to stretch across --- */
@@ -938,7 +944,7 @@ select) {
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 4px 6px;
+  padding: 7px 8px;
   border: 1px solid var(--killfeed-hair);
   border-radius: 3px;
   background: var(--killfeed-scrim);
@@ -948,7 +954,7 @@ select) {
 
 .chronicle-killfeed__transport button,
 .chronicle-killfeed .chronicle-killfeed__transport select {
-  min-height: 22px;
+  min-height: 30px;
   padding: 1px 7px;
   border: 1px solid var(--killfeed-hair);
   border-radius: 2px;
@@ -963,10 +969,10 @@ select) {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 0.54rem;
+  font-size: 0.6rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgb(236 226 204 / 34%);
+  color: var(--killfeed-muted);
 }
 
 .chronicle-killfeed .chronicle-killfeed__live {
@@ -1207,4 +1213,613 @@ select) {
 .chronicle-killfeed .chronicle-killfeed__notices span {
   font-variant-numeric: tabular-nums;
   color: rgb(242 200 186 / 62%);
+}
+
+/*
+ * Expressive Chronicle reader
+ *
+ * The old surface was a transient killfeed. The Chronicle is now a reader: it
+ * keeps every event the bounded stream still retains, gives the reader a real
+ * scroll surface, and only follows new cards while they remain at the newest
+ * edge. The panel is a translucent dark pine field so event cards can use
+ * quieter, differentiated treatments without losing contrast over the world.
+ */
+.chronicle-killfeed--reader.observer-drawer {
+  --killfeed-band: clamp(23rem, 31vw, 31rem);
+  --killfeed-scrim: rgb(8 29 24 / 84%);
+  --killfeed-scrim-strong: rgb(5 23 19 / 94%);
+  --killfeed-hair: rgb(228 189 92 / 24%);
+  --killfeed-muted: #c4c6af;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgb(228 189 92 / 42%);
+  border-radius: 14px;
+  background:
+    linear-gradient(150deg, rgb(19 61 49 / 86%), rgb(5 26 22 / 94%)),
+    rgb(5 26 22 / 92%);
+  box-shadow: 0 16px 42px rgb(0 0 0 / 46%), inset 0 1px rgb(255 241 194 / 10%);
+  pointer-events: auto;
+}
+
+@supports (backdrop-filter: blur(1px)) {
+  .chronicle-killfeed--reader.observer-drawer { backdrop-filter: blur(16px) saturate(118%); }
+}
+
+.observer-primary-surface > .chronicle-killfeed--reader.observer-drawer,
+.chronicle-killfeed--reader.observer-drawer > * { pointer-events: auto; }
+
+.chronicle-killfeed--reader.observer-drawer > .chronicle-killfeed__top,
+.chronicle-killfeed--reader.observer-drawer > .chronicle-killfeed__bottom {
+  gap: 9px;
+}
+
+.chronicle-killfeed--reader.observer-drawer > .chronicle-killfeed__bottom {
+  justify-content: flex-start;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__head {
+  align-items: flex-start;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__head > span:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__head h2 {
+  padding: 0;
+  background: none;
+  box-shadow: none;
+  color: #fff1cc;
+  font-size: 1.65rem;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  text-transform: none;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__head button {
+  min-height: 32px;
+  padding: 3px 9px;
+  border-color: rgb(228 189 92 / 40%);
+  background: rgb(4 22 18 / 58%);
+  color: #e5dcc0;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__live-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #b8d8c0;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__live-note i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4ee19b;
+  box-shadow: 0 0 0 3px rgb(78 225 155 / 15%);
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__live-note.is-disconnected i,
+.chronicle-killfeed--reader .chronicle-killfeed__live-note.is-ended i {
+  background: #d98a71;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__filters button {
+  min-height: 34px;
+  border: 1px solid rgb(111 200 166 / 38%);
+  border-radius: 7px;
+  background: rgb(3 29 24 / 52%);
+  color: #c7d5c8;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__filters button.is-selected {
+  border-color: var(--killfeed-gold);
+  background: linear-gradient(180deg, rgb(228 189 92 / 29%), rgb(136 100 33 / 20%));
+  color: #fff3d2;
+  box-shadow: inset 0 0 0 1px rgb(255 237 174 / 18%);
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__camera {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid rgb(109 174 145 / 25%);
+  border-radius: 8px;
+  background: rgb(3 22 18 / 42%);
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__standing {
+  gap: 5px;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__condition {
+  min-height: 28px;
+  border-radius: 6px;
+  background: rgb(4 24 20 / 56%);
+  color: #d7ddc4;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__reader {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: rgb(228 189 92 / 55%) transparent;
+  scrollbar-width: thin;
+  padding: 2px 3px 2px 0;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__flow {
+  display: grid;
+  /* The reader owns scrolling; rows must retain their content height. */
+  flex: none;
+  height: auto;
+  grid-auto-rows: max-content;
+  justify-content: stretch;
+  align-content: start;
+  gap: 9px;
+  min-height: 0;
+  margin: 0;
+  padding: 0 2px 12px;
+  overflow: visible;
+  mask-image: none;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__flow > * { min-width: 0; }
+
+.chronicle-killfeed--reader .chronicle-killfeed__horizon,
+.chronicle-killfeed--reader .chronicle-killfeed__quiet,
+.chronicle-killfeed--reader .chronicle-killfeed__burst {
+  width: auto;
+  justify-self: stretch;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: rgb(4 25 21 / 58%);
+  color: #b8c5ae;
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__burst {
+  border-color: rgb(228 189 92 / 48%);
+  color: #f6d88a;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card {
+  min-height: 0;
+  padding: 10px;
+  border: 1px solid rgb(157 209 184 / 22%);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  background: linear-gradient(125deg, rgb(13 51 42 / 86%), rgb(5 30 25 / 90%));
+  box-shadow: 0 5px 14px rgb(0 0 0 / 24%);
+  animation: chronicle-reader-arrive 180ms ease-out;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card:hover {
+  border-color: rgb(244 220 154 / 62%);
+  background: linear-gradient(125deg, rgb(18 62 50 / 94%), rgb(7 37 30 / 96%));
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card.is-open,
+.chronicle-killfeed--reader .chronicle-killfeed__card.is-leading {
+  border-color: var(--killfeed-gold);
+  background: linear-gradient(125deg, rgb(51 72 43 / 92%), rgb(13 46 36 / 96%));
+  box-shadow: 0 0 0 1px rgb(228 189 92 / 20%), 0 7px 18px rgb(0 0 0 / 30%);
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card.is-arrival {
+  background: linear-gradient(125deg, rgb(50 75 46 / 96%), rgb(17 50 38 / 96%));
+  color: #fff4d8;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card.is-rupture {
+  margin-left: 0;
+  padding-left: 13px;
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  background: linear-gradient(125deg, rgb(73 34 29 / 90%), rgb(29 24 20 / 94%));
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__tear { width: 3px; clip-path: none; }
+
+.chronicle-killfeed--reader .chronicle-killfeed__card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-bottom: 7px;
+  color: #b9cdb9;
+  font-size: 0.64rem;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card-head time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: #d8d8bb;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__kind {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--killfeed-gold);
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__portraits {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  padding-left: 3px;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__portrait {
+  position: relative;
+  z-index: 0;
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  margin-left: -5px;
+  border: 2px solid #0a2a22;
+  border-radius: 8px;
+  background: var(--portrait-hue);
+  box-shadow: inset 0 0 0 1px rgb(255 247 210 / 30%);
+  color: #11271e;
+  font-size: 0.59rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__portrait:hover:not(:disabled),
+.chronicle-killfeed--reader .chronicle-killfeed__portrait.is-following {
+  z-index: 1;
+  border-color: var(--killfeed-gold);
+  color: #0c2018;
+  transform: translateY(-1px);
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__portrait.is-gone {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__replay { gap: 8px; }
+
+.chronicle-killfeed--reader .chronicle-killfeed__medallion {
+  width: 23px;
+  height: 23px;
+  border-radius: 7px;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__line {
+  color: #fff1d1;
+  font-size: 0.88rem;
+  line-height: 1.42;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__quote {
+  display: grid;
+  gap: 3px;
+  margin: 9px 0 0 31px;
+  padding: 7px 9px;
+  border: 1px solid rgb(222 234 204 / 18%);
+  border-left: 3px solid #e5cf8c;
+  border-radius: 0 7px 7px 0;
+  background: rgb(2 22 18 / 48%);
+  color: #f4ead0;
+  font-size: 0.78rem;
+  line-height: 1.42;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__quote > span {
+  color: #d7c281;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__quote q { quotes: "“" "”"; }
+
+.chronicle-killfeed--reader .chronicle-killfeed__quote.is-private-thought {
+  border-left-style: dashed;
+  color: #d7dec8;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__quote.is-private-thought > span { color: #a8c4ac; }
+.chronicle-killfeed--reader .chronicle-killfeed__quote.is-proposal { border-left-color: #e4bd5c; }
+.chronicle-killfeed--reader .chronicle-killfeed__quote.is-refusal { border-left-color: #d98370; }
+
+.chronicle-killfeed--reader .chronicle-killfeed__travel-route,
+.chronicle-killfeed--reader .chronicle-killfeed__resource-fact,
+.chronicle-killfeed--reader .chronicle-killfeed__shelter-notice,
+.chronicle-killfeed--reader .chronicle-killfeed__lifecycle-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: calc(100% - 31px);
+  margin: 8px 0 0 31px;
+  padding: 4px 7px;
+  border: 1px solid rgb(189 219 193 / 20%);
+  border-radius: 6px;
+  background: rgb(3 26 21 / 54%);
+  color: #dfe8d1;
+  font-size: 0.68rem;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__travel-route b { color: var(--killfeed-gold); }
+.chronicle-killfeed--reader .chronicle-killfeed__travel-route small { color: #b4d7b8; text-transform: capitalize; }
+.chronicle-killfeed--reader .chronicle-killfeed__resource-fact { color: #ffe6a5; font-variant-numeric: tabular-nums; }
+.chronicle-killfeed--reader .chronicle-killfeed__shelter-notice { color: #e5d09b; }
+.chronicle-killfeed--reader .chronicle-killfeed__lifecycle-notice[data-lifecycle-state="fallen"] { border-color: rgb(218 128 97 / 60%); color: #ffd2c0; }
+.chronicle-killfeed--reader .chronicle-killfeed__lifecycle-notice[data-lifecycle-state="dead"] { border-color: rgb(185 173 160 / 55%); color: #e5ded4; }
+.chronicle-killfeed--reader .chronicle-killfeed__lifecycle-notice[data-lifecycle-state="recovered"] { border-color: rgb(100 220 159 / 50%); color: #bdf5ce; }
+.chronicle-killfeed--reader .chronicle-killfeed__lifecycle-notice[data-lifecycle-state="born"] { border-color: rgb(228 189 92 / 60%); color: #ffe8ad; }
+
+.chronicle-killfeed--reader .chronicle-killfeed__meta {
+  margin: 9px 0 0 31px;
+  font-size: 0.68rem;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__being {
+  color: #dbe7d4;
+  font-size: 0.68rem;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card-actions button {
+  min-height: 27px;
+  padding: 2px 8px;
+  border: 1px solid rgb(228 189 92 / 42%);
+  border-radius: 6px;
+  background: rgb(5 29 23 / 66%);
+  color: #e7d9ab;
+  font-size: 0.64rem;
+  cursor: pointer;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card-actions button:last-child {
+  border-color: rgb(104 206 161 / 44%);
+  color: #bce8c7;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__reader-pause {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid rgb(228 189 92 / 48%);
+  border-radius: 8px;
+  background: rgb(53 47 23 / 74%);
+  color: #fff0bb;
+  font-size: 0.68rem;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__reader-pause button {
+  min-height: 27px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid rgb(255 235 170 / 55%);
+  border-radius: 6px;
+  background: rgb(4 28 22 / 52%);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__transport {
+  flex: none;
+  padding: 8px;
+  border-color: rgb(228 189 92 / 35%);
+  border-radius: 9px;
+  background: rgb(3 23 19 / 72%);
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__transport button,
+.chronicle-killfeed--reader .chronicle-killfeed__transport select {
+  min-height: 32px;
+  border-radius: 6px;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__contract {
+  color: #bfcbb5;
+  font-size: 0.63rem;
+}
+
+@keyframes chronicle-reader-arrive {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chronicle-killfeed--reader .chronicle-killfeed__card { animation: none; }
+  .chronicle-killfeed--reader .chronicle-killfeed__portrait:hover:not(:disabled) { transform: none; }
+}
+
+@media (max-width: 760px) {
+  .chronicle-killfeed--reader.observer-drawer {
+    --observer-drawer-width: auto;
+    inset: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
+      max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    width: auto;
+    max-width: none;
+    padding: 10px;
+    border-radius: 12px;
+  }
+
+  .chronicle-killfeed--reader .chronicle-killfeed__head h2 { font-size: 1.42rem; }
+  .chronicle-killfeed--reader .chronicle-killfeed__card { padding: 9px; }
+  .chronicle-killfeed--reader .chronicle-killfeed__line { font-size: 0.84rem; }
+  .chronicle-killfeed--reader .chronicle-killfeed__quote,
+  .chronicle-killfeed--reader .chronicle-killfeed__travel-route,
+  .chronicle-killfeed--reader .chronicle-killfeed__resource-fact,
+  .chronicle-killfeed--reader .chronicle-killfeed__shelter-notice,
+  .chronicle-killfeed--reader .chronicle-killfeed__lifecycle-notice,
+  .chronicle-killfeed--reader .chronicle-killfeed__meta { margin-left: 0; max-width: 100%; }
+}
+
+@media (forced-colors: active) {
+  .chronicle-killfeed--reader.observer-drawer,
+  .chronicle-killfeed--reader .chronicle-killfeed__card,
+  .chronicle-killfeed--reader .chronicle-killfeed__transport {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+  }
+}
+
+/* The primary surface starts below the Quiet Observatory HUD and its nav lane. */
+.vivarium-2d-app .chronicle-killfeed--reader.observer-drawer {
+  --observer-active-drawer-width: var(--killfeed-band);
+  --observer-active-drawer-right: max(14px, env(safe-area-inset-right));
+  --observer-active-drawer-gap: 14px;
+  --observer-drawer-width: var(--killfeed-band);
+  inset: 72px max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) auto;
+  width: var(--killfeed-band);
+  padding: 12px;
+  border-radius: 14px;
+}
+
+/* A normal card reads in roughly 85–105px; the quote/life variants earn height. */
+.chronicle-killfeed--reader .chronicle-killfeed__card {
+  padding: 7px 8px;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card-head {
+  gap: 5px;
+  margin-bottom: 4px;
+  font-size: 0.59rem;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__portrait {
+  width: 25px;
+  height: 25px;
+  border-radius: 7px;
+  font-size: 0.54rem;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__line {
+  font-size: 0.78rem;
+  line-height: 1.32;
+}
+
+/* Names and timestamps already live in the card header; do not repeat them below. */
+.chronicle-killfeed--reader .chronicle-killfeed__meta { display: none; }
+
+.chronicle-killfeed--reader .chronicle-killfeed__quote {
+  gap: 2px;
+  margin-top: 6px;
+  padding: 5px 7px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+/* Keep the source quote whole in the DOM, while routine rows preview three lines. */
+.chronicle-killfeed--reader .chronicle-killfeed__quote q {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__quote.is-expanded q {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__quote-disclosure {
+  width: fit-content;
+  min-height: 23px;
+  margin-top: 1px;
+  padding: 1px 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #e7d18b;
+  font: inherit;
+  font-size: 0.63rem;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__quote-disclosure:focus-visible {
+  outline: 2px solid #f0d991;
+  outline-offset: 2px;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__travel-route,
+.chronicle-killfeed--reader .chronicle-killfeed__resource-fact,
+.chronicle-killfeed--reader .chronicle-killfeed__shelter-notice,
+.chronicle-killfeed--reader .chronicle-killfeed__lifecycle-notice {
+  margin-top: 5px;
+  padding: 3px 6px;
+  font-size: 0.63rem;
+}
+
+/* Replay is the card itself. Secondary actions appear only when a row is active. */
+.chronicle-killfeed--reader .chronicle-killfeed__card-actions {
+  max-height: 0;
+  margin-top: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: max-height 140ms ease, margin 140ms ease, opacity 100ms ease;
+}
+
+.chronicle-killfeed--reader .chronicle-killfeed__card:hover .chronicle-killfeed__card-actions,
+.chronicle-killfeed--reader .chronicle-killfeed__card:focus-within .chronicle-killfeed__card-actions,
+.chronicle-killfeed--reader .chronicle-killfeed__card.is-open .chronicle-killfeed__card-actions {
+  max-height: 34px;
+  margin-top: 6px;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chronicle-killfeed--reader .chronicle-killfeed__card-actions { transition: none; }
+}
+
+@media (max-width: 760px) {
+  .vivarium-2d-app .chronicle-killfeed--reader.observer-drawer {
+    inset: auto max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
+      max(8px, env(safe-area-inset-left));
+    width: auto;
+    height: min(64dvh, calc(100dvh - 136px));
+    padding: 10px;
+  }
 }

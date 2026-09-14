@@ -571,9 +571,22 @@ export function createObserverShellRuntime(
     },
     pause(): void { currentControls(binding, archive, live)?.pause(); },
     resume(choice): void { currentControls(binding, archive, live)?.resume(choice); },
-    setSpeed(speed): void { currentControls(binding, archive, live)?.setSpeed(speed); },
+    setSpeed(speed): void {
+      const controls = currentControls(binding, archive, live);
+      if (controls === null) return;
+      controls.setSpeed(speed);
+      // Speed is shell diagnostics, not a field in the semantic frame key. A
+      // session may therefore retain its frame without notifying us even though
+      // its diagnostics changed; refresh so controlled observer UI stays honest.
+      if (snapshot.diagnostics?.speed !== speed) refresh();
+    },
     holdCurrentMoment(hold): void {
-      currentControls(binding, archive, live)?.holdCurrentMoment(hold);
+      const controls = currentControls(binding, archive, live);
+      if (controls === null) return;
+      controls.holdCurrentMoment(hold);
+      // Holding changes diagnostics even when the session retains its semantic
+      // frame. Publish the control state immediately, as we do for speed.
+      if (snapshot.diagnostics?.held !== hold) refresh();
     },
     viewMoment(momentId): void {
       currentControls(binding, archive, live)?.viewMoment(momentId);

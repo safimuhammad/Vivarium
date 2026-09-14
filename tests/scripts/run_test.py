@@ -29,7 +29,16 @@ from core.constants import (
 )
 from memory.embedding import FakeEmbeddingFunction
 from memory.vector_store import FakeVectorStore, VectorStore
-from scripts.run import Simulation, _spawn_new_agents, build_simulation, run_simulation
+from scripts.run import (
+    DEFAULT_MLX_CONTEXT_TOKENS,
+    DEFAULT_MLX_MODEL,
+    Simulation,
+    _spawn_new_agents,
+    build_simulation,
+    resolve_context_window,
+    resolve_default_model,
+    run_simulation,
+)
 from tests.conftest import MockDecider
 from world.agents import AgentState, AgentStatus
 
@@ -194,9 +203,68 @@ def test_build_simulation_shares_one_production_embedder_across_agent_stores(
     assert all(embedding is embedders[0] for embedding in store_embedders)
 
 
-def test_build_simulation_serializes_the_ollama_provider_by_default(tmp_path: Path) -> None:
-    """The default (Ollama) path wraps the decider in a SerializingDecider (one at a time)."""
-    sim = _build(tmp_path, MockDecider([Decision()]))
+def test_build_simulation_serializes_the_ollama_provider_when_selected(tmp_path: Path) -> None:
+    """The explicit Ollama path wraps the decider in a SerializingDecider (one at a time)."""
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=7,
+        model="mock",
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=MockDecider([Decision()]),
+        vector_store_factory=_fake_factory,
+        provider="ollama",
+    )
+    assert isinstance(sim.decider, SerializingDecider)
+
+
+def test_mlx_provider_defaults_are_local_and_has_a_large_context_window() -> None:
+    assert resolve_default_model("mlx") == DEFAULT_MLX_MODEL
+    assert resolve_default_model("ollama") == "qwen3:8b"
+    assert resolve_default_model("gemini") == "gemini-3.1-flash-lite"
+    assert resolve_context_window("mlx") == DEFAULT_MLX_CONTEXT_TOKENS
+    assert resolve_context_window("ollama") is None
+    assert resolve_context_window("gemini") == 720_000
+
+
+def test_live_cli_defaults_to_mlx_and_keeps_other_backends_selectable() -> None:
+    args = run_module._build_parser().parse_args([])
+
+    assert args.provider == "mlx"
+    assert run_module._build_parser().parse_args(["--provider", "ollama"]).provider == "ollama"
+    assert run_module._build_parser().parse_args(["--provider", "gemini"]).provider == "gemini"
+
+
+def test_build_simulation_serializes_mlx_provider(tmp_path: Path) -> None:
+    """The MLX backend uses the existing one-at-a-time local inference regime."""
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=7,
+        model=DEFAULT_MLX_MODEL,
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=MockDecider([Decision()]),
+        vector_store_factory=_fake_factory,
+        provider="mlx",
+    )
+
+    assert isinstance(sim.decider, SerializingDecider)
+    assert sim.run_context.context_window == DEFAULT_MLX_CONTEXT_TOKENS
+
+
+def test_build_simulation_defaults_to_mlx(tmp_path: Path) -> None:
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=7,
+        model=DEFAULT_MLX_MODEL,
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=MockDecider([Decision()]),
+        vector_store_factory=_fake_factory,
+    )
+
+    assert sim.run_context.provider == "mlx"
+    assert sim.run_context.context_window == DEFAULT_MLX_CONTEXT_TOKENS
     assert isinstance(sim.decider, SerializingDecider)
 
 
@@ -279,8 +347,8 @@ def test_build_simulation_gemini_gives_agents_a_large_context_window(tmp_path: P
 
 
 def test_build_simulation_ollama_keeps_the_default_window(tmp_path: Path) -> None:
-    """The local/Ollama path leaves the module default window (no large override)."""
-    sim = _build(tmp_path, MockDecider([Decision()]))  # _build defaults to the ollama provider
+    """The explicit local/Ollama path leaves the module default window."""
+    sim = _build(tmp_path, MockDecider([Decision()]))
     for agent in sim.agents:
         assert agent._compaction_trigger == COMPACTION_TRIGGER_TOKENS
 
@@ -314,6 +382,7 @@ def _build(tmp_path: Path, decider: MockDecider) -> Simulation:
         run_dir=tmp_path / "runs",
         decider=decider,
         vector_store_factory=_fake_factory,
+        provider="ollama",
     )
 
 

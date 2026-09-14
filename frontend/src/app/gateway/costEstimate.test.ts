@@ -124,9 +124,10 @@ describe("estimateRunCost", () => {
 
   it("prices the real server's own payload, which now publishes a rate per place", () => {
     const real = parseRunDefaults(structuredClone(MOCK_RUN_DEFAULTS_PAYLOAD));
-    const estimate = estimateRunCost(real.config, real);
+    const estimate = estimateRunCost({ ...real.config, provider: "gemini" }, real);
 
-    // 4 beings × $3/being-hour, over the world's own 30-minute default.
+    // Explicitly choose the cloud: 4 beings × $3/being-hour, over the world's
+    // own 30-minute default.
     expect(estimate.perHourUsd).toBe(12);
     expect(estimate.totalUsd).toBe(6);
     expect(estimate.free).toBe(false);
@@ -147,7 +148,7 @@ describe("estimateRunCost", () => {
   it("changes with the roster AND with the place, on the real payload", () => {
     const real = parseRunDefaults(structuredClone(MOCK_RUN_DEFAULTS_PAYLOAD));
     const one = real.config.beings[0] as never;
-    const single = { ...real.config, beings: [one] };
+    const single = { ...real.config, beings: [one], provider: "gemini" };
 
     expect(estimateRunCost(single, real).perHourUsd).toBe(3);
     expect(estimateRunCost({ ...single, provider: "ollama" }, real).perHourUsd).toBe(0);

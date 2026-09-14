@@ -5,7 +5,7 @@
  * Step 1 — command union enumerated from `LayeredHumanActor.apply`
  * ------------------------------------------------------------------
  * `HumanPrimitiveCommand` (declared in `./LayeredHumanActor.ts`) is a
- * 10-member discriminated union on `kind`. Every member and its payload,
+ * 11-member discriminated union on `kind`. Every member and its payload,
  * copied verbatim from source:
  *
  *  1. `{ kind: "move"; waypoints: readonly Vec2[]; speedPixelsPerSecond: number; gait: "walk" | "run" }`
@@ -21,8 +21,9 @@
  *  8. `{ kind: "reposition"; position: Vec2; reason: "reduced-motion" | "fallback" | "region-transition" }`
  *  9. `{ kind: "set-offset"; offset: Vec2 }`
  * 10. `{ kind: "set-selected"; selected: boolean }`
+ * 11. `{ kind: "clear-body" }`
  *
- * `SpriteSheetHumanActor.apply`/`stageCommands` must accept all ten (never
+ * `SpriteSheetHumanActor.apply`/`stageCommands` must accept all eleven (never
  * throw, never silently drop) and be covered by a compile-time
  * exhaustiveness check in the `default` branch.
  */
@@ -51,6 +52,7 @@ const ALL_COMMAND_KINDS = [
   "move",
   "orient",
   "play-body",
+  "clear-body",
   "set-face",
   "set-held",
   "set-status",
@@ -74,6 +76,15 @@ interface DrawCall {
   readonly scaleX: number;
   readonly scaleY: number;
   readonly rotation: number;
+  readonly alpha: number;
+}
+
+interface FillRectCall {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly fillStyle: string;
   readonly alpha: number;
 }
 
@@ -103,7 +114,10 @@ function makeActor(
 }
 
 /** Recording stub `CanvasRenderingContext2D`, following `LayeredHumanActor.compositor.test.ts`. */
-function recordingContext(calls: DrawCall[]): CanvasRenderingContext2D {
+function recordingContext(
+  calls: DrawCall[],
+  fills: FillRectCall[] = [],
+): CanvasRenderingContext2D {
   let translateX = 0;
   let translateY = 0;
   let scaleX = 1;
@@ -154,7 +168,16 @@ function recordingContext(calls: DrawCall[]): CanvasRenderingContext2D {
         alpha: context.globalAlpha,
       });
     },
-    fillRect: (): void => undefined,
+    fillRect: (x: number, y: number, width: number, height: number): void => {
+      fills.push({
+        x,
+        y,
+        width,
+        height,
+        fillStyle: String(context.fillStyle),
+        alpha: context.globalAlpha,
+      });
+    },
   };
   return context as unknown as CanvasRenderingContext2D;
 }
@@ -429,6 +452,53 @@ describe("SpriteSheetHumanActor locomotion", () => {
   });
 });
 
+describe("SpriteSheetHumanActor selected feet marker", () => {
+  it("draws a restrained two-tone feet bracket only for the selected actor", () => {
+    const actor = makeActor({ position: { x: 40, y: 60 } });
+    const before: FillRectCall[] = [];
+    actor.draw(recordingContext([], before));
+    expect(before).toEqual([]);
+
+    actor.apply({ kind: "set-selected", selected: true }, 0);
+    const fills: FillRectCall[] = [];
+    actor.draw(recordingContext([], fills));
+    expect(fills).toEqual([
+      { x: 31, y: 60, width: 18, height: 3, fillStyle: "#2b2420", alpha: 1 },
+      { x: 31, y: 60, width: 4, height: 1, fillStyle: "#e1b454", alpha: 1 },
+      { x: 31, y: 60, width: 1, height: 3, fillStyle: "#e1b454", alpha: 1 },
+      { x: 45, y: 60, width: 4, height: 1, fillStyle: "#e1b454", alpha: 1 },
+      { x: 48, y: 60, width: 1, height: 3, fillStyle: "#e1b454", alpha: 1 },
+    ]);
+
+    actor.apply({ kind: "set-selected", selected: false }, 1);
+    const after: FillRectCall[] = [];
+    actor.draw(recordingContext([], after));
+    expect(after).toEqual([]);
+  });
+
+  it("uses the same presentation alpha as the selected sprite while fading and terminal", () => {
+    const actor = makeActor({ position: { x: 40, y: 60 } });
+    actor.apply({ kind: "set-selected", selected: true }, 0);
+    actor.apply({ kind: "reposition", position: { x: 100, y: 60 }, reason: "fallback" }, 0);
+    actor.advance(0.05, 50);
+
+    const fadingDraws: DrawCall[] = [];
+    const fadingFills: FillRectCall[] = [];
+    actor.draw(recordingContext(fadingDraws, fadingFills));
+    expect(fadingFills).toHaveLength(5);
+    expect(fadingFills.every(({ alpha }) => alpha === fadingDraws[0]!.alpha)).toBe(true);
+    expect(fadingDraws[0]!.alpha).toBeGreaterThan(0);
+    expect(fadingDraws[0]!.alpha).toBeLessThan(1);
+
+    actor.apply({ kind: "set-status", status: "dead" }, 50);
+    const terminalDraws: DrawCall[] = [];
+    const terminalFills: FillRectCall[] = [];
+    actor.draw(recordingContext(terminalDraws, terminalFills));
+    expect(terminalFills).toHaveLength(5);
+    expect(terminalFills.every(({ alpha }) => alpha === terminalDraws[0]!.alpha)).toBe(true);
+  });
+});
+
 describe("SpriteSheetHumanActor turn-commit hold (choreography timing parity)", () => {
   it("delays locomotion start by the turn-commit duration when a move begins with a facing change", () => {
     const actor = makeActor({ position: { x: 0, y: 0 }, facing: "south" });
@@ -528,11 +598,45 @@ describe("SpriteSheetHumanActor turn-commit hold (choreography timing parity)", 
 });
 
 describe("SpriteSheetHumanActor command union coverage", () => {
+  it("clears a completed gather body pose without waiting for another action", () => {
+    const actor = makeActor();
+    actor.apply({ kind: "play-body", action: "gather" }, 0);
+    expect(actor.snapshot().activeAction).toBe("gathering");
+    actor.apply({ kind: "clear-body" }, 1);
+    expect(actor.snapshot().activeAction).toBeNull();
+    expect(actor.snapshot().layers.body.clipId).not.toBe("pose-crouch");
+  });
+
+  it.each(["paralyzed", "dead"] as const)("body cleanup preserves %s state", (status) => {
+    const actor = makeActor();
+    actor.apply({ kind: "set-status", status }, 0);
+    actor.apply({ kind: "clear-body" }, 1);
+    expect(actor.snapshot().activeAction).toBe(status === "dead" ? "dead" : "prone");
+    expect(actor.snapshot().terminal).toBe(status === "dead");
+    actor.apply({ kind: "move", waypoints: [{ x: 50, y: 0 }], speedPixelsPerSecond: 10, gait: "walk" }, 2);
+    expect(actor.snapshot().routeActive).toBe(false);
+  });
+
+  it("body cleanup preserves an active route and turn timing", () => {
+    const actor = makeActor({ position: { x: 0, y: 0 }, facing: "south" });
+    actor.apply({ kind: "move", waypoints: [{ x: 50, y: 0 }], speedPixelsPerSecond: 10, gait: "walk" }, 0);
+    const before = actor.snapshot();
+    const deadline = actor.nextDeadlineMs();
+    actor.apply({ kind: "clear-body" }, 0);
+    expect(actor.snapshot().activeAction).toBe(before.activeAction);
+    expect(actor.snapshot().routeActive).toBe(true);
+    expect(actor.nextDeadlineMs()).toBe(deadline);
+    actor.advance(0.5, 500);
+    actor.advance(0.5, 1_000);
+    expect(actor.snapshot().position.x).toBeGreaterThan(0);
+  });
+
   function sampleCommands(): readonly HumanPrimitiveCommand[] {
     return [
       { kind: "move", waypoints: [{ x: 5, y: 0 }], speedPixelsPerSecond: 10, gait: "walk" },
       { kind: "orient", facing: "east" },
       { kind: "play-body", action: "work" },
+      { kind: "clear-body" },
       { kind: "set-face", expression: "talk-1" },
       { kind: "set-held", heldId: "basket" },
       { kind: "set-status", status: "paralyzed" },
@@ -543,7 +647,7 @@ describe("SpriteSheetHumanActor command union coverage", () => {
     ];
   }
 
-  it("enumerates exactly the ten declared command kinds", () => {
+  it("enumerates exactly the eleven declared command kinds", () => {
     expect(sampleCommands().map((command) => command.kind).sort())
       .toEqual([...ALL_COMMAND_KINDS].sort());
   });
@@ -742,7 +846,7 @@ describe("SpriteSheetHumanActor pose grammar — full command union (table-drive
   /**
    * One representative pose-grammar expectation per `HumanPrimitiveCommand`
    * kind. The `switch` below is typed against the full union, so adding an
-   * 11th command kind to `HumanPrimitiveCommand` without adding a case here
+   * new command kind to `HumanPrimitiveCommand` without adding a case here
    * fails compilation (the `never` assignment in `default`) — the same
    * exhaustiveness guard `SpriteSheetHumanActor.apply` itself uses.
    */
@@ -773,6 +877,13 @@ describe("SpriteSheetHumanActor pose grammar — full command union (table-drive
         const calls: DrawCall[] = [];
         actor.draw(recordingContext(calls));
         expect(calls[0]!.rotation).toBe(0);
+        return;
+      }
+      case "clear-body": {
+        const actor = makeActor({});
+        actor.apply({ kind: "play-body", action: "gather" }, 0);
+        actor.apply({ kind: "clear-body" }, 1);
+        expect(actor.snapshot().activeAction).toBeNull();
         return;
       }
       case "set-face": {

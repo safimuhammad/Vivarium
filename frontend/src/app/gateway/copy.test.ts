@@ -82,7 +82,7 @@ describe("landing copy", () => {
     // Shown on the way back from a run the viewer ended. It says what happened
     // and where it went; there is no outcome here to be pleased about.
     expect(RUN_ENDED_NOTE).toContain("has ended");
-    expect(RUN_ENDED_NOTE).toContain("chronicle");
+    expect(RUN_ENDED_NOTE).toContain("Saved Runs");
     expect(RUN_ENDED_NOTE.toLowerCase()).not.toMatch(/success|complete|finished|well done/);
   });
 

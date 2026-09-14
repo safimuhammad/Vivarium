@@ -135,6 +135,9 @@ async def initiate_mating(
     if not agent_init or not agent_target:
         return "Error: Agent not found in the world."
 
+    if agent_init.id == agent_target.id:
+        return "Invalid: You cannot propose mating to yourself. Choose another agent."
+
     committed = _clean_committed_resources(resources)
     if isinstance(committed, str):
         return committed
@@ -340,6 +343,9 @@ async def accept_mating(
     agent_accept = world.get_agent(agent_id)
     if not agent_init or not agent_accept:
         return "Error: Agent not in the world."
+
+    if agent_init.id == agent_accept.id:
+        return "Invalid: You cannot accept your own mating proposal. Choose another agent."
 
     pending_proposal = world.get_agent_proposals(agent_init.id, agent_accept.id)
     resources: Any = pending_proposal.get("resources")

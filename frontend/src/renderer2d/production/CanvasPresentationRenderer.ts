@@ -7,6 +7,7 @@ import {
   type WorldNavigationState,
 } from "../../presentation/rendererPort";
 import { claimObserverRendererSurface } from "../../presentation/rendererSurfaceOwnership";
+import { prepareOverlayCanvas } from "./CanvasOverlayLayer";
 import {
   type CameraMode,
   type FrameIdentity,
@@ -45,6 +46,13 @@ import {
   resolveFocusFollow,
   type FocusFollowState,
 } from "./world/regionFocusFollow";
+import {
+  createAutoCameraDirectorState,
+  rebaseAutoCameraDirector,
+  resolveAutoCamera,
+  type AutoCameraActivity,
+  type AutoCameraDirectorState,
+} from "./AutoCameraDirector";
 import { beingMarkColor, markScatterPoint } from "./world/regionMarkPlacement";
 import {
   ascentTarget,
@@ -170,6 +178,7 @@ export type { AtlasCommitScheduler } from "./AtlasCommitScheduler";
 
 export interface CanvasPresentationRendererOptions {
   readonly canvas: HTMLCanvasElement;
+  readonly overlayCanvas?: HTMLCanvasElement;
   readonly callbacks: ObserverRendererCallbacks;
   readonly manifest: ProductionAssetManifest;
   readonly factories: ProductionSceneFactories;
@@ -515,13 +524,11 @@ export const BEAT_FRAME_MIN_LEGIBLE_ZOOM = TEXT_ZOOM_THRESHOLD;
 const SELECTION_PICK_TOLERANCE_WORLD_PX = 44;
 
 /**
- * FOR NOW: automatic framing never carries the viewer out of the region they are watching.
+ * The conservative observed-region fallback for Story frames without an Auto decision.
  *
- * Owner direction (Safi, 2026-08-27), watching the story director cut between regions on every
- * beat: *"for the automatic, can we for now establish that it is not allowed to move region but
- * stick within the region"*. Watching a PLACE is what he asked for; a director that jumps across
- * the archipelago once a beat is not framing a story, it is channel-surfing — and it is what
- * made the world feel as though it would not sit still.
+ * Typed live scenes first pass through `AutoCameraDirector`, which owns deliberate cross-region
+ * changes after dwell, completion, and cooldown. This fallback keeps an untyped compatibility
+ * frame from recreating the old beat-by-beat jump while Auto has no authoritative activity signal.
  *
  * Two conditions, and the second is not a technicality:
  *
@@ -529,11 +536,8 @@ const SELECTION_PICK_TOLERANCE_WORLD_PX = 44;
  *    That is the same region the stage reports out through `onWorldNavigationChange` and the
  *    shell names in its chrome, so this is deliberately NOT a second notion of "current region".
  * 2. It applies only at `worldViewScope === "region"`, i.e. while the viewer is INSIDE a region.
- *    "Stick within the region" says nothing about a viewer standing above the whole archipelago
- *    on the world sheet: up there every region is on screen at once, drawn from its snapshot,
- *    and bringing the story's region up to full detail is serving them rather than dragging
- *    them. A renderer built without the world sheet (`worldSheetSnapshots` off, which is every
- *    unit harness) has no scope at all and is left exactly as it was.
+ *    A renderer built without the world sheet has no scope, so its legacy untyped-frame routing
+ *    remains unchanged.
  *
  * This restrains the DIRECTOR only, and only the one decision it makes here — which region to
  * bring up for a beat. Every VIEWER movement between regions runs through `beginObserveRegion`
@@ -543,7 +547,7 @@ const SELECTION_PICK_TOLERANCE_WORLD_PX = 44;
  * resolved above this rule for the same reason. A beat elsewhere still reaches the viewer: the
  * Chronicle carries every region's events and always has, so nothing new has to be said.
  *
- * Flip to `false` to restore the wandering director. That is the whole lift.
+ * Auto decisions are resolved before this fallback, so this does not block a settled Auto move.
  */
 const STORY_FRAMING_HOLDS_THE_OBSERVED_REGION = true;
 
@@ -727,6 +731,11 @@ export async function createCanvasPresentationRenderer(
   let arrivalContinuity: ArrivalContinuity | null = null;
   const pendingArrivalCommits: PendingArrivalCommit[] = [];
   let visibleRegionId: string | null = null;
+  let autoCameraDirector: AutoCameraDirectorState = createAutoCameraDirectorState();
+  /** The current Auto decision, kept while a requested region is loading. */
+  let autoStoryRegionId: string | null = null;
+  /** A user returning to Auto may finish the exact arrival beat they left temporarily. */
+  let autoArrivalRecoveryRegionId: string | null = null;
   // Sheet-view focus: which region the observer camera is clamping to at/above the world/region
   // threshold, derived each draw from the camera centre (see `syncRegionSheet`). Persists across
   // frames so a centre that lands in a gutter (or briefly outside every rect) keeps the last
@@ -3128,6 +3137,7 @@ export async function createCanvasPresentationRenderer(
     if (cameraImpulse !== null && nowMs >= cameraImpulse.untilMs) cameraImpulse = null;
     context.imageSmoothingEnabled = false;
     context.clearRect(0, 0, canvas.width, canvas.height);
+    const overlayTarget = prepareOverlayCanvas(options.overlayCanvas, canvas.width, canvas.height);
     const cameraSnapshot = camera.snapshot();
     const impulse = cameraImpulse?.offset ?? { x: 0, y: 0 };
     if (cache?.descriptor.topology === "toroidal"
@@ -3174,6 +3184,7 @@ export async function createCanvasPresentationRenderer(
           width: canvas.width,
           height: canvas.height,
           insets: { ...safeFrameInsets },
+          overlayTarget,
         });
       }
       context.restore();
@@ -3268,6 +3279,7 @@ export async function createCanvasPresentationRenderer(
         width: canvas.width,
         height: canvas.height,
         insets: { ...safeFrameInsets },
+        overlayTarget,
       });
       // BEING-ONLY seam continuation. The camera stays bounded (that is the whole point of
       // the observer's retired toroidal wrap), so the terrain does not repeat and the
@@ -4054,13 +4066,14 @@ export async function createCanvasPresentationRenderer(
       nowMs,
     });
     focusFollowState = followResult.next;
-    // Audited against the viewer-authority arbiter and deliberately left UNGATED. Z3's
-    // focus-follow is driven entirely by where the VIEWER's own camera centre already sits (its
-    // input is `camera.snapshot()`), and it changes only which region renders at full detail --
-    // it never points the camera anywhere. Gating it would mean a viewer could pan across the
-    // world sheet into a neighbouring region, zoom in, and be shown its low-detail snapshot
-    // forever: refusing to serve them, in the name of not overriding them.
-    if (followResult.switchToRegionId !== null) beginObserveRegion(followResult.switchToRegionId);
+    // Geometric focus-follow is a consequence of a viewer navigating Free (or manually zooming
+    // while temporarily holding Story). Auto and explicit Follow name their region through their
+    // own directors, so allowing this second path to mount a region would bypass Auto's dwell or
+    // pull Follow away from its being.
+    const cameraMode = camera.snapshot().mode;
+    if (followResult.switchToRegionId !== null && (
+      cameraMode === "free" || (cameraMode === "story" && viewerControlsCamera)
+    )) beginObserveRegion(followResult.switchToRegionId);
     // Published every frame (it self-suppresses unless a field actually changed) because the
     // observed region can also change WITHOUT any navigation act -- the story director follows the
     // chronicle across regions -- and a badge that names the wrong place is worse than none.
@@ -4169,15 +4182,17 @@ export async function createCanvasPresentationRenderer(
   const graphObserverRegionOverride = (
     frame: PresentedObserverFrame,
     viewRegionId: string,
-  ): string | null => (
-    frame.checkpointFocus !== undefined && frame.checkpointFocus !== null
-      ? null
-      : camera.snapshot().mode === "story"
-        && frame.scene?.regionId !== undefined
-        && frame.scene.regionId === viewRegionId
-      ? null
-      : viewRegionId
-  );
+  ): string | null => {
+    // A checkpoint itself is already the graph's active region only when Auto chose that same
+    // region. Explicit Free and Follow may keep another region mounted, so make that view
+    // explicit instead of letting the graph silently replace its terrain underneath the camera.
+    const checkpointRegionId = frame.checkpointFocus?.regionId ?? null;
+    if (checkpointRegionId === viewRegionId) return null;
+    if (camera.snapshot().mode === "story"
+      && frame.scene?.regionId !== undefined
+      && frame.scene.regionId === viewRegionId) return null;
+    return viewRegionId;
+  };
 
   const checkpointReturnRegion = (frame: PresentedObserverFrame): string | null => (
     frame.checkpointFocus === null || frame.checkpointFocus === undefined
@@ -4189,15 +4204,18 @@ export async function createCanvasPresentationRenderer(
    * The checkpoint-correction director: a frame carrying `checkpointFocus` borrows the camera
    * (forcing story mode) and gives it back by restoring the saved checkpoint.
    *
-   * Deliberately NOT gated by the viewer-authority arbiter. This is a bounded, explicitly
-   * requested borrow -- a checkpoint hold only exists because the viewer entered an archive
-   * checkpoint -- and it saves the viewer's exact camera first and restores it after. Since the
-   * checkpoint now carries `viewerControlled`, the viewer's authority survives the borrow
-   * intact, which is the property that makes this the opposite of a silent override.
+   * Auto may borrow a checkpoint frame for initial and recovery framing. Explicit Free and
+   * Follow already name a camera owner, so an ordinary checkpoint must leave both their camera
+   * and their mounted region alone. A user-directed Replay remains an explicit movement through
+   * `travelToMoment`, outside this passive frame path.
    */
   const adoptCheckpointCameraOwnership = (frame: PresentedObserverFrame): void => {
     const focus = frame.checkpointFocus ?? null;
     if (focus !== null) {
+      if (viewerControlsCamera || camera.snapshot().mode === "follow") {
+        checkpointCameraOwnership = null;
+        return;
+      }
       if (checkpointCameraOwnership === null && camera.snapshot().mode !== "story") {
         checkpointCameraOwnership = {
           camera: camera.checkpoint(),
@@ -5016,6 +5034,49 @@ export async function createCanvasPresentationRenderer(
   );
 
   /**
+   * Resolves the region Auto may mount before the frame reaches the scene graph.
+   *
+   * This is deliberately upstream of `resolveRegionId`: steering only Camera2D's target would
+   * still let the scene region replace the rendered terrain on every remote beat.
+   */
+  const autoStoryRegionFor = (frame: PresentedObserverFrame): string | null => {
+    if (camera.snapshot().mode !== "story" || viewerControlsCamera) return null;
+    if (autoArrivalRecoveryRegionId !== null) {
+      if (autoArrivalRecoveryRegionId !== visibleRegionId) {
+        autoStoryRegionId = autoArrivalRecoveryRegionId;
+        return autoStoryRegionId;
+      }
+      autoArrivalRecoveryRegionId = null;
+    }
+    const activity = autoCameraActivityFor(frame);
+    // Deterministic compatibility seams predate typed event authority. Keep their historical
+    // scene-region resolution rather than inventing a priority from an untyped scene.
+    if (activity?.eventType === null) return null;
+    const resolved = resolveAutoCamera(autoCameraDirector, {
+      lineageKey: `${frame.runId}\u0000${frame.sourceKey}`,
+      nowMs: frameDriver.now(),
+      currentRegionId: visibleRegionId,
+      activity,
+    });
+    autoCameraDirector = resolved.next;
+    const regionId = resolved.decision.regionId;
+    autoStoryRegionId = regionId !== null && recipes.has(regionId)
+      ? regionId
+      : visibleRegionId;
+    return autoStoryRegionId;
+  };
+
+  /** Starts a new Auto dwell after the viewer explicitly gives framing back. */
+  const rebaseAutoStoryRegion = (): void => {
+    autoCameraDirector = rebaseAutoCameraDirector(
+      autoCameraDirector,
+      visibleRegionId,
+      frameDriver.now(),
+    );
+    autoStoryRegionId = null;
+  };
+
+  /**
    * Shared body for switching which region is live: the public `observeRegion` port method (a
    * user- or UI-driven switch) and Z3's camera-driven `syncRegionSheet` focus-follow hysteresis
    * both call this exact function, so a camera-triggered switch goes through the identical
@@ -5237,7 +5298,16 @@ export async function createCanvasPresentationRenderer(
       ? generation.frame
       : acceptedFrame ?? generation.frame;
     const regionId = mode === "story"
-      ? resolveRegionId(frame, "story", visibleRegionId, null, storyFramingHoldsRegion())
+      ? resolveRegionId(
+        frame,
+        "story",
+        visibleRegionId,
+        null,
+        storyFramingHoldsRegion() || viewerControlsCamera,
+        selection,
+        autoStoryRegionId,
+        viewerControlsCamera,
+      )
       : visibleRegionId ?? generation.regionId;
     if (regionId === null) {
       abortLoading();
@@ -5299,12 +5369,16 @@ export async function createCanvasPresentationRenderer(
       if (loading !== null && sameLineage(input, loading.frame)
         && !isFresherFrame(input, loading.frame)) return;
       const frame = structuredClone(input);
+      const directedStoryRegionId = autoStoryRegionFor(frame);
       const regionId = resolveRegionId(
         frame,
         camera.snapshot().mode,
         visibleRegionId,
         checkpointReturnRegion(frame),
-        storyFramingHoldsRegion(),
+        storyFramingHoldsRegion() || viewerControlsCamera,
+        selection,
+        directedStoryRegionId,
+        viewerControlsCamera,
       );
       if (regionId === null || !recipes.has(regionId)) {
         emitFailure({ kind: "canvas", retryable: false, publicMessage: "The selected region is unavailable." });
@@ -5463,15 +5537,24 @@ export async function createCanvasPresentationRenderer(
       const releases = mode !== "free" && viewerControlsCamera;
       if (mode === camera.snapshot().mode && !releases) return;
       if (mode === "story") {
+        const recoveryRegionId = acceptedFrame === null
+          ? null
+          : arrivalRecoveryRegion(acceptedFrame, arrivalContinuity);
         releaseViewerCameraControl();
+        rebaseAutoStoryRegion();
+        autoArrivalRecoveryRegionId = recoveryRegionId;
         camera.apply({ type: "return-story" });
         if (acceptedFrame !== null) {
+          const directedStoryRegionId = autoStoryRegionFor(acceptedFrame);
           const storyRegionId = resolveRegionId(
             acceptedFrame,
             "story",
             visibleRegionId,
             null,
-            storyFramingHoldsRegion(),
+            storyFramingHoldsRegion() || viewerControlsCamera,
+            selection,
+            directedStoryRegionId,
+            viewerControlsCamera,
           );
           if (storyRegionId !== null && recipes.has(storyRegionId)
             && storyRegionId !== visibleRegionId) {
@@ -5620,6 +5703,7 @@ export async function createCanvasPresentationRenderer(
       acceptedBatch = null;
       arrivalContinuity = null;
       pendingArrivalCommits.length = 0;
+      autoArrivalRecoveryRegionId = null;
       pendingFrameAcceptance = null;
       pendingCameraAdoption = null;
       pendingSceneCommandCommit = null;
@@ -6280,29 +6364,80 @@ function resolveRegionId(
   checkpointReturnRegionId: string | null = null,
   /** See {@link STORY_FRAMING_HOLDS_THE_OBSERVED_REGION}: keep the mounted region under Story. */
   holdsObservedRegion = false,
+  /** Explicit Follow owns its subject across region boundaries. */
+  followSelection: ObserverSelection = null,
+  /** Auto's region decision, made before this frame reaches the scene graph. */
+  autoStoryRegionId: string | null = null,
+  /** Free (or a manual adjustment) keeps the mounted region viewer-owned. */
+  viewerOwnsCamera = false,
 ): string | null {
+  if (cameraMode === "follow") {
+    const followedRegionId = regionForSelection(frame, followSelection);
+    if (followedRegionId !== null) return followedRegionId;
+  }
+  if ((cameraMode === "follow" || viewerOwnsCamera) && visibleRegionId !== null) {
+    return visibleRegionId;
+  }
   const checkpointRegionId = frame.checkpointFocus?.regionId;
   if (checkpointRegionId !== undefined) return checkpointRegionId;
   if (checkpointReturnRegionId !== null) return checkpointReturnRegionId;
+  if (cameraMode === "story" && autoStoryRegionId !== null) return autoStoryRegionId;
   if (visibleRegionId !== null
     && (cameraMode !== "story" || holdsObservedRegion)) return visibleRegionId;
   if (frame.scene?.regionId) return frame.scene.regionId;
   if (frame.selection?.kind === "region") return frame.selection.id;
-  if (frame.selection?.kind === "agent") {
-    const record = frame.world.agents.find(({ value }) => value.id === frame.selection?.id);
-    if (typeof record?.value.position === "string") return record.value.position;
-  }
-  if (frame.selection?.kind === "home" || frame.selection?.kind === "ruin") {
-    const records = frame.selection.kind === "home" ? frame.world.homes : frame.world.ruins;
-    const record = records.find(({ value }) => value.home_id === frame.selection?.id);
-    if (typeof record?.value.region === "string") return record.value.region;
-  }
+  const selectedRegionId = regionForSelection(frame, frame.selection);
+  if (selectedRegionId !== null) return selectedRegionId;
   if (visibleRegionId !== null) return visibleRegionId;
   const regionIds = frame.world.regions
     .map(({ value }) => value.name)
     .filter((value): value is string => typeof value === "string")
     .sort(compareText);
   return regionIds[0] ?? null;
+}
+
+function regionForSelection(
+  frame: PresentedObserverFrame,
+  selection: ObserverSelection,
+): string | null {
+  if (selection?.kind === "agent") {
+    const record = frame.world.agents.find(({ value }) => value.id === selection.id);
+    return typeof record?.value.position === "string" ? record.value.position : null;
+  }
+  if (selection?.kind === "home" || selection?.kind === "ruin") {
+    const records = selection.kind === "home" ? frame.world.homes : frame.world.ruins;
+    const record = records.find(({ value }) => value.home_id === selection.id);
+    return typeof record?.value.region === "string" ? record.value.region : null;
+  }
+  return null;
+}
+
+/** A paused viewer may explicitly return to the one verified arrival already on screen. */
+function arrivalRecoveryRegion(
+  frame: PresentedObserverFrame,
+  continuity: ArrivalContinuity | null,
+): string | null {
+  const scene = frame.scene;
+  if (continuity === null
+    || continuity.leg !== "arrival"
+    || !["hold", "consequence", "recover"].includes(continuity.phase)
+    || continuity.runId !== frame.runId
+    || continuity.sourceKey !== frame.sourceKey
+    || scene?.momentId !== continuity.momentId
+    || scene.execution?.eventType !== "agent_entered_region") return null;
+  return continuity.toRegion;
+}
+
+function autoCameraActivityFor(frame: PresentedObserverFrame): AutoCameraActivity | null {
+  const scene = frame.scene;
+  if (scene === null || scene.regionId === null) return null;
+  return {
+    regionId: scene.regionId,
+    momentId: scene.momentId,
+    eventType: scene.execution?.eventType ?? null,
+    phase: scene.phase,
+    subjectId: scene.focus?.kind === "agent" ? scene.focus.id : null,
+  };
 }
 
 function releaseLeases(leases: Iterable<ProductionAssetLease>): void {

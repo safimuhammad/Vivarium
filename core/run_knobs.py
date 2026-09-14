@@ -156,13 +156,13 @@ DURATION_CHOICES_SECONDS: Final[tuple[float | None, ...]] = (900.0, 3600.0, 1440
 """15 minutes / 1 hour / 4 hours / unbounded (``None``)."""
 
 # --- 10. Where the minds run ------------------------------------------------
-type ProviderName = Literal["gemini", "ollama"]
+type ProviderName = Literal["mlx", "ollama", "gemini"]
 """Where a run's minds may be hosted."""
 
-PROVIDER_DEFAULT: Final[ProviderName] = "gemini"
-"""The cloud. Gemini is the performance target; local Ollama is a different product."""
+PROVIDER_DEFAULT: Final[ProviderName] = "mlx"
+"""The supplied model runs locally through MLX on this Mac by default."""
 
-PROVIDER_CHOICES: Final[tuple[ProviderName, ...]] = ("gemini", "ollama")
+PROVIDER_CHOICES: Final[tuple[ProviderName, ...]] = ("mlx", "gemini", "ollama")
 
 # --- 11. Reflection cadence -------------------------------------------------
 REFLECT_MIN: Final[int] = 2
@@ -227,6 +227,14 @@ class ProviderChoice(Choice):
 
 
 PROVIDER_OPTIONS: Final[tuple[ProviderChoice, ...]] = (
+    ProviderChoice(
+        "mlx",
+        "This Mac · MLX",
+        "Local and free. MLX uses one shared model for one being at a time, with no "
+        "cloud API cost.",
+        cost_per_being_hour_usd=0.0,
+        cadence="one being at a time",
+    ),
     ProviderChoice(
         "gemini",
         "The cloud",

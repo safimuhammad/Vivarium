@@ -49,7 +49,7 @@ Each agent runs an independent **breathing loop**:
 Every breath, an agent:
 1. **Perceives** — drains its event inbox, queries the world
 2. **Remembers** — retrieves relevant past experiences via RAG
-3. **Decides** — sends context to a local LLM via Ollama
+3. **Decides** — sends context to a local MLX model on this Mac
 4. **Acts** — executes the chosen tool (move, speak, attack, trade...)
 5. **Sleeps** — waits before the next breath (each agent has its own pace)
 
@@ -162,7 +162,7 @@ The orchestrator acts like an experimenter — it observes, creates conditions, 
 ### Prerequisites
 
 - Python 3.13+
-- [Ollama](https://ollama.ai) with your chosen model pulled
+- Apple Silicon Mac with the MLX runtime and the supplied Qwen model prepared locally
 
 ### Install
 
@@ -170,7 +170,8 @@ The orchestrator acts like an experimenter — it observes, creates conditions, 
 git clone https://github.com/safimuhammad/vivarium
 cd vivarium
 python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+pip install -e '.[mlx]'
+venv/bin/python -m scripts.prepare_mlx
 ```
 
 ### Run
@@ -184,7 +185,8 @@ npm run live
 It starts the live API with **no run** (it reports `status: "ready"`) and the frontend
 together, then prints the URL. Everything after that happens in the browser: the landing
 page, the configuration screen, and **"Let's go live"**, which starts the first world from
-the settings you chose. There is no separate backend step.
+the settings you chose. The configuration screen defaults to local MLX inference, with
+zero API cost. There is no separate backend step.
 
 *(`npm run dev:observatory` is the same launcher with the old behaviour — the API starts a
 run of its own from CLI flags. `python -m server.app --idle` is the bare idle server.)*
@@ -192,6 +194,28 @@ run of its own from CLI flags. `python -m server.app --idle` is the bare idle se
 ### Configure the world
 
 Edit `config/world.yaml` to define regions, resource rates, and starting agent placements.
+
+MLX is the default provider and stays local. To run the standalone CLI with the prepared
+model, use `venv/bin/python -m scripts.run`; Ollama and Gemini remain explicit choices
+with `--provider ollama` and `--provider gemini`.
+
+To enable the supplied Qwen model's native thinking mode for every being, launch with
+`VIVARIUM_MLX_THINKING=1 npm run live`. There is no separate “max effort” setting:
+thinking mode permits up to 81,920 output tokens, clipped to the remaining model
+context. The model can finish sooner. Thinking stays private and inference stays
+on this Mac. Leave the variable unset (or set it to `0`) for non-thinking mode.
+Restart the server after changing this setting.
+
+### Saved Runs
+
+The startup screen's **Browse saved runs** entry opens a local library of past worlds,
+with saved being portraits, names, dates, duration, and event counts. Each run is
+recorded automatically under `runs/<run-id>/`; the library also discovers older
+recordings. Choose **Watch replay** to revisit its events in the interactive observer,
+then **Saved Runs** to return to the library. Replay reads local files and makes no
+model calls. Keep the local server running to browse the library. Recordings remain
+on your machine and are ignored by Git.
+
 
 ---
 

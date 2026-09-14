@@ -52,6 +52,41 @@ def _spawned_offspring(world: WorldState, parent_ids: set[str]) -> AgentState:
 # ---- initiate_mating ------------------------------------------------------
 
 
+async def test_self_proposal_cannot_escrow_resources_or_emit_event(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    agent = world.get_agent("wanderer_001")
+    assert agent is not None
+    before = (agent.current_energy, agent.current_materials)
+    result = await initiate_mating(
+        world,
+        event_bus,
+        agent.id,
+        target=agent.id,
+        message="hello myself",
+        resources=dict(_VALID_COMMIT),
+    )
+    assert result.startswith("Invalid:")
+    assert (agent.current_energy, agent.current_materials) == before
+    assert world.get_agent_proposals(agent.id, agent.id) == {}
+    assert event_bus.get_events(agent.id) == []
+
+
+async def test_legacy_self_proposal_cannot_spawn_offspring(
+    world: WorldState, event_bus: EventBus
+) -> None:
+    agent = world.get_agent("wanderer_001")
+    assert agent is not None
+    world.add_proposal(agent.id, agent.id, dict(_VALID_COMMIT))
+    before = (agent.current_energy, agent.current_materials, agent.offspring_count)
+    population = len(world.get_all_agents())
+    result = await accept_mating(world, event_bus, agent.id, target=agent.id, message="yes")
+    assert result.startswith("Invalid:")
+    assert (agent.current_energy, agent.current_materials, agent.offspring_count) == before
+    assert len(world.get_all_agents()) == population
+    assert event_bus.get_events(agent.id) == []
+
+
 async def test_initiate_deducts_resources_and_stores_proposal(
     world: WorldState, event_bus: EventBus
 ) -> None:

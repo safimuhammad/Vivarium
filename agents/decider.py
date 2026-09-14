@@ -14,6 +14,8 @@ This module provides:
   chat response to a :class:`Decision` (no network).
 * :class:`OllamaDecider` -- the real, non-streaming Ollama implementation
   (design DD2); its single network call is excluded from coverage.
+* :class:`agents.mlx_decider.MlxDecider` -- native Apple-Silicon inference from
+  an explicitly prepared local checkpoint, imported lazily by the factory.
 * :func:`make_default_decider` -- factory for the production decider.
 """
 
@@ -385,16 +387,16 @@ def make_default_decider(model: str, *, provider: str = "ollama") -> Decider:
         model: Name of the model the agent should think with (an Ollama model name for
             ``provider="ollama"``, e.g. ``"qwen3:8b"``; a hosted model name for
             ``provider="gemini"``, e.g. ``"gemini-3.1-flash-lite"``).
-        provider: Which backend to build for -- ``"ollama"`` (local, the default) or
-            ``"gemini"`` (hosted via the Google Gen AI SDK). The Gemini implementation
-            is imported lazily so the Ollama-only path never requires that SDK.
+        provider: Which backend to build for -- ``"ollama"`` (local, the default),
+            ``"mlx"`` (native local MLX), or ``"gemini"`` (hosted via the Google Gen
+            AI SDK). Optional implementations are imported lazily so constructing one
+            provider never loads another provider's SDK or model.
 
     Returns:
-        A :class:`Decider`: an :class:`OllamaDecider` for ``"ollama"`` or a
-        :class:`~agents.gemini_decider.GeminiDecider` for ``"gemini"``.
+        A :class:`Decider` for the selected provider.
 
     Raises:
-        ValueError: If ``provider`` is neither ``"ollama"`` nor ``"gemini"``.
+        ValueError: If ``provider`` is not ``"ollama"``, ``"mlx"``, or ``"gemini"``.
     """
     match provider:
         case "ollama":
@@ -403,7 +405,11 @@ def make_default_decider(model: str, *, provider: str = "ollama") -> Decider:
             from agents.gemini_decider import GeminiDecider
 
             return GeminiDecider(model)
+        case "mlx":
+            from agents.mlx_decider import MlxDecider
+
+            return MlxDecider(model)
         case _:
             raise ValueError(
-                f"Unknown decider provider {provider!r}; expected 'ollama' or 'gemini'."
+                f"Unknown decider provider {provider!r}; expected 'ollama', 'mlx', or 'gemini'."
             )

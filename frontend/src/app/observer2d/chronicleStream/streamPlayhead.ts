@@ -80,10 +80,26 @@ export function resolveStreamPlayhead(
   });
 }
 
-/** `m:ss.d` on the feed clock — the timestamp column's format. */
+/** `m:ss.d` for feed-clock positions and elapsed durations. */
 export function formatFeedTime(ms: number): string {
   const total = Math.max(0, ms) / 1000;
   const minutes = Math.floor(total / 60);
   const seconds = total - minutes * 60;
   return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
+}
+
+/**
+ * Event time, independent of the browser's arrival clock. As with formatWorldTime,
+ * timestamps from 2000 onward are Unix seconds; synthetic clocks stay elapsed.
+ * Older events without a valid timestamp retain their feed-clock fallback.
+ */
+export function formatEventTime(timestamp: number | null, arrivalMs: number): string {
+  if (timestamp === null || !Number.isFinite(timestamp) || timestamp < 0) {
+    return formatFeedTime(arrivalMs);
+  }
+  const wholeSeconds = Math.floor(timestamp);
+  if (wholeSeconds >= 946_684_800 && wholeSeconds <= 253_402_300_799) {
+    return `${new Date(wholeSeconds * 1_000).toISOString().slice(11, 19)} UTC`;
+  }
+  return formatFeedTime(timestamp * 1_000);
 }

@@ -65,6 +65,35 @@ describe("LivingAtlas2D", () => {
     await act(async () => second.root.unmount());
   });
 
+  it("gives the default four regions two rows with room for distinct names", () => {
+    const points = [...layoutAtlasRegions(["nirvana", "nirvana_east", "nirvana_west", "warm_springs"]).values()];
+    expect(new Set(points.map((point) => point.y)).size).toBe(2);
+    expect(new Set(points.map((point) => point.x)).size).toBe(2);
+    expect(Math.min(...points.map((point) => point.x))).toBeGreaterThanOrEqual(80);
+  });
+
+  it.each([8, 9, 12])("keeps %i pins separated in a narrow rendered Atlas", async (count) => {
+    const keys = Array.from({ length: count }, (_, index) => `region-${index}`);
+    const view: ObserverAtlasView = { activeStoryRegionId: null, observedRegionId: null,
+      regions: keys.map((key) => region(key, key, [])) };
+    const rendered = await render(<LivingAtlas2D view={view} onObserveRegion={vi.fn()} onInspectRegion={vi.fn()} />);
+    const map = rendered.container.querySelector<HTMLElement>(".living-atlas-2d__map")!;
+    const rows = Number(map.style.getPropertyValue("--atlas-rows"));
+    expect(rows).toBe(Math.ceil(count / 4));
+    const height = rows * 4.5 * 16;
+    const points = [...layoutAtlasRegions(keys).values()];
+    for (const width of [216, 232, 326]) {
+      const pinWidth = Math.min(3.75 * 16, width / 4 - 8);
+      const pinHeight = 2.8 * 16;
+      for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
+        const dx = Math.abs(points[i]!.x - points[j]!.x) * width / 320;
+        const dy = Math.abs(points[i]!.y - points[j]!.y) * height / 210;
+        expect(dx >= pinWidth + 6 || dy >= pinHeight + 6).toBe(true);
+      }
+    }
+    await act(async () => rendered.root.unmount());
+  });
+
   it("lays out eight single-control pins without collisions and inspects from one detail footer", async () => {
     const onInspectRegion = vi.fn();
     const keys = ["a", "b", "c", "d", "e", "f", "g", "h"];

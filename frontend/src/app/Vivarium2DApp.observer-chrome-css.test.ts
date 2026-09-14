@@ -16,15 +16,30 @@ describe("Vivarium 2D observer chrome visual contract", () => {
     expect(css).toContain("--observer-control: #ead9a8");
     expect(css).toContain("--observer-control-ink: #1b2821");
     expect(rule(".observer-panel")).toContain("background: var(--observer-panel)");
-    expect(rule(".observer-panel")).toContain("border-radius: 4px");
+    expect(rule(".observer-panel")).toContain("border-radius: var(--observer-radius)");
   });
 
   it("keeps the world dominant with a wrapping status strip and drawer-owned Atlas", () => {
-    expect(rule(".observer-hud")).toMatch(/padding:\s*6px 10px/);
+    expect(rule(".observer-hud")).toMatch(/padding:\s*12px 14px/);
     expect(rule(".observer-hud")).toMatch(/flex-wrap:\s*wrap/);
     expect(rule(".observer-hud")).toMatch(/overflow:\s*visible/);
     expect(rule(".world-drawer \.living-atlas-2d")).toMatch(/position:\s*relative/);
     expect(rule(".semantic-world-mirror")).toMatch(/clip:\s*rect\(0, 0, 0, 0\)/);
+  });
+
+  it("reserves every open desktop drawer's right lane for the status HUD", () => {
+    const activeDrawerHud = rule(".vivarium-2d-app:has(.observer-primary-surface) .observer-hud");
+
+    expect(activeDrawerHud).toMatch(/max-width:\s*calc\([\s\S]*?var\(--observer-active-drawer-width\)[\s\S]*?var\(--observer-active-drawer-right\)[\s\S]*?var\(--observer-active-drawer-gap\)/);
+    expect(css.indexOf(".vivarium-2d-app:has(.observer-primary-surface) .observer-hud"))
+      .toBeGreaterThan(css.indexOf("@media (min-width: 761px)"));
+  });
+
+  it("keeps long drawer facts inside their value cells", () => {
+    expect(rule(".observer-drawer dl > div > :is(dt, dd)")).toMatch(/min-width:\s*0/);
+    const value = rule(".observer-drawer dl > div > dd");
+    expect(value).toMatch(/margin:\s*0/);
+    expect(value).toMatch(/overflow-wrap:\s*anywhere/);
   });
 
   it("centers a pointer-transparent region plaque and keeps drawers above it", () => {

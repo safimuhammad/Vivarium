@@ -33,7 +33,6 @@ import {
   OVERLAY_FAMILY_ACCENT,
   OVERLAY_GLYPH_NAMES,
   OVERLAY_PALETTE,
-  type PixelSurface,
   TAG_INK,
   TEXT_KIND_METRICS,
   TEXT_SCALE_FLOOR,
@@ -525,7 +524,7 @@ describe("EnvironmentSystem", () => {
   // the legibility overlay (docs/frontend/BUBBLE_UI.md)
   // -------------------------------------------------------------------------
 
-  it("draws every silhouette from hand-authored pixel type and never calls a system font", () => {
+  it("draws bubble type with native smooth Canvas text while keeping chrome pixel surfaces", () => {
     const system = createSystem(recipeFor(world[0]!));
     system.emit(speech("aster", "The silence holds us. I am here."), 0);
     system.emit({
@@ -539,9 +538,64 @@ describe("EnvironmentSystem", () => {
     system.draw(canvas.context, "air");
 
     expect(canvas.fillRects.length).toBeGreaterThan(0);
-    // Type is drawn as pixels, not glyphs from a hinted system face. The
-    // rejected overlay's "8px monospace" is exactly what made it read as UI.
-    expect(canvas.fillTexts).toEqual([]);
+    // Bubble words are native Canvas text so the browser can anti-alias them;
+    // marks still use their authored bitmap surface and do not call fillText.
+    expect(canvas.fillTexts.length).toBeGreaterThan(0);
+    expect(canvas.fillTextFonts.every((font) => font.startsWith("9px "))).toBe(true);
+    expect(canvas.fillTextFonts.every((font) => font.includes("ui-monospace"))).toBe(true);
+    expect(canvas.fillTextBaselines.every((baseline) => baseline === "top")).toBe(true);
+    expect(canvas.fillTextMaxWidths.every((width) => width === 6)).toBe(true);
+    // The native text lands after the shape spans for the bubble, so the shape
+    // remains crisp beneath every glyph.
+    expect(canvas.operations.lastIndexOf("fillText")).toBeGreaterThan(
+      canvas.operations.indexOf("fillRect"),
+    );
+    system.dispose();
+  });
+
+  it.each([0.5, 1, 2, 4])("draws every character of a long message at camera zoom %s", (zoom) => {
+    const system = createSystem(recipeFor(world[0]!));
+    const message = "The springs are quiet. I will listen before travelling east. ".repeat(8).trim();
+    system.emit(speech("aster", message), 0);
+    const canvas = screenRecordingContext();
+    system.draw(canvas.context, "air", {
+      zoom, originX: 0, originY: 0, width: 1_440, height: 1_200,
+      insets: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
+    // Line breaks replace spaces when wrapping. All actual message characters
+    // must still reach the native drawing API, in order, at every camera scale.
+    expect(canvas.fillTexts.map(([text]) => text).join("").replace(/\s/gu, ""))
+      .toBe(message.replace(/\s/gu, ""));
+    expect(new Set(canvas.fillTexts.map(([, , y]) => y)).size).toBeGreaterThan(1);
+    system.dispose();
+  });
+
+  it("keeps Unicode bubble text intact and sends it to the alternate DPR overlay context", () => {
+    const system = createSystem(recipeFor(world[0]!));
+    system.emit({
+      ...speech("aster", "A café ∞ — [Joe]", "joe"),
+      targetName: "Joe",
+      knownBeingNames: ["Joe"],
+    }, 0);
+    const main = recordingContext();
+    const overlay = screenRecordingContext();
+    system.draw(main.context, "air", {
+      zoom: 2,
+      originX: 0,
+      originY: 0,
+      width: 1_440,
+      height: 900,
+      insets: { top: 0, right: 0, bottom: 0, left: 0 },
+      overlayTarget: { context: overlay.context, pixelRatio: 2 },
+    });
+
+    expect(main.fillTexts).toEqual([]);
+    expect(overlay.fillTexts.map(([value]) => value)).toContain("∞");
+    expect(overlay.fillTexts.map(([value]) => value)).toContain("é");
+    expect(overlay.fillTexts.map(([value]) => value)).toContain("[");
+    expect(overlay.fillTextStyles).toContain(TAG_INK);
+    expect(overlay.fillTextMaxWidths.every((width) => width === 12)).toBe(true);
+    expect(overlay.transforms).toContainEqual([2, 0, 0, 2, 0, 0]);
     system.dispose();
   });
 
@@ -839,19 +893,16 @@ describe("EnvironmentSystem", () => {
     system.emit({ ...speech("briar", text), variant: "thought" }, 0);
     const canvas = recordingContext();
     system.draw(canvas.context, "air");
-    expect(canvas.fills).toContain(TAG_INK);
-    // The BRACKETS are drawn, not merely composed: the live system's tag ink
-    // spans the same width as a surface built with `[to Joe]`, and a width the
-    // bare `to Joe` form cannot produce.
-    const drawnTagWidth = colouredExtent(canvas, TAG_INK);
-    expect(drawnTagWidth).toBe(inkExtent(
-      buildTextBubble({ kind: "speech", text, hue: identityHue("aster"), accent: "#8a8270", tag: "[to Joe]" }).surface,
-      TAG_INK,
-    ));
-    expect(drawnTagWidth).not.toBe(inkExtent(
-      buildTextBubble({ kind: "speech", text, hue: identityHue("aster"), accent: "#8a8270", tag: "to Joe" }).surface,
-      TAG_INK,
-    ));
+    expect(canvas.fillTextStyles).toContain(TAG_INK);
+    // The BRACKETS are native text, not bitmap pixels: the live system's
+    // reference-colour characters reconstruct the closed tag exactly, while a
+    // bare `to Joe` form would have no brackets to carry that meaning.
+    const drawnTag = canvas.fillTexts
+      .filter((_, index) => canvas.fillTextStyles[index] === TAG_INK)
+      .map(([value]) => value)
+      .join("");
+    expect(drawnTag).toBe("[to Joe]");
+    expect(drawnTag).not.toBe("to Joe");
     system.dispose();
 
     const quiet = createSystem(recipeFor(world[0]!));
@@ -883,8 +934,8 @@ describe("EnvironmentSystem", () => {
     const spec = { kind: "speech" as const, text, hue: "#9c4a33", accent: "#8a8270" };
     const overLong = `[to ${"z".repeat(MAX_TAG_CHARS)}]`;
     const expected = `[to ${"z".repeat(MAX_TAG_CHARS - 5)}]`;
-    expect(inkExtent(buildTextBubble({ ...spec, tag: overLong }).surface, TAG_INK))
-      .toBe(inkExtent(buildTextBubble({ ...spec, tag: expected }).surface, TAG_INK));
+    expect(buildTextBubble({ ...spec, tag: overLong }).typography.runs[0]!.text)
+      .toBe(buildTextBubble({ ...spec, tag: expected }).typography.runs[0]!.text);
   });
 
   it("brackets EVERY being named inside the message, and nothing that is not a being", () => {
@@ -974,29 +1025,32 @@ describe("EnvironmentSystem", () => {
     const bare = buildTextBubble(spec);
     const marked = buildTextBubble({ ...spec, names: roster });
     // Nothing is tinted until a being is actually named.
-    expect(() => inkExtent(bare.surface, TAG_INK)).toThrow();
-    // The BRACKETS are drawn, not merely composed: the body reference spans the
-    // same tag ink as the string "[Allen]" drawn on a tag line, and a width the
-    // bare "Allen" cannot produce. (Measured, not computed: the 5x8 font's own
-    // glyphs decide the lit extent, so only a same-string bubble is a fair ruler.)
-    expect(inkExtent(marked.surface, TAG_INK))
-      .toBe(inkExtent(buildTextBubble({ ...spec, tag: "[Allen]" }).surface, TAG_INK));
-    expect(inkExtent(marked.surface, TAG_INK))
-      .not.toBe(inkExtent(buildTextBubble({ ...spec, tag: "Allen" }).surface, TAG_INK));
+    expect(bare.typography.runs.every((run) => run.color !== TAG_INK)).toBe(true);
+    // The BRACKETS are carried by a reference-coloured native text run. The
+    // body reference has the same text and colour as an equivalent tag, while
+    // the bare name carries no reference styling.
+    const markedReference = marked.typography.runs.find((run) => run.reference);
+    expect(markedReference).toMatchObject({ text: "[Allen]", color: TAG_INK });
+    expect(buildTextBubble({ ...spec, tag: "[Allen]" }).typography.runs[0])
+      .toMatchObject({ text: "[Allen]", color: TAG_INK });
+    expect(buildTextBubble({ ...spec, tag: "Allen" }).typography.runs[0]!.text)
+      .not.toBe("[Allen]");
 
     // ONE reference colour in the bubble, not two: the body reference and the
     // addressee tag are the same cool slate, so a single sweep of the eye finds
     // every being the bubble points at.
     const both = buildTextBubble({ ...spec, names: roster, tag: "[to Allen]" });
     expect(both.layout!.runs[0]![0]).toEqual({ text: "[Allen]", reference: true });
-    expect(inkExtent(both.surface, TAG_INK))
-      .toBeGreaterThanOrEqual(inkExtent(marked.surface, TAG_INK));
+    expect(both.typography.runs.filter((run) => run.color === TAG_INK).length)
+      .toBeGreaterThanOrEqual(marked.typography.runs.filter((run) => run.color === TAG_INK).length);
 
     // Self-talk mentions other beings too, and gets the same treatment -- what
     // it never gets is an addressee tag, because it is addressed to nobody.
     const thought = buildTextBubble({ ...spec, kind: "thought", names: roster });
-    expect(inkExtent(thought.surface, TAG_INK))
-      .toBe(inkExtent(buildTextBubble({ ...spec, kind: "thought", tag: "[Allen]" }).surface, TAG_INK));
+    expect(thought.typography.runs.find((run) => run.reference))
+      .toMatchObject({ text: "[Allen]", color: TAG_INK });
+    expect(buildTextBubble({ ...spec, kind: "thought", tag: "[Allen]" }).typography.runs[0])
+      .toMatchObject({ text: "[Allen]", color: TAG_INK });
   });
 
   it("carries the frame's roster into the live bubble, and leaves an unknown name plain", () => {
@@ -1005,7 +1059,7 @@ describe("EnvironmentSystem", () => {
     system.emit({ ...speech("aster", text), knownBeingNames: ["Allen"] }, 0);
     const canvas = recordingContext();
     system.draw(canvas.context, "air");
-    expect(canvas.fills).toContain(TAG_INK);
+    expect(canvas.fillTextStyles).toContain(TAG_INK);
     system.dispose();
 
     // An id or an unsafe name never reaches the roster upstream, so an
@@ -1015,7 +1069,7 @@ describe("EnvironmentSystem", () => {
     unknown.emit({ ...speech("aster", text), knownBeingNames: ["agent_9f2c"] }, 0);
     const plainCanvas = recordingContext();
     unknown.draw(plainCanvas.context, "air");
-    expect(plainCanvas.fills).not.toContain(TAG_INK);
+    expect(plainCanvas.fillTextStyles).not.toContain(TAG_INK);
     unknown.dispose();
   });
 
@@ -1678,16 +1732,14 @@ function createSystem(
  * deliberately omits it: the overlay must degrade to the ambient world space at
  * scale 1 when the host cannot enter screen space.
  */
-function screenRecordingContext(): {
-  readonly context: CanvasRenderingContext2D;
-  readonly fillRects: number[][];
+function screenRecordingContext(): ReturnType<typeof recordingContext> & {
   readonly transforms: number[][];
 } {
   const base = recordingContext();
   const transforms: number[][] = [];
   const context = base.context as unknown as Record<string, unknown>;
   context.setTransform = (...args: number[]) => transforms.push(args);
-  return { context: base.context, fillRects: base.fillRects, transforms };
+  return { ...base, transforms };
 }
 
 function region(name: string, description: string): RegionSnapshot {
@@ -1711,36 +1763,69 @@ function recordingContext(): {
   readonly fillRects: number[][];
   readonly fillTexts: Array<[string, number, number]>;
   readonly fillTextStyles: string[];
+  readonly fillTextFonts: string[];
+  readonly fillTextBaselines: CanvasTextBaseline[];
+  readonly fillTextMaxWidths: number[];
+  readonly operations: string[];
 } {
   const draws: unknown[][] = [];
   const fills: string[] = [];
   const fillRects: number[][] = [];
   const fillTexts: Array<[string, number, number]> = [];
   const fillTextStyles: string[] = [];
+  const fillTextFonts: string[] = [];
+  const fillTextBaselines: CanvasTextBaseline[] = [];
+  const fillTextMaxWidths: number[] = [];
+  const operations: string[] = [];
   let fillStyle = "#000000";
+  let font = "";
+  let textBaseline: CanvasTextBaseline = "alphabetic";
   const context = {
     imageSmoothingEnabled: true,
     globalAlpha: 1,
     save: vi.fn(),
     restore: vi.fn(),
-    drawImage: (...args: unknown[]) => draws.push(args.map((value) => {
-      if (typeof value === "object" && value !== null && "label" in value) {
-        return (value as { label: string }).label;
-      }
-      return value;
-    })),
+    drawImage: (...args: unknown[]) => {
+      operations.push("drawImage");
+      draws.push(args.map((value) => {
+        if (typeof value === "object" && value !== null && "label" in value) {
+          return (value as { label: string }).label;
+        }
+        return value;
+      }));
+    },
     fillRect: vi.fn((...args: number[]) => {
+      operations.push("fillRect");
       fills.push(fillStyle);
       fillRects.push(args);
     }),
-    fillText: vi.fn((value: string, x: number, y: number) => {
+    fillText: vi.fn((value: string, x: number, y: number, maxWidth?: number) => {
+      operations.push("fillText");
       fillTexts.push([value, x, y]);
       fillTextStyles.push(fillStyle);
+      fillTextFonts.push(font);
+      fillTextBaselines.push(textBaseline);
+      fillTextMaxWidths.push(maxWidth ?? Number.NaN);
     }),
     get fillStyle() { return fillStyle; },
     set fillStyle(value: string | CanvasGradient | CanvasPattern) { fillStyle = String(value); },
+    get font() { return font; },
+    set font(value: string) { font = value; },
+    get textBaseline() { return textBaseline; },
+    set textBaseline(value: CanvasTextBaseline) { textBaseline = value; },
   } as unknown as CanvasRenderingContext2D;
-  return { context, draws, fills, fillRects, fillTexts, fillTextStyles };
+  return {
+    context,
+    draws,
+    fills,
+    fillRects,
+    fillTexts,
+    fillTextStyles,
+    fillTextFonts,
+    fillTextBaselines,
+    fillTextMaxWidths,
+    operations,
+  };
 }
 
 /** The drawn extent of one overlay pass, from the recording stub's span rects. */
@@ -1757,41 +1842,6 @@ function paintedExtent(rectangles: readonly number[][]): Readonly<{
     right: Math.max(...rectangles.map(([x, , width]) => x! + width!)),
     bottom: Math.max(...rectangles.map(([, y, , height]) => y! + height!)),
   };
-}
-
-/**
- * Width, in surface px, of everything painted in one colour on a built surface.
- *
- * {@link TAG_INK} is the bubble's ONE reference colour — the addressee tag and
- * every being named inside the message wear it and nothing else does — so
- * measuring it is the honest way to assert on the SHAPE of the strings that
- * reached the type renderer without threading them back out of the build. On a
- * surface carrying both, the measurement spans from the leftmost reference to
- * the rightmost, which is why the tests below use bubbles carrying one kind at
- * a time, or a tag wider than anything in the body.
- */
-function inkExtent(surface: PixelSurface, colour: string): number {
-  let left = Number.POSITIVE_INFINITY;
-  let right = Number.NEGATIVE_INFINITY;
-  for (let y = 0; y < surface.height; y += 1) {
-    for (let x = 0; x < surface.width; x += 1) {
-      if (surface.at(x, y) !== colour) continue;
-      if (x < left) left = x;
-      if (x > right) right = x;
-    }
-  }
-  if (right < left) throw new Error(`nothing was painted in ${colour}`);
-  return right - left + 1;
-}
-
-/** The same measurement, taken off a recording canvas's run-length spans. */
-function colouredExtent(
-  canvas: Readonly<{ fills: readonly string[]; fillRects: readonly number[][] }>,
-  colour: string,
-): number {
-  const rectangles = canvas.fillRects.filter((_, index) => canvas.fills[index] === colour);
-  const box = paintedExtent(rectangles);
-  return box.right - box.x;
 }
 
 function _assertKitType(_kit: RegionKitId): void {

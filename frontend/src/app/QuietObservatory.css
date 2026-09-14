@@ -1,0 +1,243 @@
+/* Quiet Observatory: one information surface at a time, over the living scene. */
+.vivarium-2d-app {
+  --observer-panel: #062622f5;
+  --observer-panel-solid: #06231f;
+  --observer-panel-deep: #10372f;
+  --observer-ink: #f0f2df;
+  --observer-muted: #aec7be;
+  --observer-line: #38675b;
+  --observer-accent: #e9ca77;
+  --observer-control: #0d352e;
+  --observer-control-ink: #f0f2df;
+  --observer-radius: 16px;
+  --observer-drawer-width: min(27rem, 36vw);
+  --observer-botanical-art: url("./assets/quiet-vivarium-tree.webp");
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.vivarium-2d-app .observer-panel {
+  background: linear-gradient(145deg, #0a302bee, #03201cf7);
+  border-color: var(--observer-line);
+  box-shadow: 0 8px 32px #00110d66, inset 0 1px 0 #d4e8c312;
+  backdrop-filter: blur(18px);
+}
+
+/* Fade the artwork itself so text and controls keep their full contrast. */
+.vivarium-2d-app .observer-panel.observer-drawer,
+.vivarium-2d-app .chronicle-killfeed--reader.observer-drawer {
+  background-color: var(--observer-panel-solid);
+  background-image:
+    linear-gradient(180deg, rgb(5 30 25 / 68%), rgb(5 30 25 / 32%) 48%, rgb(3 24 20 / 58%)),
+    var(--observer-botanical-art);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.vivarium-2d-app .observer-panel.observer-dock {
+  background-color: var(--observer-panel-solid);
+  background-image:
+    linear-gradient(100deg, rgb(5 30 25 / 94%) 5%, rgb(5 30 25 / 78%) 40%, rgb(5 30 25 / 34%) 100%),
+    var(--observer-botanical-art);
+  background-size: cover, auto 340%;
+  background-position: center, right 52%;
+  background-repeat: no-repeat;
+}
+
+.vivarium-2d-app .observer-hud {
+  top: max(14px, env(safe-area-inset-top));
+  left: max(14px, env(safe-area-inset-left));
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 12px;
+  width: auto;
+  max-width: min(31rem, calc(100vw - 30rem));
+  min-height: 72px;
+  padding: 12px 16px;
+}
+.observer-hud__mark { width: 27px; height: 36px; flex-shrink: 0; color: #d5e5a3; }
+.vivarium-2d-app .observer-hud__place { flex: 0 1 auto; gap: 3px; }
+.observer-hud__brand { text-transform: uppercase; letter-spacing: .17em; font-weight: 650; font-size: .9rem; }
+.vivarium-2d-app .observer-hud__region { font-size: .88rem; font-weight: 450; letter-spacing: 0; }
+.vivarium-2d-app .observer-hud__time { font-size: .6rem; }
+.vivarium-2d-app .observer-hud__metrics { display: grid; gap: 5px; margin-left: 6px; }
+.vivarium-2d-app .observer-hud__totals-scope,
+.vivarium-2d-app .observer-hud__metric:not(.observer-hud__metric--living) { display: none; }
+.vivarium-2d-app .observer-hud__metric { font-size: .73rem; }
+.observer-hud__liveness { display: flex; align-items: center; gap: 7px; font-size: .72rem; white-space: nowrap; }
+.observer-hud__liveness i, .observer-view-state i { width: 8px; height: 8px; border-radius: 50%; background: #4de09e; box-shadow: 0 0 9px #4de09e44; flex: 0 0 auto; }
+.observer-hud__liveness[data-state="ended"] i,
+.observer-hud__liveness[data-state="disconnected"] i { background: #bdbeae; box-shadow: none; }
+.vivarium-2d-app .observer-hud__controls:empty { display: none; }
+.vivarium-2d-app .observer-hud__controls { padding-left: 10px; }
+
+.vivarium-2d-app .observer-edge-triggers {
+  top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  left: auto;
+  display: flex;
+  gap: 6px;
+  transform: none;
+}
+.vivarium-2d-app .observer-edge-triggers button {
+  writing-mode: horizontal-tb;
+  min-height: 42px;
+  padding: 7px 12px;
+  border: 1px solid var(--observer-line);
+  border-radius: 11px;
+  font-size: .76rem;
+  box-shadow: 0 3px 14px #00110d33;
+}
+.vivarium-2d-app .observer-edge-triggers button[aria-expanded="true"] { background: #234237; color: #ffe49b; }
+.observer-model-badge { display: flex; align-items: center; padding: 7px 12px; border: 1px solid var(--observer-line); border-radius: 11px; background: #06231fed; font-size: .74rem; white-space: nowrap; }
+.observer-unread-count { margin-left: 6px; padding: 2px 5px; border-radius: 5px; background: #235a43; color: #d5f5d3; font-size: .65rem; white-space: nowrap; }
+.vivarium-2d-app .observer-drawer {
+  inset: 72px max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) auto;
+  padding: 18px;
+  border-radius: 18px;
+}
+.vivarium-2d-app .observer-drawer__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+}
+.vivarium-2d-app .observer-drawer__header h2 { font-size: 1.45rem; letter-spacing: -.035em; }
+.vivarium-2d-app .observer-drawer__header > .observer-camera-controls { flex-basis: 100%; }
+.vivarium-2d-app .observer-drawer__scroll { scrollbar-width: thin; }
+.vivarium-2d-app .observer-primary-surface { position: absolute; }
+
+.observer-dock {
+  position: absolute;
+  z-index: 12;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(1120px, calc(100% - 48px));
+  padding: 12px 16px;
+  display: grid;
+  gap: 10px;
+  max-height: min(260px, 36dvh);
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.observer-dock__beings { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.observer-control-label { font-size: .65rem; letter-spacing: .035em; color: var(--observer-muted); white-space: nowrap; }
+.observer-camera-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; min-width: 0; }
+.observer-dock > .observer-camera-controls { border-top: 1px solid #75bba82b; padding-top: 10px; }
+.observer-camera-controls button,
+.observer-dock button,
+.observer-camera-controls select {
+  min-height: 36px;
+  border: 1px solid var(--observer-line);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: var(--observer-ink);
+  background: #082a24;
+  font: inherit;
+  font-size: .75rem;
+  cursor: pointer;
+}
+.observer-camera-controls button:active,
+.observer-dock button:active { background: #295043; }
+.observer-camera-controls button[aria-pressed="true"] {
+  background: linear-gradient(135deg, #776d3c, #514c2d);
+  border-color: var(--observer-accent);
+  color: #fff7d2;
+  opacity: 1;
+}
+.observer-camera-controls button:disabled:not([aria-pressed="true"]) { opacity: .5; cursor: default; }
+.observer-camera-controls .observer-hud__framing:disabled { cursor: default; }
+.observer-camera-modes, .observer-view-controls { display: flex; align-items: center; gap: 5px; }
+.observer-camera-modes .observer-control-label, .observer-view-controls .observer-control-label { margin-right: 4px; }
+.observer-view-state { display: flex; gap: 6px; align-items: center; font-size: .75rem; margin-right: 8px; white-space: nowrap; }
+.observer-view-state[data-state="paused"] i,
+.observer-view-state[data-state="ended"] i,
+.observer-view-state[data-state="disconnected"] i { background: #e5c879; box-shadow: none; }
+.observer-focus-control { flex: 1 1 auto; min-width: 0; }
+.observer-focus-control .observer-hud__follow { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.observer-focus-control .observer-hud__follow-select { min-width: 90px; max-width: 180px; flex: 1; }
+.observer-focus-control .observer-hud__follow-notice { flex-basis: 100%; font-size: .72rem; }
+.observer-drawer .observer-camera-controls { gap: 10px; }
+.observer-drawer .observer-camera-modes { flex: 1 0 100%; }
+.observer-drawer .observer-camera-modes button { flex: 1; }
+.observer-drawer .observer-focus-control { flex-basis: 100%; }
+.observer-drawer .observer-view-controls { flex-wrap: wrap; }
+
+.observer-dock .dialogue-now {
+  position: static;
+  inset: auto;
+  width: 100%;
+  max-height: 78px;
+  padding: 4px 10px;
+  border-width: 0 0 0 2px;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.observer-dock .dialogue-now__attribution { flex: 0 0 auto; font-size: .72rem; }
+.observer-dock .dialogue-now__attribution button { min-height: 30px; padding: 4px 6px; }
+.observer-dock .observer-copy--selectable { margin: 3px 0; font-size: .85rem; line-height: 1.45; }
+
+@media (max-width: 1050px) and (min-width: 761px) {
+  .vivarium-2d-app .observer-hud { max-width: calc(100vw - 25rem); padding: 10px 12px; }
+  .observer-hud__mark { display: none; }
+  .vivarium-2d-app .observer-hud__time { display: none; }
+  .observer-dock { width: calc(100% - 32px); }
+  .observer-focus-control { flex-basis: 100%; }
+  .observer-model-badge { display: none; }
+}
+@media (max-width: 760px) {
+  .vivarium-2d-app { --observer-drawer-width: calc(100% - 16px); }
+  .vivarium-2d-app .observer-hud { top: 8px; left: 8px; min-height: 64px; max-width: 100%; width: 100%; padding: 9px 12px; gap: 8px; align-items: center; }
+  .vivarium-2d-app .observer-hud__place { flex: 1 1 auto; }
+  .vivarium-2d-app .observer-hud__region { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vivarium-2d-app .observer-hud__metrics { flex: 0 0 auto; margin-left: 0; }
+  .vivarium-2d-app .observer-hud__controls { flex: 0 0 auto; padding-left: 4px; }
+  .vivarium-2d-app .observer-hud__brand { font-size: .74rem; letter-spacing: .12em; }
+  .vivarium-2d-app .observer-hud__time { display: none; }
+  .vivarium-2d-app .observer-edge-triggers { top: 80px; right: 8px; left: 8px; gap: 5px; }
+  .observer-model-badge { display: none; }
+  .vivarium-2d-app .observer-edge-triggers button { flex: 1; min-width: 0; padding: 6px; min-height: 38px; font-size: .7rem; }
+  .vivarium-2d-app .observer-edge-triggers button { position: relative; }
+  .observer-unread-count { position: absolute; top: -5px; right: 3px; margin: 0; padding: 1px 4px; font-size: .6rem; }
+  .observer-unread-count__suffix { display: none; }
+  .vivarium-2d-app .observer-primary-surface:not([data-surface="chronicle"]) { inset: 0; }
+  .vivarium-2d-app .observer-drawer { inset: auto 8px max(8px, env(safe-area-inset-bottom)) 8px; width: auto; max-width: none; height: min(64dvh, calc(100dvh - 136px)); padding: 14px; }
+  .observer-dock { width: calc(100% - 16px); padding: 10px; bottom: max(8px, env(safe-area-inset-bottom)); max-height: 38dvh; gap: 8px; }
+  .observer-camera-controls { gap: 8px; }
+  .observer-camera-modes { flex: 1 0 100%; }
+  .observer-camera-modes button { flex: 1; min-height: 38px; }
+  .observer-focus-control { flex-basis: 100%; }
+  .observer-view-controls { width: 100%; }
+  .observer-view-controls button { margin-left: auto; }
+  .observer-dock .dialogue-now { max-height: 70px; }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .vivarium-2d-app .observer-panel,
+  .vivarium-2d-app .observer-panel.observer-drawer,
+  .vivarium-2d-app .observer-panel.observer-dock,
+  .vivarium-2d-app .chronicle-killfeed--reader.observer-drawer {
+    background: var(--observer-panel-solid);
+    backdrop-filter: none;
+  }
+}
+@media (forced-colors: active) {
+  .vivarium-2d-app .observer-panel.observer-drawer,
+  .vivarium-2d-app .observer-panel.observer-dock,
+  .vivarium-2d-app .chronicle-killfeed--reader.observer-drawer {
+    background: Canvas;
+    color: CanvasText;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .observer-dock, .observer-camera-controls button { transition: none; }
+}

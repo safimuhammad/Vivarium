@@ -260,6 +260,33 @@ describe("ObserverShellRuntime", () => {
     expect(runtime.diagnostics()).toBeNull();
   });
 
+  it("publishes held controls immediately without a semantic frame publication", async () => {
+    const live = fakeLiveBundle(frame("live", "run-a", 4), Promise.resolve(), 71);
+    const baseline = live.session.diagnostics();
+    let held = false;
+    vi.mocked(live.controls.holdCurrentMoment).mockImplementation((hold) => { held = hold; });
+    vi.spyOn(live.session, "diagnostics").mockImplementation(() => ({ ...baseline, held }));
+    const runtime = createObserverShellRuntime({ createLiveBundle: () => live.bundle });
+    await runtime.ready;
+    const retainedFrame = runtime.getSnapshot().frame;
+    const notifications = vi.fn();
+    runtime.subscribe(notifications);
+
+    for (const [index, requestedHold] of [true, false].entries()) {
+      runtime.holdCurrentMoment(requestedHold);
+
+      expect(live.session.diagnostics().held).toBe(requestedHold);
+      expect(runtime.getSnapshot().diagnostics?.held).toBe(requestedHold);
+      expect(runtime.getSnapshot().frame).toBe(retainedFrame);
+      expect(runtime.frameSource.getSnapshot()).toBe(retainedFrame);
+      expect(notifications).toHaveBeenCalledTimes(index + 1);
+
+      runtime.holdCurrentMoment(requestedHold);
+      expect(notifications).toHaveBeenCalledTimes(index + 1);
+    }
+    runtime.dispose();
+  });
+
   it("routes observer controls and Canvas selection only to the selected session", async () => {
     const live = fakeLiveBundle(frame("live", "run-a", 4), Promise.resolve(), 71);
     const runtime = createObserverShellRuntime({ createLiveBundle: () => live.bundle });

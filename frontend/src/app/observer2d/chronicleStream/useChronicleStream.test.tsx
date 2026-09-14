@@ -147,6 +147,34 @@ describe("useChronicleStream", () => {
     expect(handle.view?.liveMs).toBe(500);
   });
 
+  it("keeps a same-source quiet interval but clears history for a quiet replacement source", async () => {
+    const handle: HarnessHandle = { setInput: () => undefined, view: null };
+    await act(async () => root.render(
+      <Harness handle={handle} now={() => 0} schedule={() => () => undefined} />,
+    ));
+
+    await act(async () => handle.setInput({
+      frame: frame("s1", 0),
+      chronicle: chronicle([moment(1, "speak")]),
+      active: false,
+    }));
+    expect(handle.view?.events.map((event) => event.id)).toEqual(["s1:1"]);
+
+    await act(async () => handle.setInput({
+      frame: frame("s1", 1),
+      chronicle: chronicle([]),
+      active: false,
+    }));
+    expect(handle.view?.events.map((event) => event.id)).toEqual(["s1:1"]);
+
+    await act(async () => handle.setInput({
+      frame: frame("s2", 0),
+      chronicle: chronicle([]),
+      active: false,
+    }));
+    expect(handle.view?.events).toEqual([]);
+  });
+
   it("ticks the age clock only while the feed is on screen", async () => {
     const stop = vi.fn();
     const schedule = vi.fn(() => stop);

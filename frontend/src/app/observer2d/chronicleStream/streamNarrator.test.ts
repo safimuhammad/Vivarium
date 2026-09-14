@@ -66,7 +66,7 @@ describe("narrateStreamEvent", () => {
       .toBe("30 damage · 12 energy and 0 materials taken");
   });
 
-  it("quotes only the four utterance types, clamped on a word boundary", () => {
+  it("quotes only the four utterance types and preserves their supplied words exactly", () => {
     const long = `${"word ".repeat(60)}end`;
     expect(narrate("speak", { message: "Hold the line." }).quote).toBe("Hold the line.");
     expect(narrate("self_talk", { message: "I will keep this within." }).quote)
@@ -75,10 +75,7 @@ describe("narrateStreamEvent", () => {
     expect(narrate("mating_rejected", { message: "Not this season." }).quote)
       .toBe("Not this season.");
     expect(narrate("attack", { message: "machine prose leaking ids" }).quote).toBeNull();
-    const clamped = narrate("speak", { message: long }).quote ?? "";
-    expect(clamped.length).toBeLessThanOrEqual(150);
-    expect(clamped.endsWith("…")).toBe(true);
-    expect(clamped).not.toMatch(/\s…$/u);
+    expect(narrate("speak", { message: long }).quote).toBe(long);
   });
 
   it("distinguishes a whisper from a broadcast", () => {

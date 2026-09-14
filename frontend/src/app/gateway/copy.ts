@@ -54,7 +54,7 @@ export const BANNED_VIEWER_WORDS: readonly string[] = [
  * moment they move on.
  */
 export const RUN_ENDED_NOTE
-  = "That world has ended. What happened in it stays in the chronicle.";
+  = "That world has ended. Its recording is kept locally in Saved Runs.";
 
 /** Ordinals for the cadences the server actually offers; anything else falls back to digits. */
 const WRITTEN_ORDINALS: Readonly<Record<number, string>> = {
@@ -148,11 +148,11 @@ export const LANDING_COPY: LandingCopy = {
   ways: [
     {
       id: "watch",
-      title: "Watch a world that already ran",
+      title: "Your saved worlds",
       blurb:
-        "A recorded run, replayed at the pace it happened. Nothing starts, nothing costs "
-        + "anything, and it is the fastest way to see what this is.",
-      action: "Watch a recording",
+        "Your runs are recorded on this machine. Browse their beings and revisit "
+        + "what happened, with no new model calls.",
+      action: "Browse saved runs",
     },
     {
       id: "configure",

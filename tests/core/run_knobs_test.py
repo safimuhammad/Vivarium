@@ -14,6 +14,7 @@ from core.run_knobs import (
     COST_ESTIMATE_CAVEAT,
     DURATION_OPTIONS,
     ESTIMATED_COST_PER_BEING_HOUR_USD,
+    PROVIDER_DEFAULT,
     PROVIDER_OPTIONS,
     REFLECT_OPTIONS,
     run_knob_catalog,
@@ -34,6 +35,22 @@ def _choice_by_value(value: str) -> dict[str, Any]:
 
 class TestProviderRates:
     """Every place the minds can run states its own cost and its own cadence."""
+
+    def test_mlx_is_the_default_local_provider_and_is_free(self) -> None:
+        assert PROVIDER_DEFAULT == "mlx"
+        mlx = _choice_by_value("mlx")
+
+        assert mlx["label"] == "This Mac · MLX"
+        assert mlx["cost_per_being_hour_usd"] == 0.0
+        assert "local" in mlx["help"].lower()
+        assert "one being at a time" in mlx["help"].lower()
+
+    def test_catalog_keeps_ollama_and_gemini_explicitly_selectable(self) -> None:
+        assert [choice["value"] for choice in _provider_choices()] == [
+            "mlx",
+            "gemini",
+            "ollama",
+        ]
 
     def test_every_provider_option_publishes_a_rate_and_a_cadence(self) -> None:
         for option in PROVIDER_OPTIONS:

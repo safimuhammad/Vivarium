@@ -6,15 +6,18 @@
   --observer-control-ink: #1b2821;
   --observer-ink: #f3e8c9;
   --observer-muted: #c6ba96;
-  --observer-line: #76826b;
+  --observer-line: #526558;
   --observer-accent: #e4bd5c;
   --observer-transport: #75c6ba;
   --observer-danger: #e7886f;
   --observer-shadow: #08100bd9;
-  --observer-radius: 4px;
-  --observer-border: 2px;
+  --observer-radius: 10px;
+  --observer-border: 1px;
   --observer-gap: 6px;
   --observer-drawer-width: min(24rem, 34vw);
+  --observer-active-drawer-width: var(--observer-drawer-width);
+  --observer-active-drawer-right: max(10px, env(safe-area-inset-right));
+  --observer-active-drawer-gap: var(--observer-gap);
 }
 
 .vivarium-2d-app {
@@ -50,10 +53,10 @@ body:has(.vivarium-2d-app) {
 .observer-panel {
   box-sizing: border-box;
   border: var(--observer-border) solid var(--observer-line);
-  border-radius: 4px;
+  border-radius: var(--observer-radius);
   background: var(--observer-panel);
   color: var(--observer-ink);
-  box-shadow: 4px 4px 0 var(--observer-shadow);
+  box-shadow: 0 8px 28px #08100b55, inset 0 1px 0 #f3e8c90b;
 }
 
 .observer-kicker {
@@ -74,16 +77,37 @@ body:has(.vivarium-2d-app) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 1px 6px;
+  gap: 10px 14px;
   max-width: calc(100vw - 72px);
   min-height: 44px;
-  padding: 6px 10px;
+  padding: 12px 14px;
   overflow: visible;
   font-size: 0.76rem;
   line-height: 1.25;
 }
 
 .observer-hud > * { min-width: 0; }
+
+.observer-hud__place { display: grid; gap: 4px; flex: 1 1 10rem; }
+.observer-hud__region { color: #faf1d7; font-size: 1rem; letter-spacing: -0.02em; }
+.observer-hud__time { color: var(--observer-muted); font-size: 0.65rem; }
+.observer-hud__metrics { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.observer-hud__totals-scope { flex-basis: 100%; color: var(--observer-muted); font-size: 0.58rem; letter-spacing: 0.09em; text-transform: uppercase; }
+.observer-hud__metric { color: var(--observer-muted); font-size: 0.67rem; white-space: nowrap; }
+.observer-hud__metric b { margin-right: 2px; color: var(--observer-ink); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+
+/* An open desktop drawer owns its right lane; the persistent HUD stops before it. */
+@media (min-width: 761px) {
+  .vivarium-2d-app:has(.observer-primary-surface) .observer-hud {
+    max-width: calc(
+      100vw
+      - max(8px, env(safe-area-inset-left))
+      - var(--observer-active-drawer-width)
+      - var(--observer-active-drawer-right)
+      - var(--observer-active-drawer-gap)
+    );
+  }
+}
 
 /*
  * THE HUD'S CONTROLS — the two things a watcher must never have to hunt for.
@@ -98,9 +122,10 @@ body:has(.vivarium-2d-app) {
 .observer-hud__controls {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  margin-left: 8px;
-  padding-left: 9px;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: 0;
+  padding-left: 12px;
   border-left: 1px solid var(--observer-line);
 }
 
@@ -260,10 +285,6 @@ body:has(.vivarium-2d-app) {
   background: #452117;
   color: #ffd9c6;
 }
-.observer-hud__region { color: #fff1bd; font-size: 0.86rem; }
-/* Reads as a label on the counts that follow, not as another datum about the region named above. */
-.observer-hud__totals-scope { color: #9fb08d; }
-
 .observer-hud button,
 .observer-hud select,
 .observer-edge-triggers button,
@@ -272,8 +293,8 @@ body:has(.vivarium-2d-app) {
 .dialogue-now button {
   min-width: 44px;
   min-height: 44px;
-  border: 2px solid var(--observer-line);
-  border-radius: 3px;
+  border: 1px solid var(--observer-line);
+  border-radius: 6px;
   background: var(--observer-panel-deep);
   color: var(--observer-ink);
   font: inherit;
@@ -411,6 +432,13 @@ body:has(.vivarium-2d-app) {
   content: "";
   pointer-events: none;
 }
+
+.world-drawer .living-atlas-2d__map[data-roomy] { height: 11rem; }
+.living-atlas-2d__map:not([data-roomy]) { min-height: calc(var(--atlas-rows) * 4.5rem); }
+.living-atlas-2d__map:not([data-roomy]) .living-atlas-2d__node { width: min(3.75rem, calc(25% - 8px)); }
+.living-atlas-2d__map[data-roomy] .living-atlas-2d__node { width: min(7rem, calc(50% - 12px)); }
+.living-atlas-2d__map[data-roomy] .living-atlas-2d__observe { min-height: 52px; padding: 7px; border-radius: 5px; }
+.living-atlas-2d__map[data-roomy] .living-atlas-2d__observe strong { white-space: normal; font-size: 0.7rem; line-height: 1.3; overflow-wrap: anywhere; }
 
 .living-atlas-2d .living-atlas-2d__observe {
   display: grid;
@@ -568,8 +596,12 @@ body:has(.vivarium-2d-app) {
   grid-template-rows: auto minmax(0, 1fr);
   width: var(--observer-drawer-width);
   max-width: calc(100vw - 20px);
-  padding: 10px;
+  padding: 16px;
 }
+
+.observer-drawer__header { min-height: 44px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #f3e8c91a; }
+.observer-drawer__header h2 { margin: 0; font-size: 1.15rem; font-weight: 650; letter-spacing: -0.025em; }
+.observer-drawer__header button { color: var(--observer-muted); font-size: 0.72rem; }
 
 .observer-primary-surface {
   position: fixed;
@@ -593,8 +625,9 @@ body:has(.vivarium-2d-app) {
 .world-drawer__camera,
 .world-drawer__diagnostics {
   margin: 0 0 12px;
-  padding: 8px;
-  border: 1px solid #667363;
+  padding: 12px;
+  border: 1px solid #f3e8c91a;
+  border-radius: 8px;
 }
 
 .world-drawer h3,
@@ -641,11 +674,23 @@ body:has(.vivarium-2d-app) {
 .observer-drawer dl > div,
 .world-drawer dl > div {
   display: grid;
-  grid-template-columns: minmax(7rem, 0.8fr) 1fr;
+  grid-template-columns: minmax(5rem, 0.7fr) minmax(0, 1fr);
   gap: 8px;
-  padding-block: 5px;
-  border-bottom: 1px solid #667363;
+  padding-block: 9px;
+  border-bottom: 1px solid #f3e8c914;
 }
+
+.observer-drawer dl { margin: 0; }
+.observer-drawer dl > div > :is(dt, dd) { min-width: 0; }
+.observer-drawer dl > div > dd { margin: 0; overflow-wrap: anywhere; }
+.observer-drawer dt { color: var(--observer-muted); font-size: 0.75rem; }
+.observer-drawer dd { font-size: 0.82rem; line-height: 1.5; }
+.selection-inspector dl > .selection-inspector__prose { grid-template-columns: minmax(0, 1fr); gap: 6px; padding-block: 12px; }
+.selection-inspector__observer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.selection-inspector h3 { margin: 8px 0 12px; font-size: 1.4rem; letter-spacing: -0.025em; }
+.archive-drawer__time { color: var(--observer-muted); font-weight: 400; }
+.archive-drawer__cursor { color: var(--observer-muted); font-size: 0.65rem; font-weight: 400; }
+.archive-drawer__return { width: 100%; margin-bottom: 12px; }
 
 .chronicle-drawer__now,
 .chronicle-drawer__gap,
@@ -654,9 +699,9 @@ body:has(.vivarium-2d-app) {
 .archive-drawer__checkpoints button {
   display: grid;
   width: 100%;
-  gap: 4px;
-  margin-block: 6px;
-  padding: 10px;
+  gap: 7px;
+  margin-block: 8px;
+  padding: 14px;
   text-align: left;
 }
 
@@ -730,21 +775,21 @@ body:has(.vivarium-2d-app) {
   white-space: nowrap;
   border: 0;
 }
-.semantic-world-mirror ul { display: grid; gap: 3px; margin: 5px 0 0; padding: 0; list-style: none; }
+.semantic-world-mirror ul { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
 .semantic-world-mirror button {
   display: grid;
   width: 100%;
-  padding: 5px 7px;
-  border: 2px solid var(--observer-line);
-  border-radius: 2px;
+  padding: 10px;
+  border: 1px solid var(--observer-line);
+  border-radius: 6px;
   background: var(--observer-panel-solid);
   color: var(--observer-ink);
   font-size: 0.68rem;
-  line-height: 1.22;
+  line-height: 1.4;
   text-align: left;
 }
 .semantic-world-mirror button[aria-pressed="true"] {
-  border-width: 3px;
+  border-color: var(--observer-accent);
   background: #304339;
 }
 .semantic-world-mirror__state { color: #ffe49b; font-weight: 800; text-transform: uppercase; }
@@ -811,7 +856,11 @@ body:has(.vivarium-2d-app) {
     overflow: visible;
     font-size: 0.66rem;
   }
-  .observer-hud__region { font-size: 0.72rem; }
+  .observer-hud__region { font-size: 0.88rem; }
+  .observer-hud { padding: 9px 10px; gap: 8px; }
+  .observer-hud__place { flex-basis: 8rem; }
+  .observer-hud__metrics { flex: 1 1 11rem; gap: 4px 8px; }
+  .observer-hud__metric { font-size: 0.6rem; }
   .observer-edge-triggers {
     position: static;
     grid-template-columns: none;
@@ -914,6 +963,6 @@ body:has(.vivarium-2d-app) {
     inset: auto max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
       max(8px, env(safe-area-inset-left));
     width: auto;
-    max-height: min(16rem, max(0px, calc(48dvh - 112px - env(safe-area-inset-bottom))));
+    max-height: min(34rem, calc(58dvh - env(safe-area-inset-bottom)));
   }
 }

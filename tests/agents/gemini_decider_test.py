@@ -334,6 +334,13 @@ def test_make_default_decider_defaults_to_ollama() -> None:
     assert isinstance(make_default_decider("qwen3:8b"), OllamaDecider)
 
 
+def test_make_default_decider_mlx_lazily_returns_native_decider() -> None:
+    from agents.mlx_decider import MlxDecider
+
+    decider = make_default_decider("mlx-community/Qwen3.5-0.8B-bf16", provider="mlx")
+    assert isinstance(decider, MlxDecider)
+
+
 def test_make_default_decider_unknown_provider_raises() -> None:
     with pytest.raises(ValueError):
         make_default_decider("x", provider="bogus")

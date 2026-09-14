@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   parseChronicleBufferMs,
@@ -6,8 +6,19 @@ import {
   writeChronicleSurfacePreference,
 } from "./chronicleSurfacePreference";
 
+let storage: Storage;
+
+beforeEach(() => {
+  storage = memoryStorage();
+  // Node 26 exposes an opt-in process-level `localStorage` getter, which is
+  // unavailable in this Vitest worker and shadows JSDOM's browser surface.
+  // The preference contract needs a browser-shaped store, not host storage.
+  vi.stubGlobal("localStorage", storage);
+});
+
 afterEach(() => {
   localStorage.clear();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -37,16 +48,28 @@ describe("chronicle surface preference", () => {
   });
 
   it("degrades to the default rather than throwing when storage is unavailable", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    vi.spyOn(storage, "getItem").mockImplementation(() => {
       throw new Error("storage disabled");
     });
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    vi.spyOn(storage, "setItem").mockImplementation(() => {
       throw new Error("quota exceeded");
     });
     expect(() => writeChronicleSurfacePreference(true)).not.toThrow();
     expect(readChronicleSurfacePreference()).toBe(true);
   });
 });
+
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length(): number { return values.size; },
+    clear: (): void => values.clear(),
+    getItem: (key: string): string | null => values.get(key) ?? null,
+    key: (index: number): string | null => [...values.keys()][index] ?? null,
+    removeItem: (key: string): void => { values.delete(key); },
+    setItem: (key: string, value: string): void => { values.set(key, value); },
+  };
+}
 
 describe("parseChronicleBufferMs", () => {
   it("reads a positive finite override", () => {

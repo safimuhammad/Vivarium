@@ -38,6 +38,7 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  localStorage.clear();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -77,13 +78,14 @@ describe("Vivarium2DApp composed truth boundary", () => {
     expect(stage.getAttribute("data-stage-range")).toBe("0:7");
     expect(stage.getAttribute("data-stage-cursor")).toBe("7");
     expect(stage.textContent).toContain("Stage World Time 42");
-    expect(container.textContent).toContain("Old truth stays visible.");
-    expect(container.textContent).not.toContain("Shown 7 · Received 99");
+    const initialSurface = publicSurface(container);
+    expect(initialSurface).toContain("Old truth stays visible.");
+    expect(initialSurface).not.toContain("Shown 7 · Received 99");
 
     await click("World");
     expect(container.textContent).toMatch(/Shown\s*7/);
     expect(container.textContent).toMatch(/Received\s*99/);
-    const surfaceCopies = [publicSurface(container)];
+    const surfaceCopies = [initialSurface, publicSurface(container)];
     await click("Chronicle");
     surfaceCopies.push(publicSurface(container));
     await click("Selection");
@@ -136,8 +138,9 @@ describe("Vivarium2DApp composed truth boundary", () => {
       const fixture = runtimeFixture(frame, chronicle);
       await renderApp(fixture.runtime);
 
+      const initialSurface = publicSurface(container);
       await click("World");
-      const surfaces = [publicSurface(container)];
+      const surfaces = [initialSurface, publicSurface(container)];
       const atlasPipsBefore = container.querySelectorAll(
         '.living-atlas-2d__importance [data-filled="true"]',
       ).length;
@@ -345,7 +348,7 @@ function moment(
     event: Object.freeze({
       type,
       source: "agent_001",
-      payload: Object.freeze({ agent_id: "agent_001", text }),
+      payload: Object.freeze({ agent_id: "agent_001", message: text }),
       scope,
       region: "warm_springs",
       target: null,

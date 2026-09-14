@@ -78,6 +78,12 @@ describe("resolveObserverLiveness", () => {
     }))).toMatchObject({ state: "quiet", label: "Quiet" });
   });
 
+  it("describes an active scene without claiming a zero-moment backlog", () => {
+    expect(resolveObserverLiveness(frame({
+      connection: "live", backlogState: "behind", pendingMoments: 0,
+    }))).toMatchObject({ state: "behind", label: "Playing", detail: "Finishing the current moment." });
+  });
+
   it("reads events arriving on a level stage as live", () => {
     expect(resolveObserverLiveness(frame({
       connection: "live",

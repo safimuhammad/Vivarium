@@ -77,6 +77,7 @@ export function useChronicleStream(options: UseChronicleStreamOptions): Chronicl
     () => createChronicleStreamBuffer({ now: () => nowRef.current(), bufferMs }),
     [bufferMs],
   );
+  const ingestedSourceKeyRef = useRef<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [clockMs, setClockMs] = useState(() => now());
 
@@ -96,13 +97,21 @@ export function useChronicleStream(options: UseChronicleStreamOptions): Chronicl
       ...(chronicle.now?.evidence ?? []),
       ...chronicle.previous.flatMap((moment) => moment.evidence),
     ];
-    if (entries.length === 0 && buffer.getEvents().length > 0) return;
+    // A quiet frame within one run carries no new evidence, so retain its recent
+    // cards. A new run can begin quietly, though, and its source change must still
+    // reach `ingest` so the old run is reset out of the observer's history.
+    if (
+      entries.length === 0
+      && buffer.getEvents().length > 0
+      && ingestedSourceKeyRef.current === frame.sourceKey
+    ) return;
     buffer.ingest({
       sourceKey: frame.sourceKey,
       world: frame.world,
       entries,
       deniedIds: frameEntityIdDenylist(frame),
     });
+    ingestedSourceKeyRef.current = frame.sourceKey;
     setClockMs(nowRef.current());
     setRevision((current) => current + 1);
   }, [buffer, chronicle, frame]);

@@ -61,7 +61,7 @@ describe("MOCK_RUN_DEFAULTS_PAYLOAD", () => {
       abundance: 1,
       seed: 7,
       duration_seconds: 1800,
-      provider: "gemini",
+      provider: "mlx",
       reflect_every_n_breaths: 12,
       max_offspring: 5,
     });
@@ -86,7 +86,7 @@ describe("MOCK_RUN_DEFAULTS_PAYLOAD", () => {
     expect(defaults.knobs.duration.options.map((option) => option.value))
       .toEqual([1800, 900, 3600, 14400, null]);
     expect(defaults.knobs.provider.options.map((option) => option.value))
-      .toEqual(["gemini", "ollama"]);
+      .toEqual(["mlx", "gemini", "ollama"]);
     expect(defaults.knobs.reflect.options.map((option) => option.value)).toEqual([6, 12, 24]);
 
     expect(defaults.regions.map((region) => region.title))

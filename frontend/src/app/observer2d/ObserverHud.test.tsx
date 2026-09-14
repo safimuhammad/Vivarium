@@ -19,7 +19,7 @@ describe("ObserverHud", () => {
 
     // The region is the place being OBSERVED; the counts are the whole world's, so they say so.
     expect(container.textContent).toBe(
-      "Nirvana · Day 20, 9:32 PM · World totals: 4 living · 0 dead · 0 homes · 0 ruins",
+      "VivariumNirvana · Day 20, 9:32 PM · World totals: 4 living · 0 dead · 0 homes · 0 ruins",
     );
     expect(container.getAttribute("data-run-id")).toBeNull();
     expect(container.textContent).not.toMatch(/World Time 1719120|Shown|Received|Pause|Story|Follow|Free/);

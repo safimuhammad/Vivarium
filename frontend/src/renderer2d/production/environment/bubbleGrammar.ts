@@ -7,16 +7,13 @@ import type {
  * The pixel craft behind the world's legibility overlay
  * (`docs/frontend/BUBBLE_UI.md`).
  *
- * Everything here is authored in **world pixels at 1x** and rasterised into a
- * {@link PixelSurface}; the caller blits that surface at an integer scale, so
- * chrome is never sub-pixel at any camera zoom. Nothing in this module touches
- * a real canvas until blit time, and **nothing measures text**: layout is a
- * fixed 6px advance over a hand-authored 5x8 bitmap font, so wrapping is
- * byte-identical in jsdom and in a browser (the deterministic-wrap constraint
- * the previous overlay established and this one keeps).
- *
- * A system font is deliberately not used: at 5-8px hinting is unreliable, and a
- * system font instantly reads as "UI" rather than "world".
+ * Everything here is authored in **world pixels at 1x**. Bubble chrome is
+ * rasterised into a {@link PixelSurface} and blitted at an integer scale, while
+ * bubble words are returned as immutable local-coordinate metadata for a native
+ * Canvas `fillText` pass. Nothing in this module measures text: layout keeps its
+ * fixed 6px advance, so wrapping is byte-identical in jsdom and in a browser.
+ * Action marks retain their hand-authored 5x8 bitmap micro-labels; speech,
+ * whisper, and thought words stay Unicode text for the browser's smooth face.
  */
 
 // ---------------------------------------------------------------------------
@@ -114,12 +111,17 @@ export const FONT_HEIGHT = 8;
 /** 5px cell + 1px letterspace. Fixed advance is what makes layout deterministic. */
 export const FONT_ADVANCE = 6;
 export const FONT_LINE_HEIGHT = 9;
+/** Native face used for bubble words; its metrics are still governed by the grid above. */
+export const TEXT_FONT_FAMILY = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
+export const TEXT_FONT_SIZE = 9;
+export const TEXT_FONT_BASELINE = "top" as const;
 /** Verb glyphs are 9x9 — the readable unit at 1x. */
 export const GLYPH_SIZE = 9;
 
 /**
- * Hand-authored 5x8 1-bit type. Rows are `/`-separated, `#` is ink.
- * Cap height rows 0-6, baseline row 6, descender row 7.
+ * Hand-authored 5x8 1-bit type for action-mark micro labels. Rows are
+ * `/`-separated, `#` is ink. Cap height rows 0-6, baseline row 6, descender
+ * row 7. Bubble words use the native face metadata below instead.
  */
 const FONT_ROWS: Readonly<Record<string, string>> = {
   " ": "...../...../...../...../...../...../...../.....",
@@ -277,7 +279,7 @@ const GLYPH_BITS: ReadonlyMap<string, readonly (readonly boolean[])[]> = new Map
 /** Every glyph name the grammar can draw — used by tests to prove full coverage. */
 export const OVERLAY_GLYPH_NAMES = Object.freeze(Object.keys(GLYPH_ROWS) as OverlayGlyph[]);
 
-/** True when a character has an authored bitmap (an unmapped char renders as `?`). */
+/** True when a character has an authored action-mark bitmap. */
 export function hasFontGlyph(character: string): boolean {
   return FONT_BITS.has(character);
 }
@@ -600,7 +602,7 @@ function burstMask(width: number, height: number, spikes: number, seed: number):
 // type rendering
 // ---------------------------------------------------------------------------
 
-/** Draw one string of 5x8 type at a fixed 6px advance. */
+/** Draw one action-mark micro label with a fixed 6px advance. */
 export function drawPixelText(
   surface: PixelSurface,
   text: string,
@@ -610,7 +612,14 @@ export function drawPixelText(
 ): void {
   let cursor = x;
   for (const character of text) {
-    const bits = FONT_BITS.get(character) ?? FONT_BITS.get("?")!;
+    const bits = FONT_BITS.get(character);
+    // An action mark cannot carry a bitmap for every Unicode code point. Keep
+    // its fixed cell reserved and let bubble text's native path preserve the
+    // original character rather than substituting a misleading `?`.
+    if (bits === undefined) {
+      cursor += FONT_ADVANCE;
+      continue;
+    }
     for (let row = 0; row < FONT_HEIGHT; row += 1) {
       const line = bits[row]!;
       for (let column = 0; column < FONT_WIDTH; column += 1) {
@@ -1012,11 +1021,11 @@ export type TextBubbleKind = keyof typeof TEXT_KIND_METRICS;
  *
  * It is a floor on the LENGTH ladder only, never a floor on the type. The
  * CAMERA still takes every bubble to blit scale 1 when it is zoomed out
- * ({@link bubbleScale}), and scale 1 — a 5x8 CSS-px cell, drawn crisp because
- * the stage sets `image-rendering: pixelated` — is the smallest size the
- * authored face reads at. That is the size the whole world is typed at below
- * {@link TEXT_ZOOM_THRESHOLD}. A viewport too small to hold the built surface
- * may also step below this floor (see {@link textBubbleScale}).
+ * ({@link bubbleScale}); the native face follows that same integer scale so
+ * text and chrome keep their authored grid relationship. That is the size the
+ * whole world is typed at below {@link TEXT_ZOOM_THRESHOLD}. A viewport too
+ * small to hold the built surface may also step below this floor (see
+ * {@link textBubbleScale}).
  */
 export const TEXT_SCALE_FLOOR = 2;
 
@@ -1168,6 +1177,36 @@ export interface BuiltSurface {
   readonly surface: PixelSurface;
   /** Message metadata, when the surface carries type. */
   readonly layout?: MessageLayout;
+  /** Native bubble typography, in surface-local 1x coordinates. */
+  readonly typography?: TextTypography;
+}
+
+/** One contiguous colour run of native bubble text at a local 1x position. */
+export interface NativeTextRun {
+  /** Verbatim Unicode text; the browser, rather than a bitmap fallback, draws it. */
+  readonly text: string;
+  /** Surface-local x coordinate in authored world pixels. */
+  readonly x: number;
+  /** Surface-local y coordinate in authored world pixels. */
+  readonly y: number;
+  /** Fill colour for this run, including {@link TAG_INK} references. */
+  readonly color: string;
+  /** Whether the run came from an in-message being reference. */
+  readonly reference: boolean;
+}
+
+/** Immutable native text recipe carried alongside a shape-only bubble surface. */
+export interface TextTypography {
+  readonly fontFamily: typeof TEXT_FONT_FAMILY;
+  readonly fontSize: typeof TEXT_FONT_SIZE;
+  readonly textBaseline: typeof TEXT_FONT_BASELINE;
+  readonly runs: readonly NativeTextRun[];
+}
+
+/** The shape, layout, and native text recipe always returned for a text bubble. */
+export interface BuiltTextSurface extends BuiltSurface {
+  readonly layout: MessageLayout;
+  readonly typography: TextTypography;
 }
 
 /**
@@ -1182,9 +1221,11 @@ export interface BuiltSurface {
  * The box is sized to whatever {@link layoutMessage} produced, so a long message
  * makes a large bubble. Nothing is clipped or excerpted here; the draw pass
  * chooses the blit scale ({@link textBubbleScale}) and keeps the result inside
- * the viewer's safe frame.
+ * the viewer's safe frame. The returned surface contains chrome only. Text is
+ * returned separately as immutable local-coordinate metadata so the browser can
+ * draw it with a smooth native face without changing any layout arithmetic.
  */
-export function buildTextBubble(spec: TextBubbleSpec): BuiltSurface {
+export function buildTextBubble(spec: TextBubbleSpec): BuiltTextSurface {
   const metrics = TEXT_KIND_METRICS[spec.kind];
   const isThought = spec.kind === "thought";
   const isDashed = spec.kind !== "speech";
@@ -1275,11 +1316,12 @@ export function buildTextBubble(spec: TextBubbleSpec): BuiltSurface {
   // message's wrap, so it can neither break across `[` and `]` nor be carried
   // away from the words it belongs to — bracketed and in cool tag ink, so it
   // reads as an address line rather than as the first words spoken.
+  const typographyRuns: NativeTextRun[] = [];
   if (tag !== null) {
-    drawPixelText(surface, tag, textX, textY, TAG_INK);
+    typographyRuns.push({ text: tag, x: textX, y: textY, color: TAG_INK, reference: false });
     textY += tagHeight;
   }
-  // The message is drawn run by run rather than line by line: every being the
+  // The message is retained run by run rather than line by line: every being the
   // words name wears the SAME cool slate as the address line, so one glance
   // finds every reference in the bubble (Safi, 2026-08-26 — "with a different
   // color, it should name that reference"). The fixed 6px advance is what makes
@@ -1287,7 +1329,13 @@ export function buildTextBubble(spec: TextBubbleSpec): BuiltSurface {
   for (const line of layout.runs) {
     let runX = textX;
     for (const run of line) {
-      drawPixelText(surface, run.text, runX, textY, run.reference ? TAG_INK : OVERLAY_PALETTE.ink);
+      typographyRuns.push({
+        text: run.text,
+        x: runX,
+        y: textY,
+        color: run.reference ? TAG_INK : OVERLAY_PALETTE.ink,
+        reference: run.reference,
+      });
       runX += run.text.length * FONT_ADVANCE;
     }
     textY += FONT_LINE_HEIGHT;
@@ -1302,7 +1350,13 @@ export function buildTextBubble(spec: TextBubbleSpec): BuiltSurface {
 
   surface.ax = studX;
   surface.ay = totalHeight - 1;
-  return { surface, layout };
+  const typography: TextTypography = Object.freeze({
+    fontFamily: TEXT_FONT_FAMILY,
+    fontSize: TEXT_FONT_SIZE,
+    textBaseline: TEXT_FONT_BASELINE,
+    runs: Object.freeze(typographyRuns.map((run) => Object.freeze(run))),
+  });
+  return { surface, layout, typography };
 }
 
 export interface MarkSpec {
@@ -1556,10 +1610,10 @@ export function bubbleScale(zoom: number): number {
  *
  * It is emphatically **not** a floor on words. Since 2026-08-27 a text bubble
  * carries its whole message at every camera zoom, typed at blit scale 1 below
- * this step — the smallest size the authored 5x8 face reads at, and the
- * smallest a bubble can be drawn at all, since `bubbleScale` clamps to an
- * integer 1. Zooming out therefore shrinks a bubble with the world until it
- * reaches that floor, and then holds it there.
+ * this step — the smallest native face the grammar uses, and the smallest a
+ * bubble can be drawn at all, since `bubbleScale` clamps to an integer 1.
+ * Zooming out therefore shrinks a bubble with the world until it reaches that
+ * floor, and then holds it there.
  */
 export const TEXT_ZOOM_THRESHOLD = 1.5;
 

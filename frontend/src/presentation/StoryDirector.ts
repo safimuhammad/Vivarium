@@ -23,6 +23,7 @@ import type { PresentedEventType } from "./eventPayloads";
 import { PresentedWorldModel } from "./PresentedWorldModel";
 import {
   SceneSettlementCoordinator,
+  ScenePublicationPending,
   type SceneRuntimeProgram,
   type StoryPhase,
 } from "./SceneSettlementCoordinator";
@@ -479,7 +480,7 @@ export class StoryDirector {
   setPaused(paused: boolean): void {
     if (this.disposed || this.paused === paused) return;
     if (paused) {
-      this.advanceToWallNow();
+      this.advanceForControlChange();
       this.compactPendingCheckpointsForPause();
       this.paused = true;
       this.cancelScheduledClock();
@@ -499,7 +500,7 @@ export class StoryDirector {
   setSpeed(speed: PresentationSpeed): void {
     if (this.disposed || this.speed === speed) return;
     if (![0.5, 1, 1.5, 2].includes(speed)) throw new RangeError("unsupported presentation speed");
-    if (!this.paused && !this.held) this.advanceToWallNow();
+    if (!this.paused && !this.held) this.advanceForControlChange();
     this.speed = speed;
     this.lastWallMs = this.clock.now();
     this.scheduleNext();
@@ -509,7 +510,7 @@ export class StoryDirector {
   holdCurrentMoment(hold: boolean): void {
     if (this.disposed || this.held === hold) return;
     if (hold && this.activeMoment === null) return;
-    if (hold && !this.paused) this.advanceToWallNow();
+    if (hold && !this.paused) this.advanceForControlChange();
     this.held = hold;
     this.lastWallMs = this.clock.now();
     if (hold) this.cancelScheduledClock();
@@ -969,6 +970,7 @@ export class StoryDirector {
       this.collaboratorRetryAttempt = 0;
     } catch (error) {
       this.scheduleCollaboratorRetry(generation);
+      if (error instanceof ScenePublicationPending) return;
       throw error;
     }
     if (generation !== this.sceneGeneration) {
@@ -977,6 +979,15 @@ export class StoryDirector {
     }
     this.scheduleNext();
     this.emit();
+  }
+
+  private advanceForControlChange(): void {
+    try {
+      this.advanceToWallNow();
+    } catch (error) {
+      if (!(error instanceof ScenePublicationPending)) throw error;
+      this.scheduleCollaboratorRetry(this.sceneGeneration);
+    }
   }
 
   private advanceToWallNow(): void {
@@ -1138,6 +1149,7 @@ export class StoryDirector {
         this.emit();
       } catch (error) {
         this.scheduleCollaboratorRetry(generation);
+        if (error instanceof ScenePublicationPending) return;
         throw error;
       }
     });

@@ -33,8 +33,7 @@ import {
   buildPip,
   buildStud,
   buildTextBubble,
-  layoutMessage,
-  messageColumns,
+  FONT_ADVANCE,
   OVERLAY_FAMILY_ACCENT,
   OVERLAY_PALETTE,
   PixelSurface,
@@ -43,6 +42,7 @@ import {
   textBubbleScale,
   type MessageLayout,
   type TextBubbleKind,
+  type TextTypography,
 } from "./bubbleGrammar";
 
 export interface EnvironmentEffectLabel {
@@ -194,6 +194,11 @@ export type EnvironmentEffectRequest =
  * what unit tests observe.
  */
 export interface OverlayViewport {
+  /** Optional display-resolution surface; coordinates remain in CSS pixels. */
+  readonly overlayTarget?: Readonly<{
+    context: CanvasRenderingContext2D;
+    pixelRatio: number;
+  }>;
   readonly zoom: number;
   readonly originX: number;
   readonly originY: number;
@@ -365,6 +370,7 @@ interface TextOverlaySlot extends OverlaySlotBase {
   readonly variant: SpeechBubbleVariant;
   readonly built: PixelSurface;
   readonly layout: MessageLayout;
+  readonly typography: TextTypography;
   readonly accent: string;
   readonly hue: string;
   readonly thread: OverlayThread | null;
@@ -832,7 +838,6 @@ export class EnvironmentSystem {
    */
   private emitText(request: Extract<EnvironmentEffectRequest, { kind: "speech-bubble" }>): void {
     const at = snapPoint(request.at);
-    const metrics = TEXT_KIND_METRICS[request.variant];
     // The addressee tag is a fact from the payload, never prose parsing: it
     // exists exactly when the event named a target, and it is the addressee's
     // public display name, already scrubbed upstream. The bracketed `[to Joe]`
@@ -842,7 +847,7 @@ export class EnvironmentSystem {
     // is GIVEN and invents none, so a region word or an unknown name stays
     // plain type. Both ingestion lanes resolve it at the same choke point.
     const names = request.knownBeingNames ?? [];
-    const { surface, layout: built } = buildTextBubble({
+    const { surface, layout, typography } = buildTextBubble({
       kind: request.variant,
       text: request.text,
       hue: request.hue,
@@ -851,11 +856,6 @@ export class EnvironmentSystem {
       names,
       ...(tag === undefined ? {} : { tag }),
     });
-    const layout = built ?? layoutMessage(
-      request.text,
-      messageColumns(request.text.length, metrics.minColumns, metrics.maxColumns),
-      names,
-    );
     this.resolveGather(request.speakerId);
     this.retireOwnedMarks(request.speakerId);
     this.supersedeTexts(request.speakerId, request.targetId ?? null);
@@ -879,6 +879,7 @@ export class EnvironmentSystem {
       variant: request.variant,
       built: surface,
       layout,
+      typography,
       accent: request.accent,
       hue: request.hue,
       thread: request.thread === undefined ? null : copyThread(request.thread),
@@ -1190,7 +1191,7 @@ export class EnvironmentSystem {
       this.drawFlyingItems(context);
     }
     context.restore();
-    if (pass === "air") this.drawOverlay(context, view);
+    if (pass === "air") this.drawOverlay(view?.overlayTarget?.context ?? context, view);
   }
 
   /**
@@ -1472,7 +1473,10 @@ export class EnvironmentSystem {
     const toScreenY = (worldY: number): number => Math.round(worldY * zoom + originY);
 
     context.save();
-    if (screenSpace) context.setTransform(1, 0, 0, 1, 0, 0);
+    if (screenSpace) {
+      const ratio = view.overlayTarget?.pixelRatio ?? 1;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    }
     context.imageSmoothingEnabled = false;
     context.globalAlpha = 1;
 
@@ -1744,7 +1748,62 @@ export class EnvironmentSystem {
         blitScale,
         alpha,
       );
+      if (isText) {
+        this.drawNativeTypography(
+          context,
+          slot.typography,
+          settled.x,
+          settled.y,
+          blitScale,
+          alpha,
+        );
+      }
     }
+  }
+
+  /**
+   * Draw a bubble's verbatim text after its shape has been blitted.
+   *
+   * Text is issued one Unicode code point at a time so a missing system glyph
+   * remains the browser's own fallback instead of becoming the bitmap font's
+   * `?`. Positions still advance in the layout's UTF-16 units, preserving the
+   * fixed 6px arithmetic for astral characters as well as ordinary text. The
+   * one-cell `maxWidth` bounds a wide fallback glyph without changing wrapping.
+   */
+  private drawNativeTypography(
+    context: CanvasRenderingContext2D,
+    typography: TextTypography,
+    originX: number,
+    originY: number,
+    scale: number,
+    alpha: number,
+  ): void {
+    if (typeof context.fillText !== "function") return;
+    const step = Math.max(1, Math.round(scale));
+    const previousAlpha = context.globalAlpha;
+    const previousFillStyle = context.fillStyle;
+    const previousFont = context.font;
+    const previousBaseline = context.textBaseline;
+    context.font = `${typography.fontSize * step}px ${typography.fontFamily}`;
+    context.textBaseline = typography.textBaseline;
+    context.globalAlpha = previousAlpha * alpha;
+    for (const run of typography.runs) {
+      let utf16Offset = 0;
+      for (const character of run.text) {
+        context.fillStyle = run.color;
+        context.fillText(
+          character,
+          originX + (run.x + utf16Offset * FONT_ADVANCE) * step,
+          originY + run.y * step,
+          FONT_ADVANCE * step,
+        );
+        utf16Offset += character.length;
+      }
+    }
+    context.globalAlpha = previousAlpha;
+    context.fillStyle = previousFillStyle;
+    context.font = previousFont;
+    context.textBaseline = previousBaseline;
   }
 
   /**

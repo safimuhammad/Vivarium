@@ -45,6 +45,13 @@ function declarations(selectorFragment: string): string {
   return block(selectorFragment).replace(/\/\*[\s\S]*?\*\//gu, "");
 }
 
+/** The reader deliberately overrides the older killfeed rules later in the sheet. */
+function latestDeclarations(selectorFragment: string): string {
+  const index = CSS.lastIndexOf(selectorFragment);
+  if (index < 0) throw new Error(`no rule mentioning ${selectorFragment}`);
+  return bodyFrom(CSS.indexOf("{", index), selectorFragment).replace(/\/\*[\s\S]*?\*\//gu, "");
+}
+
 /** The declaration block that *contains* a given declaration. */
 function blockDeclaring(declaration: string): string {
   const index = CSS.indexOf(declaration);
@@ -67,6 +74,16 @@ describe("killfeed band geometry", () => {
     expect(declared).toMatch(
       /--killfeed-reserve:\s*calc\(\s*var\(--killfeed-rail\)\s*\+\s*var\(--killfeed-band\)\s*\+\s*var\(--killfeed-gap\)\s*\)/u,
     );
+  });
+
+  it("publishes the open Chronicle lane to the shell HUD", () => {
+    const declared = blockDeclaring("--observer-active-drawer-width:");
+
+    expect(declared).toMatch(/--observer-active-drawer-width:\s*var\(--killfeed-band\)/u);
+    expect(declared).toMatch(
+      /--observer-active-drawer-right:\s*calc\(\s*var\(--killfeed-rail\)\s*\+\s*env\(safe-area-inset-right\)\s*\)/u,
+    );
+    expect(declared).toMatch(/--observer-active-drawer-gap:\s*var\(--killfeed-gap\)/u);
   });
 
   it("positions the band itself from those variables, never from a second constant", () => {
@@ -119,5 +136,52 @@ describe("killfeed flow sizing", () => {
   it("clips a card to its own scrim so nothing can paint over its neighbour", () => {
     const card = block(".chronicle-killfeed .chronicle-killfeed__card {");
     expect(card).toMatch(/overflow:\s*hidden/u);
+  });
+});
+
+describe("expressive Chronicle reader layout", () => {
+  it("uses the parent header lane and reports the exact drawer width it renders", () => {
+    const reader = declarations(".vivarium-2d-app .chronicle-killfeed--reader.observer-drawer");
+
+    expect(reader).toMatch(/--observer-active-drawer-width:\s*var\(--killfeed-band\)/u);
+    expect(reader).toMatch(/--observer-drawer-width:\s*var\(--killfeed-band\)/u);
+    expect(reader).toMatch(/width:\s*var\(--killfeed-band\)/u);
+    expect(reader).toMatch(/inset:\s*72px/u);
+  });
+
+  it("keeps retained cards in an actual scroll reader instead of a clipped event band", () => {
+    const reader = declarations(".chronicle-killfeed--reader .chronicle-killfeed__reader");
+    const flow = declarations(".chronicle-killfeed--reader .chronicle-killfeed__flow");
+
+    expect(reader).toMatch(/overflow-y:\s*auto/u);
+    expect(reader).toMatch(/flex:\s*1 1 auto/u);
+    expect(flow).toMatch(/overflow:\s*visible/u);
+    expect(flow).toMatch(/align-content:\s*start/u);
+  });
+
+  it("keeps routine cards compact and reveals secondary actions only for an active row", () => {
+    const card = latestDeclarations(".chronicle-killfeed--reader .chronicle-killfeed__card {");
+    const actionsIndex = CSS.indexOf("max-height: 0;", CSS.indexOf(
+      ".chronicle-killfeed--reader .chronicle-killfeed__card-actions {",
+    ));
+    const actions = actionsIndex < 0 ? "" : bodyFrom(CSS.lastIndexOf("{", actionsIndex), "card actions");
+
+    expect(card).toMatch(/padding:\s*7px 8px/u);
+    expect(actions).toMatch(/max-height:\s*0/u);
+    expect(actions).toMatch(/pointer-events:\s*none/u);
+    expect(CSS).toMatch(/\.chronicle-killfeed--reader \.chronicle-killfeed__card:hover \.chronicle-killfeed__card-actions/u);
+    expect(CSS).toMatch(/\.chronicle-killfeed--reader \.chronicle-killfeed__card:focus-within \.chronicle-killfeed__card-actions/u);
+  });
+
+  it("caps quote previews at three lines until an explicit disclosure expands them", () => {
+    const preview = latestDeclarations(".chronicle-killfeed--reader .chronicle-killfeed__quote q {");
+    const expanded = declarations(".chronicle-killfeed--reader .chronicle-killfeed__quote.is-expanded q");
+
+    expect(preview).toMatch(/display:\s*-webkit-box/u);
+    expect(preview).toMatch(/-webkit-line-clamp:\s*3/u);
+    expect(preview).toMatch(/overflow:\s*hidden/u);
+    expect(expanded).toMatch(/-webkit-line-clamp:\s*unset/u);
+    expect(expanded).toMatch(/overflow:\s*visible/u);
+    expect(CSS).toMatch(/\.chronicle-killfeed--reader \.chronicle-killfeed__quote-disclosure/u);
   });
 });

@@ -634,6 +634,20 @@ describe("fetchRecordedRun", () => {
     } as unknown as Response;
   }
 
+  it("preserves the saved terrain seed and local model identity", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/events.jsonl")) return response(true, eventLine());
+      if (url.endsWith("/snapshots.jsonl")) return response(true, snapshotLine());
+      if (url.endsWith("/metadata.json")) return response(true, JSON.stringify({ seed: 7, provider: "mlx", model: "Qwen3.5-0.8B", name: "Nirvana", started_at: 1000 }));
+      throw new Error(`Unexpected path ${url}`);
+    });
+    const recording = await fetchRecordedRun("/api/recordings/saved-one", { fetcher });
+    expect(recording.run.seed).toBe(7);
+    expect(recording.run.provider).toBe("mlx");
+    expect(recording.run.model).toBe("Qwen3.5-0.8B");
+  });
+
   it("fetches events.jsonl and snapshots.jsonl beneath the base URL and parses them", async () => {
     const calls: string[] = [];
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {

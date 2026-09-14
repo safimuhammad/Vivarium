@@ -74,7 +74,7 @@ describe("FollowSubjectControl", () => {
     ));
 
     expect(select().value).toBe("");
-    expect(select().selectedOptions[0]?.textContent).toBe("Automatic");
+    expect(select().selectedOptions[0]?.textContent).toBe("Auto");
     expect(wrapper().getAttribute("data-follow")).toBe("automatic");
   });
 
@@ -159,11 +159,11 @@ describe("FollowSubjectControl", () => {
   it("says out loud why a pursuit ended, where the viewer is already looking", async () => {
     await act(async () => root.render(
       <FollowSubjectControl candidates={CANDIDATES} subject={AUTOMATIC}
-        notice="Aster has died. Story framing resumed."
+        notice="Aster has died. Auto framing resumed."
         onFollow={vi.fn()} onRelease={vi.fn()} />,
     ));
 
     expect(container.querySelector(".observer-hud__follow-notice")?.textContent)
-      .toBe("Aster has died. Story framing resumed.");
+      .toBe("Aster has died. Auto framing resumed.");
   });
 });

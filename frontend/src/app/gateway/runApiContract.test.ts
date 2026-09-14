@@ -114,7 +114,7 @@ describe("GET /api/run/defaults", () => {
     expect(defaults.knobs.abundance.low_label).toBe("the land is dying");
     expect(defaults.knobs.seed.max).toBe(2_147_483_647);
     expect(defaults.knobs.provider.options.map((option) => option.value))
-      .toEqual(["gemini", "ollama"]);
+      .toEqual(["mlx", "gemini", "ollama"]);
     expect(defaults.knobs.duration.options.length).toBeGreaterThanOrEqual(4);
     expect(defaults.knobs.reflect.options.map((option) => option.value)).toEqual([6, 12, 24]);
     expect(defaults.regions.map((region) => region.key)).toEqual([

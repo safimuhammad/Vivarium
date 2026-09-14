@@ -5,7 +5,7 @@ This is the entry point the design has been building toward (``CLAUDE.md`` Secti
 :class:`~world.world.WorldState`, :class:`~bus.event_bus.EventBus`,
 :class:`~tools.registry.ToolRegistry`, and serialized
 :class:`~agents.decider.Decider`, builds 4-5 breathing :class:`~agents.runtime.Agent`\\ s,
-and runs them concurrently over the single (sequential) Ollama alongside the
+and runs them concurrently over one shared local MLX or Ollama model alongside the
 world-tick heartbeat and a live ``rich`` activity feed.
 
 Two public functions split assembly from lifecycle so the whole thing is testable
@@ -30,7 +30,7 @@ import signal
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -41,6 +41,7 @@ from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from config.loader import load_config
 from core.logging import configure_rich_logging, get_logger
+from core.run_knobs import PROVIDER_CHOICES
 from memory.embedding import default_embedding_function
 from memory.store import FileMemoryStore
 from memory.vector_store import ChromaVectorStore, VectorStore
@@ -50,6 +51,7 @@ from observability.event_log import CompositeEventLog, FeedEventLog
 from observability.replay_archive import ReplayArchive
 from observability.run_context import RunContext, build_run_context
 from observability.usage import JsonlUsageLog
+from server.recordings import update_recording_sidecar, write_recording_sidecar
 from tools.builtin import register_builtins
 from tools.registry import ToolRegistry
 from world.agents import AgentState, AgentStatus
@@ -69,10 +71,12 @@ COLLAPSE_ZERO_ALIVE_TICKS: int = 3
 #: call :func:`run_simulation` directly with their own tiny values.
 DEFAULT_CONFIG: str = "config/world.yaml"
 DEFAULT_SEED: int = 7
-DEFAULT_PROVIDER: str = "ollama"
+DEFAULT_PROVIDER: str = "mlx"
 #: Default model per provider; ``--model`` overrides, else the provider picks its own.
 DEFAULT_MODEL: str = "qwen3:8b"
+DEFAULT_MLX_MODEL: str = "mlx-community/Qwen3.5-0.8B-bf16"
 DEFAULT_GEMINI_MODEL: str = "gemini-3.1-flash-lite"
+DEFAULT_MLX_CONTEXT_TOKENS: int = 262_144
 #: Effective context window (tokens) for the hosted Gemini path. Sized so compaction
 #: triggers near 500K tokens (0.70 * (window - generation reserve)), staying safely under
 #: the model's real ~1M window so agents keep far more lived history before compacting.
@@ -84,6 +88,47 @@ DEFAULT_WORLD_TICK_INTERVAL: float = 5.0
 DEFAULT_REFRESH_INTERVAL: float = 2.0
 DEFAULT_MEMORY_ROOT: str = "runs/memory"
 DEFAULT_RUN_DIR: str = "runs"
+
+_PROVIDER_DEFAULT_MODELS: Final[dict[str, str]] = {
+    "mlx": DEFAULT_MLX_MODEL,
+    "ollama": DEFAULT_MODEL,
+    "gemini": DEFAULT_GEMINI_MODEL,
+}
+_PROVIDER_CONTEXT_WINDOWS: Final[dict[str, int | None]] = {
+    "mlx": DEFAULT_MLX_CONTEXT_TOKENS,
+    "ollama": None,
+    "gemini": DEFAULT_GEMINI_CONTEXT_TOKENS,
+}
+
+
+def resolve_default_model(provider: str) -> str:
+    """Return the model selected when a provider has no explicit override.
+
+    Args:
+        provider: Decider backend name.
+
+    Returns:
+        The provider's model default. Unknown providers retain the historical
+        Ollama model value so an unsupported provider still fails at the factory
+        boundary rather than silently becoming MLX or Gemini.
+    """
+    return _PROVIDER_DEFAULT_MODELS.get(provider, DEFAULT_MODEL)
+
+
+def resolve_context_window(provider: str, override: int | None = None) -> int | None:
+    """Return the context window for a provider, honoring an explicit override.
+
+    Args:
+        provider: Decider backend name.
+        override: Caller-selected context window, or None for the provider default.
+
+    Returns:
+        The effective context window, or None when the provider uses the agent's
+        module default.
+    """
+    if override is not None:
+        return override
+    return _PROVIDER_CONTEXT_WINDOWS.get(provider)
 
 
 @dataclass(slots=True)
@@ -128,7 +173,7 @@ def build_simulation(
     model: str,
     memory_root: str | Path,
     run_dir: str | Path,
-    provider: str = "ollama",
+    provider: str = DEFAULT_PROVIDER,
     context_window: int | None = None,
     feed_maxlen: int = 512,
     decider: Decider | None = None,
@@ -154,14 +199,14 @@ def build_simulation(
         seed: RNG seed threaded into the world for a reproducible run. Artifacts are
             isolated beneath the generated run id rather than named by seed alone.
         model: Model name for the default decider; ignored when ``decider`` is
-            supplied. Interpreted per ``provider`` (an Ollama model for ``"ollama"``,
-            a hosted model for ``"gemini"``).
+            supplied. Interpreted per ``provider`` (an MLX model for ``"mlx"``, an
+            Ollama model for ``"ollama"``, or a hosted model for ``"gemini"``).
         memory_root: Root directory under which each agent's ``<agent_id>/`` memory
             directory is created (``FileMemoryStore`` appends the id itself).
         run_dir: Directory the JSONL replay log is written into.
-        provider: Decider backend to build when ``decider`` is ``None`` -- ``"ollama"``
-            (local, the default, serialized one-at-a-time) or ``"gemini"`` (hosted,
-            left UNserialized so agents breathe concurrently).
+        provider: Decider backend to build when ``decider`` is ``None`` -- ``"mlx"``
+            (the default local backend) and ``"ollama"`` are serialized one-at-a-time;
+            ``"gemini"`` is hosted and left UNserialized so agents breathe concurrently.
         feed_maxlen: Number of recent events retained by the live feed ring buffer.
         decider: Optional pre-built decider (tests inject a mock); when ``None`` a
             production :func:`~agents.decider.make_default_decider` is built for
@@ -185,12 +230,10 @@ def build_simulation(
     if world is None:
         world = load_config(config_path, seed=seed)
 
-    # Effective context window: an explicit override wins; else the hosted Gemini path
-    # gets its large window (compaction near ~500K) while the local path keeps the
-    # module default (``None`` -> the Agent uses ``MODEL_CONTEXT_TOKENS``).
-    resolved_window: int | None = context_window
-    if resolved_window is None and provider == "gemini":
-        resolved_window = DEFAULT_GEMINI_CONTEXT_TOKENS
+    # Effective context window: an explicit override wins; otherwise each provider
+    # receives its declared window. MLX keeps the supplied model's 262,144-token
+    # context; Ollama retains its module default; Gemini gets its hosted window.
+    resolved_window = resolve_context_window(provider, context_window)
 
     run_context = build_run_context(
         config_path=config_path,
@@ -204,6 +247,11 @@ def build_simulation(
 
     feed = FeedEventLog(maxlen=feed_maxlen)
     replay_archive = ReplayArchive(run_context.run_dir, run_context.run_id)
+    write_recording_sidecar(
+        run_context,
+        region_name=_recording_region_name(world),
+        status=run_context.status,
+    )
     snapshot_log = JsonlSnapshotCheckpointLog(
         run_context.snapshot_log_path,
         archive=replay_archive,
@@ -225,9 +273,9 @@ def build_simulation(
     register_builtins(registry)
 
     # A NEW variable so the param's ``Decider | None`` is never reassigned to a
-    # different type (keeps ``mypy --strict`` happy). Ollama serves one request at a
-    # time, so its decider is serialized exactly once; the Gemini (hosted) path serves
-    # requests in parallel, so it is left UNserialized and agents breathe concurrently.
+    # different type (keeps ``mypy --strict`` happy). MLX and Ollama serve one request
+    # at a time, so their deciders are serialized exactly once; the Gemini (hosted)
+    # path serves requests in parallel, so it is left UNserialized.
     inner: Decider = (
         decider if decider is not None else make_default_decider(model, provider=provider)
     )
@@ -344,6 +392,12 @@ def _count_present(world: WorldState) -> int:
         The number of world agents whose status is not ``DEAD``.
     """
     return sum(1 for agent in world.get_all_agents() if agent.status is not AgentStatus.DEAD)
+
+
+def _recording_region_name(world: WorldState) -> str | None:
+    """Return the first deterministic region label for automatic run naming."""
+    regions = sorted(world.get_all_regions(), key=lambda region: region.name)
+    return regions[0].name if regions else None
 
 
 async def _liveness_watch(
@@ -581,6 +635,11 @@ async def run_simulation(
         refresh_interval=refresh_interval,
     )
     sim.run_context.mark_running()
+    update_recording_sidecar(
+        sim.run_context,
+        region_name=_recording_region_name(world),
+        status=sim.run_context.status,
+    )
 
     async def run_agent(agent: Agent) -> None:
         """Drive one agent's breathing loop, freeing its inbox when it exits."""
@@ -699,6 +758,11 @@ async def run_simulation(
             except Exception:
                 logger.exception("Failed to close the shared decider during shutdown.")
         sim.run_context.mark_stopped()
+        update_recording_sidecar(
+            sim.run_context,
+            region_name=_recording_region_name(world),
+            status=sim.run_context.status,
+        )
         remove_signal_handlers()
         if terminal_ui:
             assert console is not None
@@ -720,13 +784,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--provider",
         default=DEFAULT_PROVIDER,
-        choices=("ollama", "gemini"),
-        help="Decider backend: local 'ollama' (default) or hosted 'gemini'.",
+        choices=PROVIDER_CHOICES,
+        help="Decider backend: local 'mlx' (default), local 'ollama', or hosted 'gemini'.",
     )
     parser.add_argument(
         "--model",
         default=None,
-        help="Model name; defaults per provider (qwen3:8b for ollama, "
+        help="Model name; defaults per provider "
+        f"({DEFAULT_MLX_MODEL} for mlx, {DEFAULT_MODEL} for ollama, "
         f"{DEFAULT_GEMINI_MODEL} for gemini).",
     )
     parser.add_argument(
@@ -734,8 +799,9 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Context window (tokens) for compaction; overrides the per-provider default "
-        f"(gemini: {DEFAULT_GEMINI_CONTEXT_TOKENS}, compacting near 500K; ollama: the module "
-        "default). Lower it to spend less, raise it to keep more lived history.",
+        f"(mlx: {DEFAULT_MLX_CONTEXT_TOKENS}; gemini: {DEFAULT_GEMINI_CONTEXT_TOKENS}, "
+        "compacting near 500K; ollama: the module default). Lower it to spend less, "
+        "raise it to keep more lived history.",
     )
     parser.add_argument(
         "--pace", type=float, default=DEFAULT_PACE, help="Inter-breath sleep (seconds)."
@@ -780,7 +846,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - live e
     console = Console(stderr=True)
     configure_rich_logging(console)
 
-    model = args.model or (DEFAULT_GEMINI_MODEL if args.provider == "gemini" else DEFAULT_MODEL)
+    model = args.model or resolve_default_model(args.provider)
     sim = build_simulation(
         args.config,
         seed=args.seed,

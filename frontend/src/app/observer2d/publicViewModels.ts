@@ -1,4 +1,6 @@
 import type { AgentSnapshot, HomeSnapshot, RegionSnapshot } from "../schemas";
+import { formatRuinAge } from "./ruinAge";
+import { formatPublicNumber } from "./formatPublicNumber";
 import type { StoryMoment } from "../../presentation/BeatDirector";
 import {
   EVENT_VISUAL_EVENT_TYPES,
@@ -176,7 +178,11 @@ export type ArchiveCatalogueProjectionInput =
       readonly hasMore: boolean;
     };
 
-/** Formats elapsed world seconds as a deterministic in-world day and clock label. */
+/**
+ * The schema's world clock is untagged: local runs record Unix seconds, while
+ * deterministic recordings use elapsed seconds. Preserve those short clocks;
+ * values from 2000 onward are presented as UTC dates, never as fictional run age.
+ */
 export function formatWorldTime(worldSeconds: number): string {
   if (!Number.isFinite(worldSeconds) || worldSeconds < 0) {
     throw new RangeError("world seconds must be a non-negative finite number");
@@ -188,7 +194,13 @@ export function formatWorldTime(worldSeconds: number): string {
   const minute = Math.floor((secondsWithinDay % 3_600) / 60);
   const hour12 = hour24 % 12 || 12;
   const period = hour24 < 12 ? "AM" : "PM";
-  return `Day ${day}, ${hour12}:${String(minute).padStart(2, "0")} ${period}`;
+  const clock = `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
+  if (wholeSeconds >= 946_684_800 && wholeSeconds <= 253_402_300_799) {
+    const date = new Date(wholeSeconds * 1_000);
+    const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][date.getUTCMonth()];
+    return `${month} ${date.getUTCDate()}, ${date.getUTCFullYear()} · ${clock} UTC`;
+  }
+  return `Day ${day}, ${clock}`;
 }
 
 /** Projects compact HUD copy from exactly one selected observer frame. */
@@ -501,7 +513,7 @@ function homeSelection(
       )),
       fact("Status", optionalEnum(value.status)),
       fact("Hoarding", optionalBoolean(value.is_hoarding)),
-      ...(kind === "ruin" ? [fact("Ruined at", optionalNumber(value.ruined_at))] : []),
+      ...(kind === "ruin" ? [fact("Ruin age", formatRuinAge(frame.world.worldTime, value.ruined_at))] : []),
     ]),
   });
 }
@@ -825,7 +837,8 @@ function resourceQuantity(value: number, resource: "energy" | "materials"): stri
 
 function quantityLabel(value: number, singular: string, plural: string = singular): string {
   const safe = Number.isFinite(value) ? Math.abs(value) : 0;
-  return `${safe} ${safe === 1 ? singular : plural}`;
+  const formatted = formatPublicNumber(safe);
+  return `${formatted} ${formatted === "1" ? singular : plural}`;
 }
 
 function agentNameMap(
@@ -926,7 +939,7 @@ function ratio(value: number | undefined, maximum: number | undefined): string {
   const left = finiteNumber(value);
   const right = finiteNumber(maximum);
   if (left === null && right === null) return "Unknown";
-  return `${left === null ? "Unknown" : left} / ${right === null ? "Unknown" : right}`;
+  return `${left === null ? "Unknown" : formatPublicNumber(left)} / ${right === null ? "Unknown" : formatPublicNumber(right)}`;
 }
 
 function finiteNumber(value: number | null | undefined): number | null {

@@ -145,6 +145,13 @@ const RECOVER_ROTATION_DURATION_MS = 900;
 const FALLEN_ROTATION = Math.PI / 2;
 const DEAD_TINT = "rgba(30,25,20,0.55)";
 
+/** Restrained observer-selection bracket, deliberately separate from a being's garment palette. */
+const SELECTED_FEET_MARKER_UNDERLAY = "#2b2420";
+const SELECTED_FEET_MARKER_GOLD = "#e1b454";
+const SELECTED_FEET_MARKER_HALF_WIDTH = 9;
+const SELECTED_FEET_MARKER_HEIGHT = 3;
+const SELECTED_FEET_MARKER_CORNER_WIDTH = 4;
+
 /** Resolved rotation/tint/alpha overlay for one draw, on top of the selected sprite frame. */
 interface PoseTransform {
   readonly rotation: number;
@@ -156,6 +163,28 @@ const IDENTITY_POSE_TRANSFORM: PoseTransform = Object.freeze({ rotation: 0, tint
 
 function hurtTintColor(alpha: number): string {
   return `rgba(196,44,28,${alpha.toFixed(3)})`;
+}
+
+/** Draw the selected being's fixed-pixel feet bracket before its sprite, so its body occludes the centre. */
+function drawSelectedFeetMarker(
+  context: CanvasRenderingContext2D,
+  feetX: number,
+  feetY: number,
+  alpha: number,
+): void {
+  const left = feetX - SELECTED_FEET_MARKER_HALF_WIDTH;
+  const right = feetX + SELECTED_FEET_MARKER_HALF_WIDTH - 1;
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = alpha;
+  context.fillStyle = SELECTED_FEET_MARKER_UNDERLAY;
+  context.fillRect(left, feetY, SELECTED_FEET_MARKER_HALF_WIDTH * 2, SELECTED_FEET_MARKER_HEIGHT);
+  context.fillStyle = SELECTED_FEET_MARKER_GOLD;
+  context.fillRect(left, feetY, SELECTED_FEET_MARKER_CORNER_WIDTH, 1);
+  context.fillRect(left, feetY, 1, SELECTED_FEET_MARKER_HEIGHT);
+  context.fillRect(right - SELECTED_FEET_MARKER_CORNER_WIDTH + 1, feetY, SELECTED_FEET_MARKER_CORNER_WIDTH, 1);
+  context.fillRect(right, feetY, 1, SELECTED_FEET_MARKER_HEIGHT);
+  context.restore();
 }
 
 /** One shared offscreen scratch canvas every actor instance composites its tint overlay onto. */
@@ -638,6 +667,12 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
         this.#recovering = false;
         return;
       }
+      case "clear-body":
+        if (this.#status !== "alive" || this.#recovering) return;
+        // Unlike a full pose reset, this must retain an active route's turn hold.
+        this.#poseAction = null;
+        this.#poseStartMs = 0;
+        return;
       case "set-face":
         this.#faceExpression = command.expression;
         return;
@@ -740,6 +775,10 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
     const feetY = Math.round(this.#position.y + this.#visualOffset.y);
     const transform = this.#poseTransform();
     const breathScale = this.#breathingScale();
+    const presentationAlpha = this.#opacity * transform.alphaMultiplier;
+    if (this.#selected && presentationAlpha > 0) {
+      drawSelectedFeetMarker(context, feetX, feetY, presentationAlpha);
+    }
     const baseSource = this.#recoloredSource(lease.value);
     let source: CanvasImageSource = baseSource;
     let sourceX = rect.x;
@@ -771,7 +810,7 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
     }
     context.save();
     context.globalCompositeOperation = "source-over";
-    context.globalAlpha = this.#opacity * transform.alphaMultiplier;
+    context.globalAlpha = presentationAlpha;
     context.translate(feetX, feetY);
     context.rotate(transform.rotation);
     context.scale((mirror ? -1 : 1) * breathScale, breathScale);

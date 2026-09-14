@@ -11,6 +11,7 @@ import type {
   SemanticSubjectKind,
 } from "../../renderer2d/production/semantics";
 import { frameEntityIdDenylist, safePublicEntityName } from "./publicCopy";
+import { formatRuinAge } from "./ruinAge";
 
 const TILE_SIZE = 32;
 const KIND_RANK: Readonly<Record<SemanticSubjectKind, number>> = Object.freeze({
@@ -40,6 +41,8 @@ export interface SemanticWorldStore {
   readonly getCurrent: () => SemanticWorldView | null;
   readonly getSnapshot: () => SemanticWorldView | null;
   readonly subscribe: (listener: () => void) => () => void;
+  /** Identity-sensitive consumers can observe accepted frames even when subjects are shared. */
+  readonly subscribeCurrent?: (listener: () => void) => () => void;
   readonly publish: (view: SemanticWorldView) => void;
   readonly clear: () => void;
 }
@@ -111,6 +114,7 @@ export function createSemanticWorldStore(): SemanticWorldStore {
   let current: SemanticWorldView | null = null;
   let rendered: SemanticWorldView | null = null;
   const listeners = new Set<() => void>();
+  const currentListeners = new Set<() => void>();
   const getCurrent = (): SemanticWorldView | null => current;
   const getSnapshot = (): SemanticWorldView | null => rendered;
   const notify = (): void => {
@@ -123,9 +127,14 @@ export function createSemanticWorldStore(): SemanticWorldStore {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    subscribeCurrent(listener: () => void): () => void {
+      currentListeners.add(listener);
+      return () => currentListeners.delete(listener);
+    },
     publish(view: SemanticWorldView): void {
       const priorSubjects = current?.subjects;
       current = view;
+      for (const listener of currentListeners) listener();
       if (priorSubjects === view.subjects) return;
       rendered = view;
       notify();
@@ -134,6 +143,7 @@ export function createSemanticWorldStore(): SemanticWorldStore {
       if (current === null) return;
       current = null;
       rendered = null;
+      for (const listener of currentListeners) listener();
       notify();
     },
   });
@@ -251,7 +261,7 @@ function publicStatus(
     const ruinedAt = indexes.ruinedAt.get(subject.selection.id) ?? null;
     return ruinedAt === null
       ? "Ruin"
-      : `Ruin, ${Math.max(0, indexes.worldTime - ruinedAt)} world time old`;
+      : `Ruin, ${formatRuinAge(indexes.worldTime, ruinedAt)} old`;
   }
   const normalized = subject.status.trim().toLowerCase();
   if (subject.kind === "agent" && AGENT_STATUSES.has(normalized)) return titleWords(normalized);

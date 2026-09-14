@@ -749,7 +749,12 @@ describe("PresentationSession", () => {
     });
     await session.ready;
     const publications: number[] = [];
-    session.subscribe(() => publications.push(session.getFrame().revision));
+    const consequenceOffers = new Set<number>();
+    session.subscribe(() => {
+      const frame = session.getFrame();
+      publications.push(frame.revision);
+      if (frame.scene?.phase === "consequence") consequenceOffers.add(frame.revision);
+    });
 
     await client.streams[0]!.emit(envelope([staged(1, "Aster speaks once.")], {
       cursor: 0,
@@ -757,8 +762,8 @@ describe("PresentationSession", () => {
       next_cursor: 1,
     }));
 
-    // Drive the clock the way a browser does: each transient throw lands in its own
-    // task, and the session's own retry schedule is what advances.
+    // Drive the clock the way a browser does. A pending receipt is expected
+    // backpressure; the retry must not escape as an uncaught browser error.
     const transientErrors: string[] = [];
     for (let step = 0; step < 400 && session.getFrame().scene !== null; step += 1) {
       try {
@@ -776,11 +781,10 @@ describe("PresentationSession", () => {
     });
     // 2. Every retry RE-OFFERED the frame rather than only re-reading the receipt.
     expect(new Set(publications).size).toBeGreaterThan(1);
-    // 3. The barrier is bounded, so it cannot throw forever.
-    expect(transientErrors.length).toBeLessThanOrEqual(12);
-    expect(transientErrors.every((message) => (
-      message === "consequence frame was not accepted by Canvas at its exact revision"
-    ))).toBe(true);
+    // 3. Expected waiting stays internal and retries remain bounded.
+    expect(transientErrors).toEqual([]);
+    // Eight offers plus the final consequence publication carrying the notice.
+    expect(consequenceOffers.size).toBeLessThanOrEqual(9);
     // 4. Giving up is loud.
     expect(session.getFrame().notices).toEqual([
       expect.objectContaining({ kind: "canvas-receipt", count: 1, lastCursor: 1 }),
@@ -2563,6 +2567,139 @@ describe("PresentationSession", () => {
     harness.session.dispose();
   });
 
+  it("adopts a replacement after a stopped run's checkpoint feed reports run-mismatch", async () => {
+    const client = new FakeClient(
+      makeRun({ run_id: "run-a", status: "stopped", event_cursor: 83 }),
+      [makeWorld({ run_id: "run-a", event_cursor: 83 })],
+    );
+    const harness = liveHarness(client);
+    await harness.session.ready;
+    client.replaceRun(makeRun({ run_id: "run-b", status: "running", event_cursor: 2 }));
+    client.queueWorld(makeWorld({ run_id: "run-b", event_cursor: 2 }));
+
+    harness.feed.emitFault({ kind: "run-mismatch", line: null, retryable: false });
+    await flushPromises(24);
+
+    expect(harness.session.getFrame()).toMatchObject({
+      runId: "run-b",
+      presentedCursor: 2,
+      liveness: { runStatus: "running" },
+      transport: { connection: "live" },
+    });
+    expect(client.streams[0].closed).toBe(true);
+    expect(client.calls).toEqual(["run", "world", "stream:83", "run", "world", "stream:2"]);
+    expect(harness.feed.resets).toEqual([{ runId: "run-b", sourceKey: "live:run-b" }]);
+    harness.clock.advanceBy(60_000);
+    expect(client.streams).toHaveLength(2);
+    harness.session.dispose();
+  });
+
+  it("coalesces duplicate run-mismatch faults while replacement truth is loading", async () => {
+    const client = new FakeClient(
+      makeRun({ run_id: "run-a", status: "stopped", event_cursor: 83 }),
+      [makeWorld({ run_id: "run-a", event_cursor: 83 })],
+    );
+    const harness = liveHarness(client);
+    await harness.session.ready;
+    const pendingWorld = deferred<WorldSnapshot>();
+    client.replaceRun(makeRun({ run_id: "run-b", event_cursor: 2 }));
+    client.deferWorld(pendingWorld);
+    harness.feed.emitFault({ kind: "run-mismatch", line: null, retryable: false });
+    await flushPromises(12);
+    harness.feed.emitFault({ kind: "run-mismatch", line: 5, retryable: false });
+    harness.feed.emitFault({ kind: "run-mismatch", line: 6, retryable: false });
+    await flushPromises(12);
+
+    expect(client.calls).toEqual(["run", "world", "stream:83", "run", "world"]);
+    expect(harness.session.getFrame()).toMatchObject({
+      runId: "run-a",
+      presentedCursor: 83,
+      transport: { connection: "recovery-paused", retryable: true },
+    });
+    pendingWorld.resolve(makeWorld({ run_id: "run-b", event_cursor: 2 }));
+    await flushPromises(24);
+    expect(harness.session.getFrame().runId).toBe("run-b");
+    expect(client.streams).toHaveLength(2);
+    harness.session.dispose();
+  });
+
+  it("retries mixed replacement metadata and world without publishing either run", async () => {
+    const client = new FakeClient(
+      makeRun({ run_id: "run-a", status: "stopped", event_cursor: 83 }),
+      [makeWorld({ run_id: "run-a", event_cursor: 83 })],
+    );
+    const harness = liveHarness(client);
+    await harness.session.ready;
+    client.replaceRun(makeRun({ run_id: "run-b", event_cursor: 2 }));
+    client.queueWorld(makeWorld({ run_id: "run-c", event_cursor: 1 }));
+    harness.feed.emitFault({ kind: "run-mismatch", line: null, retryable: false });
+    await flushPromises(24);
+
+    expect(harness.session.getFrame()).toMatchObject({ runId: "run-a", presentedCursor: 83 });
+    expect(client.streams).toHaveLength(1);
+    harness.clock.advanceBy(999);
+    expect(client.calls.filter((call) => call === "run")).toHaveLength(2);
+    client.replaceRun(makeRun({ run_id: "run-c", event_cursor: 1 }));
+    client.queueWorld(makeWorld({ run_id: "run-c", event_cursor: 1 }));
+    harness.clock.advanceBy(1);
+    await flushPromises(24);
+    expect(harness.session.getFrame()).toMatchObject({ runId: "run-c", presentedCursor: 1 });
+    expect(client.calls.filter((call) => call === "run")).toHaveLength(3);
+    harness.session.dispose();
+  });
+
+  it("backs off failed run-mismatch refreshes and cancels the retry on disposal", async () => {
+    const client = new FakeClient(
+      makeRun({ run_id: "run-a", event_cursor: 83 }),
+      [makeWorld({ run_id: "run-a", event_cursor: 83 })],
+    );
+    const harness = liveHarness(client);
+    await harness.session.ready;
+    const getRun = vi.spyOn(client, "getRun").mockRejectedValue(new Error("server unavailable"));
+    harness.feed.emitFault({ kind: "run-mismatch", line: null, retryable: false });
+    await flushPromises(12);
+    expect(getRun).toHaveBeenCalledTimes(1);
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 15_000, 15_000]) {
+      const before = getRun.mock.calls.length;
+      harness.clock.advanceBy(delay - 1);
+      await flushPromises(4);
+      expect(getRun).toHaveBeenCalledTimes(before);
+      harness.clock.advanceBy(1);
+      await flushPromises(12);
+      expect(getRun).toHaveBeenCalledTimes(before + 1);
+    }
+    expect(harness.session.getFrame().runId).toBe("run-a");
+    harness.session.dispose();
+    harness.clock.advanceBy(60_000);
+    await flushPromises(12);
+    expect(getRun).toHaveBeenCalledTimes(7);
+    expect(client.streams).toHaveLength(1);
+  });
+
+  it("discards in-flight run-mismatch truth after another run replaces the session", async () => {
+    const client = new FakeClient(
+      makeRun({ run_id: "run-a", event_cursor: 83 }),
+      [makeWorld({ run_id: "run-a", event_cursor: 83 })],
+    );
+    const harness = liveHarness(client);
+    await harness.session.ready;
+    const pendingWorld = deferred<WorldSnapshot>();
+    client.replaceRun(makeRun({ run_id: "run-b", event_cursor: 2 }));
+    client.deferWorld(pendingWorld);
+    harness.feed.emitFault({ kind: "run-mismatch", line: null, retryable: false });
+    await flushPromises(12);
+    harness.session.replaceRun(
+      makeRun({ run_id: "run-c", event_cursor: 1 }),
+      makeWorld({ run_id: "run-c", event_cursor: 1 }),
+    );
+    pendingWorld.resolve(makeWorld({ run_id: "run-b", event_cursor: 2 }));
+    await flushPromises(24);
+    harness.clock.advanceBy(60_000);
+    expect(harness.session.getFrame().runId).toBe("run-c");
+    expect(client.streams).toHaveLength(2);
+    harness.session.dispose();
+  });
+
   // LAW CHANGE (spec §5.4): `frozen-retry` used to be exitable ONLY by the HUD button,
   // and recovery re-fetched `/api/world` alone — so a run that restarted under the
   // observer stayed frozen forever and the button failed identically. Recovery now
@@ -3594,3 +3731,17 @@ function deferred<T>(): Deferred<T> {
 async function flushPromises(turns = 4): Promise<void> {
   for (let index = 0; index < turns; index += 1) await Promise.resolve();
 }
+
+
+describe("observer inference identity", () => {
+  it("carries the actual run provider and model into the presented frame", async () => {
+    const client = new FakeClient(
+      makeRun({ run_id: "run-a", provider: "mlx", model: "mlx-community/Qwen3.5-0.8B-bf16", event_cursor: 5 }),
+      [makeWorld({ run_id: "run-a", event_cursor: 5 })],
+    );
+    const harness = liveHarness(client);
+    await harness.session.ready;
+    expect(harness.session.getFrame().inference).toEqual({ provider: "mlx", model: "mlx-community/Qwen3.5-0.8B-bf16" });
+    harness.session.dispose();
+  });
+});

@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { Info } from "lucide-react";
 
 import type { ObserverAtlasView } from "./publicViewModels";
 
@@ -19,6 +20,7 @@ const ATLAS_HEIGHT = 210;
 /** Compact, directed observer map built only from public Atlas records. */
 export function LivingAtlas2D({ view, onObserveRegion, onInspectRegion }: LivingAtlas2DProps) {
   const positions = layoutAtlasRegions(view.regions.map((region) => region.key));
+  const atlasRows = Math.max(1, Math.ceil(view.regions.length / (view.regions.length <= 4 ? 2 : 4)));
   const regionsByKey = new Map(view.regions.map((region) => [region.key, region]));
   const detailedRegion = view.regions.find((region) => region.observed)
     ?? view.regions.find((region) => region.active)
@@ -30,7 +32,8 @@ export function LivingAtlas2D({ view, onObserveRegion, onInspectRegion }: Living
         <span className="observer-kicker">Living Atlas</span>
         <span>{view.regions.length} regions</span>
       </header>
-      <div className="living-atlas-2d__map">
+      <div className="living-atlas-2d__map" data-roomy={view.regions.length <= 4 || undefined}
+        style={{ "--atlas-rows": atlasRows } as CSSProperties}>
         <svg className="living-atlas-2d__paths" viewBox={`0 0 ${ATLAS_WIDTH} ${ATLAS_HEIGHT}`}
           role="group" aria-label="Directed region paths" preserveAspectRatio="none">
           <defs>
@@ -85,7 +88,7 @@ export function LivingAtlas2D({ view, onObserveRegion, onInspectRegion }: Living
         </div>
         <button type="button" className="living-atlas-2d__inspect"
           aria-label={`Inspect ${detailedRegion.displayName}`}
-          onClick={() => onInspectRegion(detailedRegion.key)}>i</button>
+          onClick={() => onInspectRegion(detailedRegion.key)}><Info size={18} aria-hidden="true" /></button>
       </section>}
     </nav>
   );
@@ -112,9 +115,9 @@ export function layoutAtlasRegions(keys: readonly string[]): ReadonlyMap<string,
     positions.set(stableKeys[0]!, Object.freeze({ x: ATLAS_WIDTH / 2, y: ATLAS_HEIGHT / 2 }));
     return positions;
   }
-  const columnCount = Math.min(4, stableKeys.length);
+  const columnCount = stableKeys.length <= 4 ? 2 : 4;
   const rowCount = Math.ceil(stableKeys.length / columnCount);
-  const horizontalInset = 40;
+  const horizontalInset = stableKeys.length <= 4 ? 85 : 40;
   const verticalInset = rowCount === 2 ? 55 : 35;
   stableKeys.forEach((key, index) => {
     const row = Math.floor(index / columnCount);

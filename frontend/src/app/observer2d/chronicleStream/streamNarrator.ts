@@ -21,6 +21,8 @@
  * resolves to a safe fallback rather than a blank row.
  */
 
+import { formatPublicNumber as formatNumber } from "../formatPublicNumber";
+
 /** Everything {@link narrateStreamEvent} needs to describe one canonical event. */
 export interface StreamNarrationInput {
   /** A canonical event type (one of the 28 in `events/eventVisualCatalog.ts`). */
@@ -183,7 +185,7 @@ export function narrateStreamEvent(input: StreamNarrationInput): Narration {
         : regionLabel !== null
           ? `${actor} spoke at ${regionLabel}.`
           : `${actor} spoke.`;
-      return narration("speak", line, [], message === null ? null : clampQuote(message));
+      return narration("speak", line, [], message);
     }
 
     case "self_talk": {
@@ -192,7 +194,7 @@ export function narrateStreamEvent(input: StreamNarrationInput): Narration {
         "self_talk",
         `${actor} turned something over alone.`,
         [],
-        message === null ? null : clampQuote(message),
+        message,
       );
     }
 
@@ -406,8 +408,7 @@ function narration(
 
 /** The mating pair's own words, when the payload carried an utterance. */
 function quoteOf(payload: Readonly<Record<string, unknown>>): string | null {
-  const message = readString(payload, "message");
-  return message === null ? null : clampQuote(message);
+  return readString(payload, "message");
 }
 
 /** Reads a string field, returning null when absent or the wrong type. */
@@ -442,13 +443,6 @@ function readRecord(
   return value as Readonly<Record<string, unknown>>;
 }
 
-/** Rounds to at most one decimal and drops a trailing ".0". */
-function formatNumber(value: number): string {
-  const rounded = Math.round(value * 10) / 10;
-  const normalized = Object.is(rounded, -0) ? 0 : rounded;
-  return String(normalized);
-}
-
 /** Title-cases a snake_case / kebab-case / spaced region id. */
 function titleCase(id: string): string {
   const words = id.split(/[_\-\s]+/u).filter((part) => part.length > 0);
@@ -465,14 +459,4 @@ function joinNames(names: readonly string[]): string {
   if (filtered.length === 1) return filtered[0]!;
   if (filtered.length === 2) return `${filtered[0]} and ${filtered[1]}`;
   return `${filtered.slice(0, -1).join(", ")} and ${filtered.at(-1)}`;
-}
-
-/** Trims a spoken message on a word boundary to at most `maxLength` characters. */
-function clampQuote(message: string, maxLength = 150): string {
-  const trimmed = message.trim();
-  if (trimmed.length <= maxLength) return trimmed;
-  const sliceTarget = trimmed.slice(0, maxLength - 1);
-  const lastSpace = sliceTarget.lastIndexOf(" ");
-  const cut = lastSpace > 0 ? sliceTarget.slice(0, lastSpace) : sliceTarget;
-  return `${cut.trimEnd()}…`;
 }

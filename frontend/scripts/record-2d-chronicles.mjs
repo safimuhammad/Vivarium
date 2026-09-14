@@ -53,7 +53,9 @@ export async function encodeFrameSequence({
   try {
     await runCommand(ffmpegPath, [
       ...common, "-c:v", "libvpx-vp9", "-lossless", "1", "-threads", "1",
-      "-row-mt", "0", webmPath,
+      // Canonical scene captures are opaque. Pin RGB to avoid FFmpeg selecting
+      // the experimental alpha format (gbrap) for PNG inputs.
+      "-pix_fmt", "gbrp", "-row-mt", "0", webmPath,
     ]);
     await runCommand(ffmpegPath, [
       ...common, "-c:v", "libx264", "-preset", "medium", "-crf", "18",

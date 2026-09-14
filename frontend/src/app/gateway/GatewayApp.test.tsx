@@ -65,9 +65,15 @@ async function mount(props: Parameters<typeof GatewayApp>[0] = {}): Promise<void
   root = createRoot(container as HTMLDivElement);
   await act(async () => root?.render(
     <GatewayApp
-      probeRecording={() => Promise.resolve(true)}
+      listRecordings={() => Promise.resolve([{
+        id: "saved-one", name: "Nirvana at dusk", started_at: 1789000000,
+        duration_seconds: 120, event_count: 32, status: "stopped", model: "Qwen",
+        base_url: "/api/recordings/saved-one", agent_count: 1, living_count: 1,
+        region_count: 1, agents: [{ id: "allen", name: "Allen", persona: null, region: "nirvana", status: "alive" }],
+        regions: [{ id: "nirvana", name: "Nirvana" }],
+      }])}
       renderObserver={(runId) => <main data-testid="observer">{runId}</main>}
-      renderRecording={(base) => <main data-testid="recording">{base}</main>}
+      renderRecording={(base, onExit) => <main data-testid="recording">{base}<button onClick={onExit}>Back to saved runs</button></main>}
       {...props}
     />,
   ));
@@ -105,23 +111,29 @@ describe("the landing page", () => {
 
     expect(text()).toContain("Vivarium");
     expect(text()).toContain("A world that never ends");
-    expect(text()).toContain("Watch a recording");
+    expect(text()).toContain("Browse saved runs");
     expect(text()).toContain("Set the conditions");
   });
 
-  it("offers the recording as a way in that starts nothing", async () => {
-    await mount({ client: stubClient() });
-
-    await click("Watch a recording");
-
-    expect(container?.querySelector('[data-testid="recording"]')).not.toBeNull();
+  it("browses saved worlds and replays the chosen recording without starting inference", async () => {
+    const start = vi.fn();
+    await mount({ client: stubClient({ start }) });
+    await click("Browse saved runs");
+    expect(text()).toContain("Nirvana at dusk");
+    expect(text()).toContain("Allen");
+    await click("Watch replay");
+    expect(container?.querySelector('[data-testid="recording"]')?.textContent).toContain("/api/recordings/saved-one");
+    expect(start).not.toHaveBeenCalled();
+    await click("Back to saved runs");
+    expect(text()).toContain("Nirvana at dusk");
   });
 
-  it("shows the recording way disabled, with a reason, when none is published", async () => {
-    await mount({ client: stubClient(), probeRecording: () => Promise.resolve(false) });
-
-    expect(findButton("Watch a recording").disabled).toBe(true);
-    expect(text()).toContain("No recording is published");
+  it("keeps an empty saved-run library reachable", async () => {
+    await mount({ client: stubClient(), listRecordings: () => Promise.resolve([]) });
+    expect(findButton("Browse saved runs").disabled).toBe(false);
+    await click("Browse saved runs");
+    expect(container?.querySelector('[data-testid="recording"]')).toBeNull();
+    expect(text()).toMatch(/no saved runs/i);
   });
 });
 
@@ -195,9 +207,10 @@ describe("the configuration screen", () => {
     await mount({ client: stubClient() });
 
     await click("Set the conditions");
+    await click("The cloud");
 
-    // 4 beings × the cloud's own $3/being-hour, over the world's 30-minute
-    // default. Both numbers are the server's; neither is written on this screen.
+    // Explicitly choose the cloud: 4 beings × its own $3/being-hour rate, over
+    // the world's 30-minute default. Both numbers are the server's.
     expect(text()).toContain("about $12");
     expect(text()).toContain("about $6");
     expect(text()).toContain("$12 an hour for 4 beings — a breath every second or two.");
@@ -222,6 +235,7 @@ describe("the configuration screen", () => {
     await mount({ client: stubClient() });
 
     await click("Set the conditions");
+    await click("The cloud");
 
     // The prices behind the rate are unconfirmed, and a being's prompt grows
     // through a run, so a flat per-hour figure understates a long one.

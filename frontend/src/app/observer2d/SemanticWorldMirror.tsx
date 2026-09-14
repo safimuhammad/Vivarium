@@ -36,7 +36,7 @@ export const SemanticWorldMirror = memo(function SemanticWorldMirror({
         <span>{view?.subjects.length ?? 0} visible</span>
       </header>
       <p id="world-keyboard-help" className="semantic-world-mirror__help">
-        World keyboard controls: S Story, F Follow, V Free, arrow keys pan,
+        World keyboard controls: S Auto, F Follow, V Free, arrow keys pan,
         plus and minus zoom, brackets or Home and End change region, and M views the shown moment.
       </p>
       {view === null || view.subjects.length === 0

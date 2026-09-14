@@ -110,7 +110,7 @@ def derive_mating_proposal_timeout(provider: str, being_count: int) -> float:
 
     * **Hosted / concurrent** (``"gemini"``): every agent breathes in parallel, so the
       tuned :data:`GEMINI_MATING_PROPOSAL_TIMEOUT_SECONDS` applies whatever the roster.
-    * **Local / serialized** (``"ollama"``, and any unrecognised backend): one model
+    * **Local / serialized** (``"mlx"``, ``"ollama"``, and any unrecognised backend): one model
       serves every agent in turn, so a target breathes every
       ``being_count * OLLAMA_BREATH_LATENCY_SECONDS`` seconds. The proposal must span
       :data:`MATING_TIMEOUT_TARGET_BREATHS` of those, never dropping below the measured
@@ -121,7 +121,7 @@ def derive_mating_proposal_timeout(provider: str, being_count: int) -> float:
     impossible without emitting a single symptom.
 
     Args:
-        provider: Decider backend name (``"gemini"``, ``"ollama"``, ...).
+        provider: Decider backend name (``"mlx"``, ``"ollama"``, ``"gemini"``, ...).
         being_count: Number of beings that will breathe against that backend. Values
             below one are treated as one.
 

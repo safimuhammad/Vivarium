@@ -1,0 +1,167 @@
+/**
+ * The automatic-follow row lives inside the existing translucent observer dock.
+ * Keep its footprint short: cards are a reading aid over the scene, not a
+ * second drawer.
+ */
+.follow-shortcuts {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.follow-shortcuts__header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 16px;
+}
+
+.follow-shortcuts__label {
+  color: var(--observer-muted, #aec7be);
+  font-size: .65rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.follow-shortcuts__count {
+  min-width: 17px;
+  padding: 1px 5px;
+  border: 1px solid var(--observer-line, #38675b);
+  border-radius: 999px;
+  color: var(--observer-muted, #aec7be);
+  font-size: .62rem;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.follow-shortcuts__list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.follow-shortcuts__slot {
+  min-width: 0;
+}
+
+.follow-shortcuts__card {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 54px;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 1px solid var(--observer-line, #38675b);
+  border-radius: 11px;
+  color: var(--observer-ink, #f0f2df);
+  background: linear-gradient(145deg, #0d352ee8, #05231fe8);
+  box-shadow: inset 0 1px 0 #d4e8c312;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.follow-shortcuts__card:hover {
+  border-color: #75bba8;
+  background: linear-gradient(145deg, #15453ae8, #072b25e8);
+}
+
+.follow-shortcuts__card:focus-visible {
+  outline: 2px solid var(--observer-accent, #e9ca77);
+  outline-offset: 2px;
+}
+
+.follow-shortcuts__card[aria-pressed="true"] {
+  border-color: var(--observer-accent, #e9ca77);
+  box-shadow: 0 0 0 1px #e9ca7733, inset 0 1px 0 #fff4b433;
+  background: linear-gradient(145deg, #405238, #243d31);
+}
+
+.follow-shortcuts__card--unavailable {
+  border-color: #78938a66;
+  color: #b1c0b8;
+  background: #102b26aa;
+  cursor: default;
+  opacity: .72;
+}
+
+.follow-shortcuts__card--unavailable .follow-shortcuts__medallion {
+  filter: grayscale(.7);
+}
+
+.follow-shortcuts__medallion {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  border: 2px solid #f0f2df88;
+  border-radius: 50%;
+  color: #fff7d2;
+  font-size: .68rem;
+  font-weight: 750;
+  letter-spacing: .04em;
+  line-height: 1;
+  text-shadow: 0 1px 2px #00110dcc;
+}
+
+.follow-shortcuts__copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.follow-shortcuts__name,
+.follow-shortcuts__action,
+.follow-shortcuts__region {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.follow-shortcuts__name {
+  font-size: .77rem;
+  font-weight: 700;
+}
+
+.follow-shortcuts__action {
+  color: var(--observer-muted, #aec7be);
+  font-size: .7rem;
+}
+
+.follow-shortcuts__region {
+  color: var(--observer-accent, #e9ca77);
+  font-size: .61rem;
+  letter-spacing: .02em;
+}
+
+@media (max-width: 760px) {
+  .follow-shortcuts__list {
+    display: flex;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .follow-shortcuts__card {
+    flex: 0 0 min(13.5rem, 76vw);
+  }
+
+  .follow-shortcuts__slot {
+    flex: 0 0 min(13.5rem, 76vw);
+  }
+
+  .follow-shortcuts__slot .follow-shortcuts__card {
+    flex: 1 1 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .follow-shortcuts__card {
+    transition: none;
+  }
+}

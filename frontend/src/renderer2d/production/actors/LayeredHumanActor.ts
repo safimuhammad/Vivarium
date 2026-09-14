@@ -70,6 +70,8 @@ export type HumanPrimitiveCommand =
   }>
   | Readonly<{ kind: "orient"; facing: Direction4 }>
   | Readonly<{ kind: "play-body"; action: PlayableBodyAction }>
+  /** End a transient body pose without changing locomotion or lifecycle status. */
+  | Readonly<{ kind: "clear-body" }>
   | Readonly<{ kind: "set-face"; expression: HumanExpression }>
   | Readonly<{ kind: "set-held"; heldId: string | null }>
   | Readonly<{ kind: "set-status"; status: HumanStatus }>
@@ -650,6 +652,12 @@ export class LayeredHumanActor implements ProductionHumanActor {
         this.#routeIndex = 0;
         this.#speedPixelsPerSecond = 0;
         this.#beginBodyAction(legacyBodyAction(command.action));
+        return;
+      case "clear-body":
+        if (this.#status !== "alive" || this.#recovering
+          || this.#bodyAction === "walk" || this.#bodyAction === "run"
+          || this.#bodyAction === "turn" || this.#bodyAction === "stop") return;
+        this.#beginBodyAction("idle");
         return;
       case "set-face":
         this.#faceExpression = command.expression;

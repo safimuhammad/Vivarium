@@ -144,6 +144,40 @@ describe("RecordedRunObserver", () => {
     expect(onFailure.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
+  it("keeps the library return available when a recording fails", async () => {
+    const load = vi.fn(async () => { throw new Error("missing save"); });
+    const onExit = vi.fn();
+    const { RecordedRunObserver } = await mountWithMockedObserver(load);
+    root = createRoot(container as HTMLDivElement);
+    await act(async () => {
+      root?.render(<RecordedRunObserver base="/api/recordings/test" load={load} onExit={onExit} />);
+    });
+    const back = container?.querySelector("nav button") as HTMLButtonElement;
+    expect(back.textContent).toContain("Saved Runs");
+    await act(async () => back.click());
+    expect(onExit).toHaveBeenCalledOnce();
+    expect(container?.textContent).toContain("missing save");
+  });
+
+  it("marks a completed replay without remounting the observer runtime", async () => {
+    vi.useFakeTimers();
+    try {
+      const load = vi.fn(async () => fakeRecording());
+      const { capturedProps, RecordedRunObserver } = await mountWithMockedObserver(load);
+      root = createRoot(container as HTMLDivElement);
+      await act(async () => {
+        root?.render(<RecordedRunObserver base="/api/recordings/test" load={load} onExit={() => undefined} />);
+      });
+      const runtime = capturedProps[0]?.createRuntime;
+      await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+      expect(container?.textContent).toContain("Replay finished");
+      expect(capturedProps.at(-1)?.createRuntime).toBe(runtime);
+      expect(load).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("never renders a blank screen on failure — the failure text is non-empty", async () => {
     const load = vi.fn(async () => {
       throw new Error("boom");

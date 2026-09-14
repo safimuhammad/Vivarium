@@ -144,8 +144,6 @@ const QA_GENERATION_READY_MICROTASK_BUDGET = 8;
 // A stale producer can schedule at most its producer callback, bridge dispatch,
 // tracked-promise finalizer, and one React/external-store observation handoff.
 const QA_STALE_PRODUCER_DRAIN_MICROTASK_BUDGET = 4;
-const TRANSIENT_CANVAS_ACCEPTANCE_ERROR =
-  "consequence frame was not accepted by Canvas at its exact revision";
 const RETAINED_CONSEQUENCE_REVISION_ERROR =
   "consequence frame was not retained at its exact revision";
 
@@ -1296,7 +1294,9 @@ describe("development-only Chronicle validation route", () => {
       expect(turns.acceptanceTurnRequestCount).toBe(C01_DEFERRED_ACCEPTANCE_TURNS);
       expect(turns.executedTurnCount).toBeLessThanOrEqual(C01_CUE_TURN_BUDGET);
       expectNoNetwork(network);
-      expectTransientSettlementEvidence(turns, settled);
+      // Renderer acceptance is expected asynchronous backpressure; it must
+      // settle through cooperative retries without escaping to the observer.
+      expectTurnErrors(turns, []);
       if (settled) {
         const terminalFrame = live.session.getFrame();
         expect(terminalFrame.scene).toBeNull();
@@ -2881,6 +2881,45 @@ describe("development-only Chronicle validation route", () => {
       for (const record of [...routeResources].reverse()) await releaseRoute(record);
     }
   }, QA_PRODUCTION_ROUTE_BINDING_TIMEOUT_MS);
+
+  contractIt("keeps C18 view speed selected through the production observer binding", async () => {
+    installRendererBrowserHarness();
+    const network = installNetworkTraps();
+    const { createProductionChronicleQaOwner } = await loadProductionModule();
+    const { ChronicleValidationApp } = await loadValidationAppModule();
+    const composed = productionCompositionSpies();
+    const owner = createProductionChronicleQaOwner({
+      initialChronicleId: "C18",
+      composition: composed.factories,
+    });
+    root = createRoot(container as HTMLDivElement);
+    await act(async () => root?.render(<ChronicleValidationApp owner={owner} />));
+    await act(async () => owner.ready);
+    const app = singleElement<HTMLElement>(container, ".vivarium-2d-app");
+    try {
+      await clickButton(app, "Chronicle");
+      await choose(requiredElement<HTMLSelectElement>(app, "select", "View speed"), "2");
+
+      expect(owner.observerRuntime.diagnostics()).toMatchObject({ speed: 2 });
+      expect(owner.observerRuntime.getSnapshot().diagnostics).toMatchObject({ speed: 2 });
+      expect(requiredElement<HTMLSelectElement>(app, "select", "View speed").value).toBe("2");
+      expectNoNetwork(network);
+    } finally {
+      try {
+        await act(async () => root?.unmount());
+      } finally {
+        try {
+          root = null;
+        } finally {
+          try {
+            owner.dispose();
+          } finally {
+            disposeMountedRendererTestResources(app, composed.rendererAtlasPool);
+          }
+        }
+      }
+    }
+  });
 
   contractIt("C-fix-2 regression: steps C18 cursor-by-cursor through the Nirvana arrival and recovers settlement at cursor 21", async () => {
     // C16-pattern per-checkpoint deliverThroughCursor+settle() loop (the same shape as
@@ -4568,22 +4607,6 @@ function frameIdentity(frame: Readonly<{
 function expectTurnErrors(turns: CooperativeBrowserTurns, expected: readonly string[]): void {
   expect(turns.turnErrors.map((error) => error instanceof Error ? error.message : String(error)))
     .toEqual(expected);
-}
-
-function expectTransientSettlementEvidence(
-  turns: CooperativeBrowserTurns,
-  settled: boolean,
-): void {
-  const messages = turns.turnErrors.map((error) => (
-    error instanceof Error ? error.message : String(error)
-  ));
-  expect(messages[0]).toBe(TRANSIENT_CANVAS_ACCEPTANCE_ERROR);
-  expect(messages.every((message) => (
-    message === TRANSIENT_CANVAS_ACCEPTANCE_ERROR
-    || message === RETAINED_CONSEQUENCE_REVISION_ERROR
-  ))).toBe(true);
-  if (settled) expect(messages).toEqual([TRANSIENT_CANVAS_ACCEPTANCE_ERROR]);
-  else expect(messages).toContain(RETAINED_CONSEQUENCE_REVISION_ERROR);
 }
 
 function settlementFailureMessage(error: unknown): string {

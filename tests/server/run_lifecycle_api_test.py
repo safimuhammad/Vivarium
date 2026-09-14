@@ -22,7 +22,7 @@ from core.run_settings import (
 )
 from memory.embedding import FakeEmbeddingFunction
 from memory.vector_store import FakeVectorStore, VectorStore
-from scripts.run import Simulation
+from scripts.run import DEFAULT_MLX_CONTEXT_TOKENS, DEFAULT_MLX_MODEL, Simulation
 from server.app import ServerSettings, create_app, settings_from_cli
 from server.run_manager import RunManager
 from tests.conftest import MockDecider
@@ -154,7 +154,9 @@ def test_run_config_reports_the_process_run_honestly(tmp_path: Path) -> None:
         assert body["schema"] == 1
         assert body["run_id"] == client.get("/api/run").json()["run_id"]
         assert body["config"]["seed"] == 7
-        assert body["config"]["provider"] == "ollama"  # ServerSettings default
+        assert body["config"]["provider"] == "mlx"  # ServerSettings default
+        assert _sim(client).run_context.model == DEFAULT_MLX_MODEL
+        assert _sim(client).run_context.context_window == DEFAULT_MLX_CONTEXT_TOKENS
         assert body["config"]["duration_seconds"] == 10.0
         assert [being["name"] for being in body["config"]["beings"]] == [
             "Joe",
@@ -547,5 +549,7 @@ def test_the_screen_starts_the_FIRST_run_on_an_idle_server(tmp_path: Path) -> No
 
 def test_idle_flag_turns_autostart_off_and_is_absent_by_default() -> None:
     """``python -m server.app --idle`` is the opt-in; every other invocation is unchanged."""
+    assert settings_from_cli([]).provider == "mlx"
+    assert settings_from_cli(["--provider", "ollama"]).provider == "ollama"
     assert settings_from_cli([]).autostart is True
     assert settings_from_cli(["--idle"]).autostart is False

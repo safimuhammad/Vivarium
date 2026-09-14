@@ -37,7 +37,7 @@ describe("parseRunDefaults", () => {
     });
     expect(defaults.config.abundance).toBe(1);
     expect(defaults.config.seed).toBe(7);
-    expect(defaults.config.provider).toBe("gemini");
+    expect(defaults.config.provider).toBe("mlx");
   });
 
   it("reads the roster bounds out of the beings knob's own count fields", () => {
@@ -79,7 +79,8 @@ describe("parseRunDefaults", () => {
     expect(knobs.duration.options.map((option) => option.value))
       .toEqual([1800, 900, 3600, 14400, null]);
     expect(knobs.reflect.options.map((option) => option.value)).toEqual([6, 12, 24]);
-    expect(knobs.provider.options.map((option) => option.value)).toEqual(["gemini", "ollama"]);
+    expect(knobs.provider.options.map((option) => option.value))
+      .toEqual(["mlx", "gemini", "ollama"]);
   });
 
   it("offers the server's own default run length even when its choices omit it", () => {
@@ -97,12 +98,24 @@ describe("parseRunDefaults", () => {
 
   it("reads a rate and a cadence per place, both from the server", () => {
     const options = parseRunDefaults(defaultsPayload()).knobs.provider.options;
+    const mlx = options.find((option) => option.value === "mlx");
+    const gemini = options.find((option) => option.value === "gemini");
+    const ollama = options.find((option) => option.value === "ollama");
 
-    expect(options[0]?.label).toBe("The cloud");
-    expect(options[0]?.cadence).toBe("a breath every second or two");
-    expect(options[0]?.cost_per_being_hour_usd).toBe(3);
-    expect(options[1]?.cost_per_being_hour_usd).toBe(0);
-    expect(options[1]?.cadence).toContain("minutes between breaths");
+    expect(mlx).toMatchObject({
+      label: "This Mac · MLX",
+      cadence: "one being at a time",
+      cost_per_being_hour_usd: 0,
+    });
+    expect(gemini).toMatchObject({
+      label: "The cloud",
+      cadence: "a breath every second or two",
+      cost_per_being_hour_usd: 3,
+    });
+    expect(ollama).toMatchObject({
+      cost_per_being_hour_usd: 0,
+      cadence: "minutes between breaths, one being at a time",
+    });
   });
 
   it("invents no rate for a place the server described without one", () => {
@@ -110,14 +123,17 @@ describe("parseRunDefaults", () => {
     // screen must never turn silence into a price.
     const payload = defaultsPayload();
     const choices = knobsOf(payload).provider.choices as Record<string, unknown>[];
-    delete choices[0].cost_per_being_hour_usd;
-    delete choices[0].cadence;
+    const gemini = choices.find((choice) => choice.value === "gemini");
+    if (gemini === undefined) throw new Error("the captured payload has no Gemini choice");
+    delete gemini.cost_per_being_hour_usd;
+    delete gemini.cadence;
 
     const options = parseRunDefaults(payload).knobs.provider.options;
+    const geminiOption = options.find((option) => option.value === "gemini");
 
-    expect(options[0]?.cost_per_being_hour_usd).toBeNull();
+    expect(geminiOption?.cost_per_being_hour_usd).toBeNull();
     // Falls back to the option's own prose so an older server still reads right.
-    expect(options[0]?.cadence).toContain("Every being thinks at once");
+    expect(geminiOption?.cadence).toContain("Every being thinks at once");
   });
 
   it("carries the server's cost caveat, and invents none when it publishes none", () => {
@@ -209,7 +225,7 @@ describe("parseRunConfig", () => {
       abundance: 1,
       seed: 7,
       duration_seconds: 1800,
-      provider: "gemini",
+      provider: "mlx",
       reflect_every_n_breaths: 12,
       max_offspring: 5,
     });

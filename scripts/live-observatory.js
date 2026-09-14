@@ -9,7 +9,7 @@ const repoRoot = path.resolve(__dirname, '..');
 const defaultHost = '127.0.0.1';
 const defaultConfigPath = 'config/world.yaml';
 const defaultSeed = 7;
-const defaultProvider = 'ollama';
+const defaultProvider = 'mlx';
 const defaultPace = 1;
 const defaultDuration = 1800;
 const defaultWorldTickInterval = 5;
@@ -987,9 +987,9 @@ function usage() {
     '  --api-port <port|auto>          API port, default auto.',
     '  --frontend-port <port|auto>     Frontend port, default auto.',
     '  --host <host>                   Bind host, default 127.0.0.1.',
-    '  --provider <ollama|gemini>      Provider passed to server.app, default ollama.',
+    '  --provider <mlx|ollama|gemini>  Provider passed to server.app, default mlx.',
     '  --model <name>                  Optional model override.',
-    '  --context-tokens <count>        Optional Gemini context-token override.',
+    '  --context-tokens <count>        Optional provider context-token override.',
     '  --seed <number>                 Run seed, default 7.',
     '  --duration <seconds>            Run duration, default 1800.',
     '  --pace <seconds>                Agent pace, default 1.',

@@ -53,6 +53,7 @@ import {
 } from "./RecoveryCoordinator";
 import {
   SceneSettlementCoordinator,
+  ScenePublicationPending,
   type SceneRuntimePort,
 } from "./SceneSettlementCoordinator";
 import {
@@ -515,6 +516,9 @@ class OwnedPresentationSession implements PresentationSession {
   private cancelRejoin: (() => void) | null = null;
   private frozenRetryAttempt = 0;
   private cancelFrozenRetry: (() => void) | null = null;
+  private runReplacementPending = false;
+  private runReplacementAttempt = 0;
+  private cancelRunReplacementRetry: (() => void) | null = null;
   private readonly controlPort: PresentationControls;
   private unsubscribeIngress: (() => void) | null = null;
   /** Accepted evidence batches the director refused, e.g. for a cursor discontinuity. */
@@ -927,6 +931,8 @@ class OwnedPresentationSession implements PresentationSession {
     this.cancelScheduledRejoin();
     this.rejoinAttempt = 0;
     this.frozenRetryAttempt = 0;
+    this.runReplacementPending = false;
+    this.runReplacementAttempt = 0;
     this.closeStream();
     this.frameAcceptance?.clear();
     this.lastPublicationKey = null;
@@ -1018,7 +1024,7 @@ class OwnedPresentationSession implements PresentationSession {
             if (pending.offers < MAX_CONSEQUENCE_RECEIPT_OFFERS) {
               this.pendingConsequencePublication = null;
               this.offerConsequenceFrame(moment, consequenceScene, model, director, pending.offers);
-              throw new Error("consequence frame was not accepted by Canvas at its exact revision");
+              throw new ScenePublicationPending();
             }
             // Bounded: a Canvas that will not sign must not be able to stop the world.
             // Settle without the receipt and say so — a frozen stage proves nothing.
@@ -1035,7 +1041,7 @@ class OwnedPresentationSession implements PresentationSession {
         }
         const accepted = this.offerConsequenceFrame(moment, consequenceScene, model, director, 0);
         if (this.frameAcceptance !== null && !this.frameAcceptance.accepts(accepted)) {
-          throw new Error("consequence frame was not accepted by Canvas at its exact revision");
+          throw new ScenePublicationPending();
         }
         this.pendingConsequencePublication = null;
         return accepted.revision;
@@ -1276,7 +1282,9 @@ class OwnedPresentationSession implements PresentationSession {
     });
     this.unsubscribeCheckpointFault = this.feed.subscribeFault((fault) => {
       if (this.disposed || this.recoveryLocked) return;
-      if (fault.kind === "oversized-record") {
+      if (fault.kind === "run-mismatch") {
+        this.beginRunReplacement();
+      } else if (fault.kind === "oversized-record") {
         void this.triggerRecovery("checkpoint-413", this.digestAfterFrame());
       } else {
         this.owners?.director.acceptIngressFault(fault);
@@ -1347,6 +1355,56 @@ class OwnedPresentationSession implements PresentationSession {
     this.cancelRejoin = null;
     this.cancelFrozenRetry?.();
     this.cancelFrozenRetry = null;
+    this.cancelRunReplacementRetry?.();
+    this.cancelRunReplacementRetry = null;
+  }
+
+  /**
+   * Freezes the old run while resolving the checkpoint feed's changed identity.
+   *
+   * A run-mismatch stops checkpoint polling, while an existing SSE connection can
+   * keep heartbeating its old stopped simulation forever. The session therefore
+   * owns discovering and installing the replacement, including transient failures.
+   */
+  private beginRunReplacement(): void {
+    if (this.client === null || this.source !== "live" || this.runReplacementPending) return;
+    this.runReplacementPending = true;
+    this.cancelScheduledRejoin();
+    this.closeStream();
+    const candidate = this.generation;
+    this.publishObserverFrame("recovery-paused", true);
+    if (!this.isCurrent(candidate) || !this.runReplacementPending) return;
+    this.beginRecoveryFreeze();
+    this.owners?.director.setPaused(true);
+    void this.refreshRunReplacement(candidate);
+  }
+
+  /** Installs only matching replacement truth; retries races and failures with capped backoff. */
+  private async refreshRunReplacement(candidate: number): Promise<void> {
+    const client = this.client;
+    if (client === null || !this.isCurrent(candidate) || !this.runReplacementPending) return;
+    try {
+      const run = await client.getRun();
+      if (!this.isCurrent(candidate)) return;
+      if (run.run_id !== this.run?.run_id) {
+        const world = await client.getWorld();
+        if (!this.isCurrent(candidate)) return;
+        if (world.run_id === run.run_id) {
+          this.replaceRun(run, world);
+          return;
+        }
+      }
+    } catch {
+      // Retry failed requests or replacement preparation while this attempt still owns the session.
+    }
+    if (!this.isCurrent(candidate) || !this.runReplacementPending) return;
+    const step = Math.min(this.runReplacementAttempt, REJOIN_BACKOFF_MAX_STEPS);
+    this.runReplacementAttempt = step + 1;
+    const delayMs = Math.min(REJOIN_BACKOFF_BASE_MS * 2 ** step, REJOIN_BACKOFF_MAX_MS);
+    this.cancelRunReplacementRetry = this.clock.schedule(this.clock.now() + delayMs, () => {
+      this.cancelRunReplacementRetry = null;
+      void this.refreshRunReplacement(candidate);
+    });
   }
 
   /**
@@ -1633,6 +1691,7 @@ class OwnedPresentationSession implements PresentationSession {
       },
       notices: this.notices,
       liveness: this.livenessState(),
+      ...(this.run === null ? {} : { inference: { provider: this.run.provider, model: this.run.model } }),
     };
     const publicationKey = semanticPublicationKey(next);
     if (
@@ -2222,6 +2281,7 @@ function semanticPublicationKey(frame: PresentedObserverFrame): string {
     // changed between two frames -- and a deduplicated frame is a silent failure.
     notices: frame.notices ?? [],
     liveness: frame.liveness ?? null,
+    inference: frame.inference ?? null,
   });
 }
 

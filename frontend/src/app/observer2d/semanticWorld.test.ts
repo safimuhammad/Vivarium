@@ -95,12 +95,19 @@ describe("semantic world public boundary", () => {
     });
     expect(view?.subjects[2]).toMatchObject({ status: "Standing", canFollow: true });
     expect(view?.subjects[3]?.status).toContain("Ruin");
-    expect(view?.subjects[3]?.status).toContain("12 world time old");
+    expect(view?.subjects[3]?.status).toContain("12s old");
     expect(view?.subjects[3]?.currentAction).toBe("No active action");
     expect(JSON.stringify(view)).not.toMatch(
       /agent_raw_17|home_raw_4|ruin_raw_8|nirvana-internal|stable-|\bidle\b/i,
     );
     expect(view?.subjects.every((subject) => /^subject-\d+$/.test(subject.token))).toBe(true);
+  });
+
+  it("keeps fractional ruin ages readable in the presented frame", () => {
+    const base = presentedFrame();
+    const frame = { ...base, world: { ...base.world, worldTime: 95.14336895942688 } };
+    const view = projectSemanticWorld(frame, semanticSnapshot(), new SemanticSubjectTokenRegistry(), "nirvana");
+    expect(view?.subjects[3]?.status).toBe("Ruin, 1m 5s old");
   });
 
   it("retains opaque tokens through updates, does not reorder on position, and resolves callbacks privately", () => {

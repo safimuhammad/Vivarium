@@ -23,7 +23,8 @@ import {
   type ProductionStageCaptureInjection,
 } from "../renderer2d/production/PresentationWorldStage";
 import { ArchiveDrawer } from "./observer2d/ArchiveDrawer";
-import { CameraFramingControl } from "./observer2d/CameraFramingControl";
+import { FollowShortcuts } from "./observer2d/FollowShortcuts";
+import { ObserverControls } from "./observer2d/ObserverControls";
 import { FollowSubjectControl } from "./observer2d/FollowSubjectControl";
 import {
   advanceFollow,
@@ -43,14 +44,12 @@ import { RunStopControl } from "./observer2d/RunStopControl";
 import { resolveObserverLiveness } from "./observer2d/observerLiveness";
 import { resolveRunStatus, useRunStopController } from "./observer2d/runStopController";
 import type { RunLifecycleCapability } from "./observer2d/runStopController";
-import { ChronicleKillfeed } from "./observer2d/chronicleStream/ChronicleKillfeed";
-import { StreamGlyph } from "./observer2d/chronicleStream/StreamGlyph";
+import { ChronicleKillfeed, type ChronicleFeedFilter } from "./observer2d/chronicleStream/ChronicleKillfeed";
 import {
   parseChronicleBufferMs,
   readChronicleSurfacePreference,
   writeChronicleSurfacePreference,
 } from "./observer2d/chronicleStream/chronicleSurfacePreference";
-import type { StreamEvent } from "./observer2d/chronicleStream/streamEvent";
 import { useChronicleStream } from "./observer2d/chronicleStream/useChronicleStream";
 import { DialogueNow } from "./observer2d/DialogueNow";
 import { LivingAtlas2D } from "./observer2d/LivingAtlas2D";
@@ -96,6 +95,8 @@ import type { SharedAtlasPool } from "../renderer2d/production/assets/SharedAtla
 import type { AtlasCommitScheduler } from "../renderer2d/production/AtlasCommitScheduler";
 
 import "./Vivarium2DApp.css";
+import "./QuietObservatory.css";
+import "./ObserverDrawers.css";
 
 const PRIMARY_SURFACE_ID = "observer-primary-surface";
 const MOBILE_SURFACE_BREAKPOINT = 760;
@@ -165,6 +166,7 @@ export interface ObserverChromeRects {
   readonly dialogue: ObserverChromeRect | null;
   readonly triggers: ObserverChromeRect | null;
   readonly drawer: ObserverChromeRect | null;
+  readonly dock?: ObserverChromeRect | null;
 }
 
 interface FocusReturnRequest {
@@ -245,9 +247,15 @@ export function Vivarium2DApp({
   const stream = useChronicleStream({
     frame: snapshot?.frame ?? null,
     chronicle: snapshot?.chronicle ?? null,
-    active: overlay.surface.kind === "chronicle",
+    active: overlay.surface.kind === "chronicle" || overlay.surface.kind === "closed",
     ...(resolvedBufferMs === null ? {} : { bufferMs: resolvedBufferMs }),
   });
+  const [chronicleSeenCursor, setChronicleSeenCursor] = useState(0);
+  useEffect(() => {
+    if (overlay.surface.kind !== "chronicle") return;
+    setChronicleSeenCursor(stream.events.at(-1)?.cursor ?? 0);
+  }, [overlay.surface.kind, stream.events]);
+  const [chronicleFilter, setChronicleFilter] = useState<ChronicleFeedFilter>("world");
   const [viewport, setViewport] = useState(() => readViewport());
   const [cameraControl, setCameraControl] = useState<Readonly<{
     accepted: CameraMode;
@@ -296,6 +304,7 @@ export function Vivarium2DApp({
     selection: Exclude<ObserverSelection, null>;
   }> | null>(null);
   const followSelectionRef = useRef<string | null>(null);
+  const followRequestSerialRef = useRef(0);
   const snapshotLineage = snapshot?.frame === null || snapshot?.frame === undefined
     ? null
     : `${snapshot.frame.runId}\u0000${snapshot.frame.sourceKey}`;
@@ -390,6 +399,8 @@ export function Vivarium2DApp({
     followStateRef.current = FOLLOW_OFF;
     setFollowState(FOLLOW_OFF);
     setFollowNotice(null);
+    setChronicleSeenCursor(0);
+    setChronicleFilter("world");
     setFollowRequest(null);
     followSelectionRef.current = null;
   }, [snapshotLineage]);
@@ -527,13 +538,15 @@ export function Vivarium2DApp({
         // and announces the selection back the way a canvas click does.
         const agentKey = outcome.effect.agentKey;
         followSelectionRef.current = agentKey;
-        setFollowRequest((current) => Object.freeze({
-          serial: (current?.serial ?? 0) + 1,
+        setFollowRequest(Object.freeze({
+          serial: ++followRequestSerialRef.current,
           selection: { kind: "agent" as const, id: agentKey },
         }));
         break;
       }
       case "abandon": {
+        setFollowRequest(null);
+        followSelectionRef.current = null;
         followNoticeSerialRef.current += 1;
         const ending = Object.freeze({
           key: `follow-ended:${followNoticeSerialRef.current}`,
@@ -633,6 +646,11 @@ export function Vivarium2DApp({
     if (followStateRef.current.kind !== "off") setFollowPulse((pulse) => pulse + 1);
   }, [semanticStore]);
 
+  const resolveShortcutAgentKey = useCallback((token: string): string | null => {
+    const selected = semanticTokensRef.current.selectionFor(token);
+    return selected?.kind === "agent" ? selected.id : null;
+  }, []);
+
   const selectSemanticSubject = useCallback((token: string): void => {
     const currentRuntime = debugRuntimeRef.current;
     const next = semanticTokensRef.current.selectionFor(token);
@@ -677,6 +695,7 @@ export function Vivarium2DApp({
   }
 
   const frame = snapshot.frame;
+  const recorded = frame.source !== "live" || frame.inference?.provider === "fixture";
   const chronicle = snapshot.chronicle;
   const hud = projectObserverHud(frame, snapshot.observedRegionId);
   /**
@@ -745,13 +764,32 @@ export function Vivarium2DApp({
    * camera by zooming is still nominally in `story` mode, so every mode-based
    * dedup between here and the renderer would swallow the request.
    */
-  const resumeStoryFraming = (): void => {
-    setResumeStorySerial((serial) => serial + 1);
-  };
   const requestCameraMode = (mode: CameraMode): void => {
     setCameraControl((current) => current.requested === mode
       ? current
       : Object.freeze({ ...current, requested: mode }));
+  };
+  /**
+   * Stop a shell-owned pursuit before a manual camera gesture publishes its
+   * synchronous runtime update. `FOLLOW_RELEASED` blocks the still-accepted
+   * Follow mode from immediately adopting the selection again.
+   */
+  const releaseFollowPursuit = (): void => {
+    followStateRef.current = FOLLOW_RELEASED;
+    setFollowState(FOLLOW_RELEASED);
+    setFollowRequest(null);
+    followSelectionRef.current = null;
+    setFollowNotice(null);
+  };
+  /**
+   * A zoom is a manual camera gesture even though it deliberately preserves the nominal mode.
+   *
+   * Only a pursuit still waiting for its subject is cancelled here. Once Follow has latched, zoom
+   * remains the existing viewer-authority gesture and the HUD continues to name that subject.
+   */
+  const releasePendingFollowPursuit = (): void => {
+    if (followStateRef.current.kind !== "waiting") return;
+    releaseFollowPursuit();
   };
   /**
    * The VIEWER chose a place (an Atlas island click).
@@ -760,6 +798,10 @@ export function Vivarium2DApp({
    * stop dragging them back to wherever the world happens to be talking.
    */
   const observeRegion = (regionId: string): void => {
+    // `runtime.observeRegion` republishes synchronously. Release first, or its
+    // follow tick sees the old active pursuit and immediately asks for the
+    // followed being's old region before the Free request can be accepted.
+    releaseFollowPursuit();
     runtime.observeRegion(regionId);
     requestCameraMode("free");
   };
@@ -789,6 +831,8 @@ export function Vivarium2DApp({
       ? current
       : Object.freeze({ ...current, requested: current.accepted }));
     if (mode !== "follow") return;
+    setFollowRequest(null);
+    followSelectionRef.current = null;
     // The renderer refused: whatever the shell asked for is not something the
     // camera can latch onto. A pursuit that stayed named here would be claiming
     // to follow a being the camera never reached.
@@ -799,7 +843,7 @@ export function Vivarium2DApp({
       followNoticeSerialRef.current += 1;
       setFollowNotice(Object.freeze({
         key: `follow-refused:${followNoticeSerialRef.current}`,
-        message: `${pursued.name} could not be followed. Story framing resumed.`,
+        message: `${pursued.name} could not be followed. Auto framing resumed.`,
       }));
       setResumeStorySerial((serial) => serial + 1);
     }
@@ -833,9 +877,7 @@ export function Vivarium2DApp({
     // RELEASED, not merely off: the camera is still nominally in `follow` until
     // the renderer accepts the story request below, and a plain `off` would let
     // the machine re-adopt the very being this press walked away from.
-    followStateRef.current = FOLLOW_RELEASED;
-    setFollowState(FOLLOW_RELEASED);
-    setFollowNotice(null);
+    releaseFollowPursuit();
     setResumeStorySerial((serial) => serial + 1);
   };
 
@@ -863,6 +905,36 @@ export function Vivarium2DApp({
     }
   };
 
+  const followCameraChoice = (): void => {
+    if (selection?.kind === "home") {
+      releaseFollowPursuit();
+      requestCameraMode("follow");
+      return;
+    }
+    const chosen = followReading.key
+      ?? (frame.selection?.kind === "agent" ? frame.selection.id : null)
+      ?? followRoster.candidates.find((being) => being.regionKey === snapshot.observedRegionId)?.key
+      ?? followRoster.candidates[0]?.key;
+    if (chosen !== undefined && chosen !== null) chooseFollowSubject(chosen);
+  };
+  const cameraControls = (withTransport: boolean): ReactElement => <ObserverControls
+    mode={presentedCameraControl.accepted}
+    viewerControlled={viewerControlsCamera}
+    followAvailable={followRoster.candidates.length > 0 || selection?.kind === "home"}
+    onAuto={releaseFollowSubject}
+    onFollow={followCameraChoice}
+    onFree={() => { releaseFollowPursuit(); requestCameraMode("free"); }}
+    subjectControl={<FollowSubjectControl
+      candidates={followRoster.candidates}
+      subject={followReading}
+      heldSubjectName={heldCameraSubjectName(presentedCameraControl.accepted, followReading, selection)}
+      notice={followNotice?.message ?? null}
+      onFollow={chooseFollowSubject}
+      onRelease={releaseFollowSubject}
+    />}
+    {...(withTransport ? { transport: { paused, liveness, onPause: runtime.pause, onResume: () => runtime.resume() } } : {})}
+  />;
+
   return (
     <main ref={appRef} className="vivarium-2d-app" data-camera-mode={presentedCameraControl.accepted}
       data-reduced-motion={reducedMotion ? "true" : "false"}
@@ -888,6 +960,7 @@ export function Vivarium2DApp({
             onSemanticSnapshot: acceptSemanticSnapshot,
           }}
           followRequest={followRequest}
+          onManualCameraGesture={releasePendingFollowPursuit}
           resumeStorySerial={resumeStorySerial}
           onCameraModeRequestRejected={rejectCameraMode}
           regionOrder={atlas.regions.map((region) => region.key)}
@@ -905,24 +978,7 @@ export function Vivarium2DApp({
       )}
 
       <div className="observer-top-chrome">
-        <ObserverHud view={hud} controls={<>
-          <CameraFramingControl
-            mode={presentedCameraControl.accepted}
-            viewerControlled={viewerControlsCamera}
-            onResumeStory={resumeStoryFraming}
-          />
-          <FollowSubjectControl
-            candidates={followRoster.candidates}
-            subject={followReading}
-            heldSubjectName={heldCameraSubjectName(
-              presentedCameraControl.accepted,
-              followReading,
-              selection,
-            )}
-            notice={followNotice?.message ?? null}
-            onFollow={chooseFollowSubject}
-            onRelease={releaseFollowSubject}
-          />
+        <ObserverHud view={hud} liveness={liveness} controls={<>
           {frame.source === "live" && runLifecycle !== undefined && <RunStopControl
             status={runStatus}
             requested={runStop.requested || runStop.sending}
@@ -932,12 +988,23 @@ export function Vivarium2DApp({
         </>} />
 
         <nav className="observer-edge-triggers" aria-label="Observer panels">
+          <span className="observer-model-badge" title={!recorded
+            ? frame.inference?.model ?? "Model identity unavailable"
+            : "Recorded world; no live model inference"}>
+            {recorded ? "Recorded world"
+              : frame.inference?.provider === "mlx" ? (frame.inference.model.toLowerCase().includes("qwen") ? "Qwen · Local" : "MLX · Local")
+              : frame.inference?.provider === "gemini" ? "Gemini · API"
+              : frame.inference?.provider === "ollama" ? "Ollama" : "World"}
+          </span>
           <button id="observer-world-trigger" type="button" aria-controls={PRIMARY_SURFACE_ID}
             aria-expanded={overlay.surface.kind === "world"}
             onClick={(event) => openSurface({ kind: "world" }, event.currentTarget)}>World</button>
-          <button id="observer-chronicle-trigger" type="button" aria-controls={PRIMARY_SURFACE_ID}
+          <button id="observer-chronicle-trigger" type="button" aria-label="Chronicle" aria-controls={PRIMARY_SURFACE_ID}
             aria-expanded={overlay.surface.kind === "chronicle"}
-            onClick={(event) => openSurface({ kind: "chronicle" }, event.currentTarget)}>Chronicle</button>
+            onClick={(event) => openSurface({ kind: "chronicle" }, event.currentTarget)}>Chronicle
+            {overlay.surface.kind !== "chronicle" && stream.events.some((event) => event.cursor > chronicleSeenCursor)
+              && <span className="observer-unread-count">{stream.events.filter((event) => event.cursor > chronicleSeenCursor).length}<span className="observer-unread-count__suffix"> new</span></span>}
+          </button>
           <button id="observer-selection-trigger" type="button" aria-controls={PRIMARY_SURFACE_ID}
             aria-expanded={overlay.surface.kind === "selection"}
             onClick={(event) => openSurface({ kind: "selection" }, event.currentTarget)}>Selection</button>
@@ -947,19 +1014,32 @@ export function Vivarium2DApp({
         </nav>
       </div>
 
-      {overlay.surface.kind !== "chronicle" && stream.events.length > 0 && (
-        <ChroniclePeek
-          latest={stream.events.at(-1)!}
-          held={stream.diagnostics.eventCount}
-          onOpen={(opener) => openSurface({ kind: "chronicle" }, opener)}
+      {overlay.surface.kind === "closed" && <section className="observer-panel observer-dock"
+        aria-label="Scene controls">
+        <DialogueNow
+          view={dialogue}
+          onFocusSpeaker={chooseFollowSubject}
+          onFocusTarget={chooseFollowSubject}
         />
-      )}
-
-      <DialogueNow
-        view={dialogue}
-        onFocusSpeaker={(id) => focusAgent(runtime, id)}
-        onFocusTarget={(id) => focusAgent(runtime, id)}
-      />
+        <div className="observer-dock__beings" aria-label="Beings to follow">
+          <span className="observer-control-label">In view &amp; active · {hud.regionDisplayName}</span>
+          <button type="button" onClick={(event) => openSurface({ kind: "world" }, event.currentTarget)}>
+            Beings · {hud.livingAgents}
+          </button>
+        </div>
+        <FollowShortcuts
+          frameIdentity={frame}
+          store={semanticStore}
+          resolveAgentKey={resolveShortcutAgentKey}
+          roster={followRoster}
+          events={stream.events}
+          nowMs={stream.clockMs}
+          followedKey={followReading.key}
+          observedRegionKey={snapshot.observedRegionId}
+          onFollow={chooseFollowSubject}
+        />
+        {cameraControls(true)}
+      </section>}
 
       {overlay.surface.kind !== "closed" && <div id={PRIMARY_SURFACE_ID}
         className="observer-primary-surface" data-surface={overlay.surface.kind}
@@ -968,17 +1048,16 @@ export function Vivarium2DApp({
         aria-labelledby={surfaceHeadingId(overlay.surface.kind)}>
       {overlay.surface.kind === "world" && <WorldDrawer
         hud={hud}
+        cameraControls={cameraControls(false)}
         liveness={liveness}
         atlas={atlas}
         paused={paused}
         speed={speed}
         hold={held}
-        cameraMode={presentedCameraControl.accepted}
         onPause={runtime.pause}
         onResume={() => runtime.resume()}
         onSpeedChange={runtime.setSpeed}
         onHoldChange={runtime.holdCurrentMoment}
-        onCameraModeChange={requestCameraMode}
         onRetryRecovery={() => void runtime.retryRecovery()}
         onObserveRegion={observeRegion}
         onInspectRegion={inspectRegion}
@@ -987,6 +1066,12 @@ export function Vivarium2DApp({
       {overlay.surface.kind === "chronicle" && (
         <ChronicleKillfeed
           stream={stream}
+          filter={chronicleFilter}
+          onFilterChange={setChronicleFilter}
+          nearbyRegionId={snapshot.observedRegionId}
+          followingBeingId={followReading.key}
+          onStopFollowing={releaseFollowSubject}
+          cameraControls={cameraControls(false)}
           gaps={chronicleView.gaps}
           paused={paused}
           speed={speed}
@@ -994,7 +1079,7 @@ export function Vivarium2DApp({
           onResume={() => runtime.resume()}
           onSpeedChange={runtime.setSpeed}
           onViewCursor={(cursor) => viewCursor(runtime, chronicleView, cursor)}
-          onFocusBeing={(beingId) => focusAgent(runtime, beingId)}
+          onFocusBeing={chooseFollowSubject}
           onOpenArchive={() => openArchive()}
           onClose={closeSurface}
           activeMomentRange={chronicleView.now === null ? null : {
@@ -1012,6 +1097,7 @@ export function Vivarium2DApp({
       {overlay.surface.kind === "selection" && (
         <SelectionInspector
           view={selection}
+          controls={cameraControls(true)}
           subjectNavigation={<SemanticWorldMirror store={semanticStore} visuallyHidden={false}
             onSelect={selectSemanticSubject} onFollow={followSemanticSubject} />}
           onFocus={() => focusSelection(runtime, frame.selection, selection, chronicleView)}
@@ -1022,6 +1108,7 @@ export function Vivarium2DApp({
       {overlay.surface.kind === "archive" && (
         <ArchiveDrawer
           view={archive.view}
+          controls={cameraControls(true)}
           archiveBound={snapshot.archive.status === "active"}
           onEnterCheckpoint={(key) => {
             const decoded = archive.keys.get(key);
@@ -1064,7 +1151,7 @@ export function observerSafeFrame(
   return Object.freeze({
     top: 64,
     right: surface === "closed" ? 56 : Math.round(drawer) + 20,
-    bottom: 176,
+    bottom: surface === "closed" ? 176 : 16,
     left: 20,
   });
 }
@@ -1088,25 +1175,27 @@ export function observerSafeFrameFromRects(
   const width = Math.max(1, stageWidth);
   const height = Math.max(1, stageHeight);
   const gap = 8;
+  const dock = usableChromeRect(rects.dock ?? null) ? rects.dock! : rects.dialogue;
   const mobile = width <= MOBILE_SURFACE_BREAKPOINT;
   const bottomOf = (rect: ObserverChromeRect | null): number | null => (
     usableChromeRect(rect) ? rect.y + rect.height : null
   );
-  const horizontalMobileTriggers = mobile
-    && usableChromeRect(rects.triggers)
+  const horizontalMobileTriggers = usableChromeRect(rects.triggers)
     && rects.triggers.width >= rects.triggers.height;
   const top = mobile
     ? Math.max(
         bottomOf(rects.hud) ?? 104,
         horizontalMobileTriggers ? (bottomOf(rects.triggers) ?? 0) : 0,
       ) + gap
-    : (bottomOf(rects.hud) ?? 56) + gap;
+    : Math.max(bottomOf(rects.hud) ?? 56, horizontalMobileTriggers ? (bottomOf(rects.triggers) ?? 0) : 0) + gap;
   const bottomBoundary = mobile
     ? Math.min(...[
-        rects.dialogue,
+        surface === "closed" ? dock : null,
         surface === "closed" ? null : rects.drawer,
       ].filter(usableChromeRect).map((rect) => rect.y), height) - gap
-    : (usableChromeRect(rects.dialogue) ? rects.dialogue.y : height - 168) - gap;
+    : (surface === "closed"
+        ? usableChromeRect(dock) ? dock.y : height - 168
+        : height - gap) - gap;
   const left = mobile
     ? gap
     : 20;
@@ -1152,6 +1241,7 @@ function useMeasuredObserverSafeFrame(
     const selectors = Object.freeze({
       hud: ".observer-hud",
       dialogue: ".dialogue-now",
+      dock: ".observer-dock",
       triggers: ".observer-edge-triggers",
       drawer: ".observer-primary-surface .observer-drawer",
     });
@@ -1493,33 +1583,6 @@ function viewCursor(
  * remains when it is closed -- enough to see that the world is doing something,
  * and one click away from the feed itself.
  */
-function ChroniclePeek({
-  latest,
-  held,
-  onOpen,
-}: Readonly<{
-  latest: StreamEvent;
-  held: number;
-  onOpen: (opener: HTMLElement) => void;
-}>): ReactElement {
-  return (
-    <button
-      type="button"
-      className="chronicle-peek"
-      style={{ ["--accent" as string]: latest.accent }}
-      aria-controls={PRIMARY_SURFACE_ID}
-      aria-label={`Open Chronicle. ${held} events held. Latest: ${latest.narration.line}`}
-      onClick={(event) => onOpen(event.currentTarget)}
-    >
-      <span className="chronicle-peek__pulse" aria-hidden="true" />
-      <span className="chronicle-peek__glyph" aria-hidden="true">
-        <StreamGlyph name={latest.glyph} size={10} />
-      </span>
-      <b>{held}</b>
-    </button>
-  );
-}
-
 function focusSelection(
   runtime: ObserverShellRuntime,
   selected: ObserverSelection,
@@ -1544,54 +1607,65 @@ function focusSelection(
 
 function WorldDrawer({
   hud,
+  cameraControls,
   liveness,
   atlas,
   paused,
   speed,
   hold,
-  cameraMode,
   onPause,
   onResume,
   onSpeedChange,
   onHoldChange,
-  onCameraModeChange,
   onRetryRecovery,
   onObserveRegion,
   onInspectRegion,
   onClose,
 }: Readonly<{
   hud: ReturnType<typeof projectObserverHud>;
+  cameraControls: ReactNode;
   liveness: ReturnType<typeof resolveObserverLiveness>;
   atlas: ReturnType<typeof projectLivingAtlas>;
   paused: boolean;
   speed: 0.5 | 1 | 1.5 | 2;
   hold: boolean;
-  cameraMode: CameraMode;
   onPause: () => void;
   onResume: () => void;
   onSpeedChange: (speed: 0.5 | 1 | 1.5 | 2) => void;
   onHoldChange: (hold: boolean) => void;
-  onCameraModeChange: (mode: CameraMode) => void;
   onRetryRecovery: () => void;
   onObserveRegion: (regionId: string) => void;
   onInspectRegion: (regionId: string) => void;
   onClose: () => void;
 }>): ReactElement {
   return (
-    <section className="observer-panel observer-drawer world-drawer" aria-labelledby="world-drawer-heading">
+    <section className="observer-panel observer-drawer observer-drawer--quiet world-drawer" aria-labelledby="world-drawer-heading">
       <header className="observer-drawer__header">
-        <h2 id="world-drawer-heading" tabIndex={-1}>World</h2>
+        <div className="observer-drawer__title">
+          <h2 id="world-drawer-heading" tabIndex={-1}>World</h2>
+          <p className="observer-drawer__subtitle">Explore regions. Find your next moment.</p>
+        </div>
         <button type="button" aria-label="Close World" onClick={onClose}>Close</button>
       </header>
       <div className="observer-drawer__scroll">
+        <div className="world-drawer__overview" aria-label="World overview">
+          <div><strong>{hud.livingAgents}</strong><span>living beings</span></div>
+          <div><strong>{atlas.regions.length}</strong><span>regions</span></div>
+          <div className="world-drawer__state"><span className="observer-kicker">World</span><strong title={liveness.detail}>{liveness.label}</strong></div>
+        </div>
+        <div className="observer-drawer__camera">{cameraControls}</div>
+
+        <LivingAtlas2D view={atlas} onObserveRegion={onObserveRegion}
+          onInspectRegion={onInspectRegion} />
+
         <section className="world-drawer__controls" aria-labelledby="world-playback-heading">
           <h3 id="world-playback-heading">Playback</h3>
           <div className="world-drawer__control-row">
-            <button type="button" aria-label={paused ? "Resume story" : "Pause story"}
-              onClick={paused ? onResume : onPause}>{paused ? "Resume" : "Pause"}</button>
+            <button type="button" aria-label={paused ? "Resume view" : "Pause view"}
+              onClick={paused ? onResume : onPause}>{paused ? "Resume view" : "Pause view"}</button>
             <label>
               <span>Speed</span>
-              <select aria-label="Story speed" value={speed}
+              <select aria-label="View speed" value={speed}
                 onChange={(event) => onSpeedChange(parseSpeed(event.currentTarget.value))}>
                 <option value="0.5">0.5×</option>
                 <option value="1">1×</option>
@@ -1603,20 +1677,8 @@ function WorldDrawer({
               {hold ? "Release Now" : "Hold Now"}
             </button>
           </div>
+          <p className="observer-drawer__hint">Pause your view, or hold the current moment on screen.</p>
         </section>
-
-        <fieldset className="world-drawer__camera">
-          <legend>Camera</legend>
-          <div className="world-drawer__control-row">
-            {(["story", "follow", "free"] as const).map((mode) => (
-              <button key={mode} type="button" aria-pressed={cameraMode === mode}
-                onClick={() => onCameraModeChange(mode)}>{labelCameraMode(mode)}</button>
-            ))}
-          </div>
-        </fieldset>
-
-        <LivingAtlas2D view={atlas} onObserveRegion={onObserveRegion}
-          onInspectRegion={onInspectRegion} />
 
         <section className="world-drawer__diagnostics" aria-labelledby="world-diagnostics-heading">
           <h3 id="world-diagnostics-heading">World status</h3>
@@ -1631,10 +1693,15 @@ function WorldDrawer({
               <dd title={liveness.detail}>{liveness.label}</dd>
             </div>
             <div><dt>Connection</dt><dd>{connectionLabel(hud.connection)}</dd></div>
-            <div><dt>Story</dt><dd>{hud.pendingMoments === 0 ? "Caught up" : hud.backlogLabel}</dd></div>
-            <div><dt>Shown</dt><dd>{hud.presentedCursor}</dd></div>
-            <div><dt>Received</dt><dd>{hud.receivedCursor}</dd></div>
+            <div><dt>View</dt><dd>{hud.pendingMoments === 0 ? "Caught up" : hud.backlogLabel}</dd></div>
           </dl>
+          <details className="world-drawer__technical">
+            <summary>Event delivery</summary>
+            <dl>
+              <div><dt>Shown</dt><dd>{hud.presentedCursor}</dd></div>
+              <div><dt>Received</dt><dd>{hud.receivedCursor}</dd></div>
+            </dl>
+          </details>
           {hud.connection === "recovery-paused" && hud.retryable && (
             <button type="button" onClick={onRetryRecovery}>Retry world recovery</button>
           )}
@@ -1658,8 +1725,4 @@ function connectionLabel(connection: ReturnType<typeof projectObserverHud>["conn
     case "offline": return "Offline";
     case "error": return "Connection resting";
   }
-}
-
-function labelCameraMode(mode: CameraMode): string {
-  return mode[0].toUpperCase() + mode.slice(1);
 }

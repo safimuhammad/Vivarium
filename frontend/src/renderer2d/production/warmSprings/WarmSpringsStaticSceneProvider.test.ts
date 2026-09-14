@@ -172,4 +172,33 @@ describe("WarmSpringsStaticSceneProvider", () => {
     ), -1);
     expect(steamFirst).toBeGreaterThan(lastScenery);
   });
+
+  it("gives every hero vent one asymmetric small steam companion in the final steam pass", () => {
+    const recipe = createWarmSpringsRegionMapRecipe(identity);
+    const plan = createWarmSpringsStaticScenePlan(recipe, leases());
+    const mainSteam = plan.operations.filter(({ stableId }) =>
+      /^steam:vent:\d+:steam$/.test(stableId));
+    const smallSteam = plan.operations.filter(({ stableId }) =>
+      /^steam:vent:\d+:steam-small$/.test(stableId));
+    expect(mainSteam.length).toBeGreaterThan(0);
+    expect(smallSteam).toHaveLength(mainSteam.length);
+    expect(smallSteam.every((operation) => (
+      operation.atlasId === "warm-springs-v1-scenery"
+      && operation.source.width === 48
+      && operation.source.height === 48
+    ))).toBe(true);
+
+    const mainByVent = new Map(mainSteam.map((operation) => [operation.stableId, operation]));
+    for (const small of smallSteam) {
+      const main = mainByVent.get(small.stableId.replace(":steam-small", ":steam"));
+      expect(main).toBeDefined();
+      expect(small.destination.x).not.toBe(main!.destination.x);
+    }
+
+    const firstSteam = plan.operations.findIndex(({ stableId }) => stableId.startsWith("steam:"));
+    const lastOrdinaryScenery = plan.operations.reduce((last, operation, index) => (
+      operation.layer === "scenery" && !operation.stableId.startsWith("steam:") ? index : last
+    ), -1);
+    expect(firstSteam).toBeGreaterThan(lastOrdinaryScenery);
+  });
 });

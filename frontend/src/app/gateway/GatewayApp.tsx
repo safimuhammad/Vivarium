@@ -51,6 +51,8 @@ import {
   type LaunchPhase,
 } from "./startSequence";
 import type { RunConfig, RunDefaults } from "./runConfig";
+import { SavedRunsScreen } from "./SavedRunsScreen";
+import { fetchSavedRuns, type SavedRunSummary } from "./savedRunsClient";
 import "./gateway.css";
 
 const LazyVivarium2DApp = lazy(async () => {
@@ -63,11 +65,8 @@ const LazyRecordedRunObserver = lazy(async () => {
   return { default: module.RecordedRunObserver };
 });
 
-/** Where a published recording is served from, relative to the app's origin. */
-export const DEFAULT_RECORDING_BASE = "/recordings/nirvana";
-
 /** Which screen the viewer is on. */
-type GatewayView = "landing" | "configuring" | "watching" | "observing";
+type GatewayView = "landing" | "configuring" | "saved" | "watching" | "observing";
 
 /** How the defaults payload is doing. */
 type DefaultsState =
@@ -79,10 +78,8 @@ type DefaultsState =
 export interface GatewayAppProps {
   /** The run-lifecycle client; defaults to HTTP, or the mock under `?api=mock`. */
   readonly client?: RunLifecycleClient;
-  /** Base URL a recorded run is served from. */
-  readonly recordingBase?: string;
-  /** Answers whether a recording is actually published there. */
-  readonly probeRecording?: (base: string) => Promise<boolean>;
+  /** Lists durable recordings from this machine; injected for isolated tests. */
+  readonly listRecordings?: () => Promise<readonly SavedRunSummary[]>;
   /** Injected clock, so the waiting screen's elapsed count is testable. */
   readonly now?: () => number;
   /** Injected dice, so the land a test draws is pinned. */
@@ -95,14 +92,13 @@ export interface GatewayAppProps {
    */
   readonly renderObserver?: (runId: string, onRunEnded: () => void) => ReactNode;
   /** Renders the recorded observer; injected so a test needs no renderer. */
-  readonly renderRecording?: (base: string) => ReactNode;
+  readonly renderRecording?: (base: string, onExit: () => void) => ReactNode;
 }
 
 /** Renders the landing page, the configuration screen, and the way between them. */
 export function GatewayApp({
   client,
-  recordingBase = DEFAULT_RECORDING_BASE,
-  probeRecording = probeRecordingOverHttp,
+  listRecordings = fetchSavedRuns,
   now = () => Date.now(),
   random,
   renderObserver,
@@ -115,19 +111,27 @@ export function GatewayApp({
   const [view, setView] = useState<GatewayView>("landing");
   const [defaultsState, setDefaultsState] = useState<DefaultsState>({ kind: "idle" });
   const [launch, dispatch] = useReducer(reduceLaunch, IDLE_LAUNCH);
-  const [recordingAvailable, setRecordingAvailable] = useState<boolean | null>(null);
+  const [savedRuns, setSavedRuns] = useState<readonly SavedRunSummary[]>([]);
+  const [savedLoading, setSavedLoading] = useState(false);
+  const [savedError, setSavedError] = useState<string | null>(null);
+  const [savedRevision, setSavedRevision] = useState(0);
+  const [chosenRecording, setChosenRecording] = useState<SavedRunSummary | null>(null);
   /** Set only on the way back from a run this viewer ended; cleared on the way out. */
   const [endedNote, setEndedNote] = useState<string | null>(null);
   const nowRef = useRef(now);
   nowRef.current = now;
 
   useEffect(() => {
+    if (view !== "saved") return;
     let live = true;
-    void probeRecording(recordingBase)
-      .then((available) => { if (live) setRecordingAvailable(available); })
-      .catch(() => { if (live) setRecordingAvailable(false); });
+    setSavedLoading(true);
+    setSavedError(null);
+    void listRecordings()
+      .then((runs) => { if (live) setSavedRuns(runs); })
+      .catch((error: unknown) => { if (live) setSavedError(describe(error)); })
+      .finally(() => { if (live) setSavedLoading(false); });
     return () => { live = false; };
-  }, [probeRecording, recordingBase]);
+  }, [listRecordings, savedRevision, view]);
 
   const openConfiguration = useCallback(() => {
     setEndedNote(null);
@@ -226,12 +230,19 @@ export function GatewayApp({
     if (launch.kind === "live") setView("observing");
   }, [launch.kind]);
 
-  if (view === "watching") {
+  if (view === "saved") {
+    return <SavedRunsScreen runs={savedRuns} loading={savedLoading} error={savedError}
+      onBack={() => setView("landing")} onRefresh={() => setSavedRevision((value) => value + 1)}
+      onWatch={(run) => { setChosenRecording(run); setView("watching"); }} />;
+  }
+
+  if (view === "watching" && chosenRecording !== null) {
+    const returnToSaves = (): void => setView("saved");
     return renderRecording !== undefined
-      ? <>{renderRecording(recordingBase)}</>
+      ? <>{renderRecording(chosenRecording.base_url, returnToSaves)}</>
       : (
         <Suspense fallback={<GatewayLoading label="Reading the recording" />}>
-          <LazyRecordedRunObserver base={recordingBase} />
+          <LazyRecordedRunObserver base={chosenRecording.base_url} onExit={returnToSaves} />
         </Suspense>
       );
   }
@@ -305,11 +316,10 @@ export function GatewayApp({
     <LandingScreen
       note={endedNote}
       onConfigure={openConfiguration}
-      onWatchRecording={recordingAvailable === false ? null : () => {
+      onWatchRecording={() => {
         setEndedNote(null);
-        setView("watching");
+        setView("saved");
       }}
-      recordingNote="No recording is published on this machine yet."
     />
   );
 }
@@ -424,17 +434,6 @@ function defaultClient(): RunLifecycleClient {
   return new URLSearchParams(search).get("api") === "mock"
     ? createMockRunLifecycleClient()
     : createHttpRunLifecycleClient();
-}
-
-/** Asks whether a recording is actually published, without downloading it. */
-async function probeRecordingOverHttp(base: string): Promise<boolean> {
-  if (typeof globalThis.fetch !== "function") return false;
-  try {
-    const response = await globalThis.fetch(`${base}/events.jsonl`, { method: "HEAD" });
-    return response.ok;
-  } catch {
-    return false;
-  }
 }
 
 function describe(error: unknown): string {

@@ -136,6 +136,217 @@ function button(label: string): HTMLButtonElement {
   return found;
 }
 
+describe("ChronicleKillfeed event timestamps", () => {
+  it("shows UTC event times after run replacement despite an older page clock", async () => {
+    let pageMs = 410_200;
+    const buffer = createChronicleStreamBuffer({ now: () => pageMs });
+    const timedEntry = (cursor: number, timestamp: number): EventEnvelopeEntry => {
+      const value = entry(cursor, "speak", { message: "Hello." }, { actor_id: "wanderer_001" });
+      return { ...value, event: { ...value.event, timestamp } };
+    };
+    const view = (): ChronicleStreamView => ({
+      events: buffer.getEvents(),
+      liveMs: buffer.getLiveMs(),
+      floorMs: buffer.getFloorMs(),
+      clockMs: pageMs,
+      evictedCount: buffer.getEvictedCount(),
+      buffer,
+      diagnostics: buffer.diagnostics(),
+    });
+    buffer.ingest({
+      sourceKey: "old-run", world: world(0, 1), deniedIds: DENIED,
+      entries: [timedEntry(1, 1_789_341_600)],
+    });
+    await render(defaultProps(view()));
+
+    pageMs = 421_900;
+    buffer.ingest({
+      sourceKey: "replacement-run", world: world(0, 2), deniedIds: DENIED,
+      entries: [timedEntry(1, 1_789_341_765), timedEntry(2, 1_789_341_767)],
+    });
+    await render(defaultProps(view()));
+
+    expect(cards().map((card) => card.textContent).join(" ")).toContain("23:22:45 UTC");
+    expect(cards().map((card) => card.textContent).join(" ")).toContain("23:22:47 UTC");
+    expect(cards().map((card) => card.textContent).join(" ")).not.toContain("7:01.9");
+
+    await act(async () => container
+      .querySelector<HTMLButtonElement>(".chronicle-killfeed__more")!.click());
+    expect(container.querySelector(".chronicle-killfeed__chain")?.textContent)
+      .toContain("23:22:47 UTC");
+  });
+});
+
+describe("ChronicleKillfeed retained history", () => {
+  it("keeps every retained event available in chronological reading order", async () => {
+    const entries = Array.from({ length: 28 }, (_, index) => entry(
+      index + 1,
+      "speak",
+      { message: `Line ${index + 1}.` },
+      { actor_id: "wanderer_001", region: "nirvana" },
+    ));
+    await render(defaultProps(makeStream([[0, entries]])));
+
+    expect(cards()).toHaveLength(28);
+    expect(cards().map((card) => card.getAttribute("data-event-cursor"))).toEqual(
+      entries.map((item) => String(item.cursor)),
+    );
+  });
+});
+
+describe("ChronicleKillfeed expressive event grammar", () => {
+  it("renders only grounded quotes, routes, paired people, signed facts, and distinct life notices", async () => {
+    const entries = [
+      entry(1, "speak", {
+        message: "I see you.", target_id: "wanderer_003", region: "warm_springs", speak_energy_cost: 1,
+      }, { actor_id: "wanderer_001", target_id: "wanderer_003", region: "warm_springs" }),
+      entry(2, "self_talk", { message: "Stay steady.", agent_id: "wanderer_001" }, {
+        actor_id: "wanderer_001", region: "warm_springs",
+      }),
+      entry(3, "agent_entered_region", {
+        message: "", agent_id: "wanderer_001", from_region: "warm_springs", to_region: "nirvana",
+        move_energy_cost: 2, agent_energy: 8,
+      }, { actor_id: "wanderer_001", region: "nirvana" }),
+      entry(4, "resource_transferred", {
+        message: "", sender_id: "wanderer_001", receiver_id: "wanderer_003", region: "nirvana",
+        resource_type: "energy", amount: 5, sender_energy: 8, sender_materials: 0,
+        receiver_energy: 12, receiver_materials: 0,
+      }, { actor_id: "wanderer_001", target_id: "wanderer_003", region: "nirvana" }),
+      entry(5, "home_built", {
+        message: "", home_id: "home_001", target_home: "home_001", builder_id: "wanderer_001",
+        owner_id: "wanderer_001", region: "nirvana", materials_cost: 20, integrity: 100,
+        stakeholders: ["wanderer_001"],
+      }, { actor_id: "wanderer_001", region: "nirvana" }),
+      entry(6, "agent_paralyzed", {
+        message: "", agent_id: "wanderer_003", region: "nirvana", trigger: "attack", energy: 0,
+        victim_id: "wanderer_003", attacker_id: "wanderer_001",
+      }, { actor_id: "system", target_id: "wanderer_003", region: "nirvana" }),
+      entry(7, "agent_died", {
+        message: "", victim_id: "wanderer_003", victim_name: "Dick", killer_id: "wanderer_001",
+        killer: "wanderer_001", region: "nirvana", attack_damage: 10, attack_energy_cost: 2,
+        victim_was_paralyzed: true, looted_energy: 0, looted_materials: 0,
+      }, { actor_id: "wanderer_003", target_id: "wanderer_003", region: "nirvana" }),
+      entry(8, "agent_born", {
+        message: "", child_id: "child_007", child_name: "Martha", parent_ids: ["wanderer_001", "wanderer_003"],
+        initiator_id: "wanderer_001", acceptor_id: "wanderer_003", region: "nirvana",
+        committed_resources: { energy: 20, materials: 8 }, child_resources: { energy: 10, materials: 4 },
+        offspring_multiplier: 1,
+      }, { actor_id: "child_007", region: "nirvana" }),
+    ];
+    await render(defaultProps(makeStream([[0, entries]])));
+
+    expect(container.querySelector("[data-event-cursor='1'] [data-quote-kind='speech']")?.textContent)
+      .toContain("I see you.");
+    expect(container.querySelector("[data-event-cursor='2'] [data-quote-kind='private-thought']")?.textContent)
+      .toContain("Stay steady.");
+    expect(container.querySelector("[data-event-cursor='3'] [data-travel-route]")?.textContent)
+      .toContain("Warm Springs");
+    expect(container.querySelector("[data-event-cursor='3'] [data-travel-route]")?.textContent)
+      .toContain("Nirvana");
+    expect(container.querySelectorAll("[data-event-cursor='4'] .chronicle-killfeed__portrait"))
+      .toHaveLength(2);
+    expect(container.querySelector("[data-event-cursor='4'] [data-resource-fact]")?.textContent)
+      .toContain("+5 energy");
+    expect(container.querySelector("[data-event-cursor='5'] [data-event-grammar='shelter']")?.textContent)
+      .toContain("Shelter");
+    expect(container.querySelector("[data-event-cursor='6'] [data-lifecycle-state='fallen']"))
+      .not.toBeNull();
+    expect(container.querySelector("[data-event-cursor='7'] [data-lifecycle-state='dead']"))
+      .not.toBeNull();
+    expect(container.querySelectorAll("[data-event-cursor='8'] .chronicle-killfeed__portrait"))
+      .toHaveLength(3);
+  });
+
+  it("previews a long exact quote and discloses its full message without replaying", async () => {
+    const message = Array.from({ length: 72 }, (_, index) => `word-${index + 1}`).join(" ");
+    const props = defaultProps(makeStream([[0, [entry(1, "self_talk", { message }, {
+      actor_id: "wanderer_001", region: "nirvana",
+    })]]]));
+    await render(props);
+
+    const quote = container.querySelector<HTMLElement>("[data-quote-kind='private-thought']");
+    expect(quote?.classList.contains("is-expanded")).toBe(false);
+    expect(quote?.querySelector("q")?.textContent).toBe(message);
+
+    await act(async () => button("Read full message").click());
+    expect(quote?.classList.contains("is-expanded")).toBe(true);
+    expect(button("Show message preview").getAttribute("aria-expanded")).toBe("true");
+    expect(props.onViewCursor).not.toHaveBeenCalled();
+
+    await act(async () => container.querySelector<HTMLButtonElement>(
+      ".chronicle-killfeed__more",
+    )!.click());
+    expect(container.querySelector(".chronicle-killfeed__said")?.textContent).toContain(message);
+  });
+});
+
+describe("ChronicleKillfeed reader controls", () => {
+  it("uses parent-provided Nearby and Following contexts without losing World history", async () => {
+    const stream = makeStream([[0, [
+      entry(1, "speak", { message: "Warm." }, { actor_id: "wanderer_001", region: "warm_springs" }),
+      entry(2, "speak", { message: "Nirvana." }, { actor_id: "wanderer_003", region: "nirvana" }),
+    ]]]);
+    const onFilterChange = vi.fn();
+    const props = {
+      ...defaultProps(stream),
+      filter: "nearby" as const,
+      nearbyRegionId: "warm_springs",
+      followingBeingId: "wanderer_003",
+      onFilterChange,
+      cameraControls: <button type="button">Camera: Auto</button>,
+    };
+    await render(props);
+
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]?.getAttribute("data-event-cursor")).toBe("1");
+    expect(container.querySelector("[aria-label='Camera controls']")?.textContent).toContain("Camera: Auto");
+    await act(async () => container.querySelector<HTMLButtonElement>("[role='tab'][aria-selected='true']")
+      ?.parentElement?.querySelector<HTMLButtonElement>("[role='tab']:last-child")?.click());
+    expect(onFilterChange).toHaveBeenCalledWith("following");
+
+    await render({ ...props, filter: "world" });
+    expect(cards().map((card) => card.getAttribute("data-event-cursor"))).toEqual(["1", "2"]);
+  });
+
+  it("counts only matching rows when a narrowed reader is active", async () => {
+    const stream = makeStream([[0, [
+      entry(1, "speak", { message: "Here." }, { actor_id: "wanderer_001", region: "warm_springs" }),
+      entry(2, "speak", { message: "There." }, { actor_id: "wanderer_003", region: "nirvana" }),
+    ]]]);
+    await render({
+      ...defaultProps(stream),
+      filter: "nearby",
+      nearbyRegionId: "warm_springs",
+    });
+
+    expect(container.querySelector(".chronicle-killfeed__contract")?.textContent)
+      .toContain("1 matching event");
+    expect(container.querySelector(".chronicle-killfeed__contract")?.textContent)
+      .not.toContain("held");
+  });
+
+  it("pauses only auto-scroll while the reader looks back", async () => {
+    const props = defaultProps(makeStream([[0, [
+      entry(1, "speak", { message: "Keep reading." }, { actor_id: "wanderer_001", region: "nirvana" }),
+    ]]]));
+    await render(props);
+    const reader = container.querySelector<HTMLDivElement>(".chronicle-killfeed__reader")!;
+    Object.defineProperties(reader, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 500 },
+    });
+    reader.scrollTop = 40;
+    await act(async () => reader.dispatchEvent(new Event("scroll", { bubbles: true })));
+
+    expect(reader.dataset["autoscroll"]).toBe("paused");
+    expect(props.onViewCursor).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("The world continues; new events wait below.");
+
+    await act(async () => button("Resume auto-scroll").click());
+    expect(reader.scrollTop).toBe(500);
+  });
+});
+
 describe("ChronicleKillfeed leading edge", () => {
   // The Chronicle absorbed the retired bottom-right NOW card (owner direction,
   // Safi, 2026-08-22: one UI, not two). These cases are that card's contract,
@@ -389,6 +600,59 @@ describe("ChronicleKillfeed", () => {
     expect(gone?.getAttribute("aria-label")).toContain("There is no one to follow");
   });
 
+  it("uses the controlled camera follow reading, including an explicit released state", async () => {
+    const stream = makeStream([[0, [entry(1, "speak", { message: "Here." }, {
+      actor_id: "wanderer_001", region: "nirvana",
+    })]]]);
+    const props = defaultProps(stream);
+    const onStopFollowing = vi.fn();
+    await render(props);
+    await act(async () => button("Follow Joe").click());
+    expect(container.querySelector(".chronicle-killfeed__lens")?.textContent).toContain("Joe is at Nirvana now.");
+
+    await render({ ...props, followingBeingId: null, onStopFollowing });
+    expect(container.querySelector(".chronicle-killfeed__lens")).toBeNull();
+    expect(container.querySelector(".chronicle-killfeed__portrait.is-following")).toBeNull();
+
+    await render({ ...props, followingBeingId: "wanderer_001", onStopFollowing });
+    expect(container.querySelector(".chronicle-killfeed__lens")?.textContent).toContain("Joe is at Nirvana now.");
+    expect(container.querySelector(".chronicle-killfeed__portrait.is-following")).not.toBeNull();
+    await act(async () => button("Stop following").click());
+    expect(onStopFollowing).toHaveBeenCalledOnce();
+  });
+
+  it("does not offer current follow for a body, a decayed being, or an unlocated identity", async () => {
+    const stream = makeStream([
+      [0, [entry(1, "agent_died", {
+        victim_id: "wanderer_003", killer_id: "wanderer_001",
+      }, { actor_id: "wanderer_001", target_id: "wanderer_003", region: "nirvana" })]],
+      [200, [entry(2, "agent_decayed", {}, {
+        actor_id: "decayed_002", region: "nirvana",
+      })]],
+      [400, [entry(3, "speak", { message: "Is anyone there?" }, {
+        actor_id: "unlocated_999", region: "nirvana",
+      })]],
+    ]);
+    await render(defaultProps(stream));
+
+    const deathPortrait = container.querySelector<HTMLButtonElement>(
+      '[data-event-cursor="1"] .chronicle-killfeed__portrait.is-gone',
+    );
+    expect(deathPortrait?.disabled).toBe(true);
+    expect(deathPortrait?.getAttribute("aria-label")).toContain("There is no present being to follow");
+
+    for (const cursor of ["2", "3"]) {
+      const action = container.querySelector<HTMLButtonElement>(
+        `[data-event-cursor="${cursor}"] .chronicle-killfeed__card-actions button[aria-label^="Follow "]`,
+      );
+      expect(action).toBeNull();
+      const portrait = container.querySelector<HTMLButtonElement>(
+        `[data-event-cursor="${cursor}"] .chronicle-killfeed__portrait`,
+      );
+      expect(portrait?.disabled).toBe(true);
+    }
+  });
+
   it("carries the standing conditions a decaying feed would lose", async () => {
     const stream = makeStream([
       [0, [entry(1, "home_breached", { integrity: 12 }, { actor_id: "wanderer_001", home_id: "home_001", region: "nirvana" })]],
@@ -429,9 +693,9 @@ describe("ChronicleKillfeed", () => {
     const props = defaultProps(stream);
     await render(props);
 
-    await act(async () => button("Pause story").click());
+    await act(async () => button("Pause view").click());
     expect(props.onPause).toHaveBeenCalledTimes(1);
-    const speed = container.querySelector<HTMLSelectElement>('select[aria-label="Story speed"]');
+    const speed = container.querySelector<HTMLSelectElement>('select[aria-label="View speed"]');
     expect(speed).not.toBeNull();
     expect([...speed!.options].map((option) => option.value)).toEqual(["0.5", "1", "1.5", "2"]);
   });

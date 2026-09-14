@@ -195,7 +195,7 @@ export const MOCK_RUN_DEFAULTS_PAYLOAD: Record<string, unknown> = {
     abundance: 1,
     seed: 7,
     duration_seconds: 1800,
-    provider: "gemini",
+    provider: "mlx",
     reflect_every_n_breaths: 12,
     max_offspring: 5,
   },
@@ -307,8 +307,15 @@ export const MOCK_RUN_DEFAULTS_PAYLOAD: Record<string, unknown> = {
     provider: {
       label: "Where the minds run",
       help: "This changes cost, cadence, and how long a proposal is allowed to stand.",
-      default: "gemini",
+      default: "mlx",
       choices: [
+        {
+          value: "mlx",
+          label: "This Mac · MLX",
+          help: "Local and free. MLX uses one shared model for one being at a time, with no cloud API cost.",
+          cost_per_being_hour_usd: 0,
+          cadence: "one being at a time",
+        },
         {
           value: "gemini",
           label: "The cloud",
@@ -429,6 +436,7 @@ export const MOCK_RUN_DEFAULTS_PAYLOAD: Record<string, unknown> = {
   },
   derived: {
     mating_proposal_timeout_seconds: {
+      mlx: 600,
       gemini: 45,
       ollama: 600,
     },

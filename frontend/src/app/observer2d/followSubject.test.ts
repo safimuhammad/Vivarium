@@ -196,7 +196,7 @@ describe("advanceFollow", () => {
     expect(expired.state).toBe(FOLLOW_RELEASED);
     expect(expired.effect).toEqual({
       kind: "abandon",
-      notice: "Rhea could not be brought into view. Story framing resumed.",
+      notice: "Rhea could not be brought into view. Auto framing resumed.",
     });
   });
 
@@ -286,7 +286,7 @@ describe("advanceFollow", () => {
     expect(died.state).toBe(FOLLOW_RELEASED);
     expect(died.effect).toEqual({
       kind: "abandon",
-      notice: "Aster has died. Story framing resumed.",
+      notice: "Aster has died. Auto framing resumed.",
     });
   });
 
@@ -300,7 +300,7 @@ describe("advanceFollow", () => {
     expect(gone.state).toBe(FOLLOW_RELEASED);
     expect(gone.effect).toEqual({
       kind: "abandon",
-      notice: "Aster moved somewhere this view has no art for. Story framing resumed.",
+      notice: "Aster moved somewhere this view has no art for. Auto framing resumed.",
     });
   });
 
@@ -320,7 +320,7 @@ describe("advanceFollow", () => {
     expect(expired.state).toBe(FOLLOW_RELEASED);
     expect(expired.effect).toEqual({
       kind: "abandon",
-      notice: "Rhea could not be brought into view. Story framing resumed.",
+      notice: "Rhea could not be brought into view. Auto framing resumed.",
     });
   });
 
@@ -410,7 +410,7 @@ describe("advanceFollow", () => {
     expect(rejected.state).toBe(FOLLOW_RELEASED);
     expect(rejected.effect).toEqual({
       kind: "abandon",
-      notice: "That being is no longer in the world. Story framing resumed.",
+      notice: "That being is no longer in the world. Auto framing resumed.",
     });
   });
 });

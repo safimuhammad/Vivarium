@@ -87,18 +87,22 @@ describe("PresentationWorldStage", () => {
     expect(source).toMatch(/import\(["']\.\/ProductionCanvasSceneFactory["']\)/);
   });
 
-  it("renders one canvas and binds the exact placement, recipes, and renderer lifecycle options", async () => {
+  it("owns an interactive world canvas and a separate bubble layer in the same renderer lifetime", async () => {
     const source = makeSource(frame(1));
     const frameAcceptance = { markAccepted: vi.fn() };
     const onSceneSignals = vi.fn();
     await act(async () => root?.render(stage(source, { frameAcceptance, onSceneSignals })));
     await settle();
 
-    expect(container.querySelectorAll("canvas")).toHaveLength(1);
+    expect(container.querySelectorAll("canvas")).toHaveLength(2);
+    const overlayCanvas = container.querySelector(".presentation-world-stage__overlay");
+    expect(overlayCanvas?.getAttribute("aria-hidden")).toBe("true");
+    expect((overlayCanvas as HTMLCanvasElement).tabIndex).toBe(-1);
     expect(createRenderer).toHaveBeenCalledOnce();
     const options = createRenderer.mock.calls[0]![0];
     expect(options).toMatchObject({
       canvas: container.querySelector("canvas"),
+      overlayCanvas,
       placement,
       recipes,
       frameAcceptance: { markAccepted: expect.any(Function) },
@@ -108,6 +112,9 @@ describe("PresentationWorldStage", () => {
     expect(options.atlasPool).toBeUndefined();
     expect(options.atlasCommitScheduler).toBeUndefined();
     expect(frameAcceptance.markAccepted).toHaveBeenCalledWith(source.getSnapshot());
+    await act(async () => root?.unmount());
+    root = null;
+    expect(container.querySelectorAll("canvas")).toHaveLength(0);
   });
 
   it("forwards an optional shared atlas pool without changing omitted ownership", async () => {
@@ -543,6 +550,37 @@ describe("PresentationWorldStage", () => {
     expect(onCameraModeChange).toHaveBeenLastCalledWith("follow");
   });
 
+  it("restarts Follow serials on a source-lineage switch but still suppresses duplicate requests", async () => {
+    const renderer = makeRenderer();
+    createRenderer.mockResolvedValue(renderer);
+    const source = makeSource(frame(1, "live:run-one"));
+    const first = { serial: 1, selection: { kind: "agent", id: "allen" } as const };
+    const afterReturn = { serial: 1, selection: { kind: "agent", id: "joe" } as const };
+
+    await mount(source);
+    await act(async () => root?.render(stage(source, { followRequest: first })));
+    expect(renderer.setSelection).toHaveBeenCalledWith(first.selection);
+
+    // A duplicate in one source is history, not a second re-latch.
+    await act(async () => root?.render(stage(source, { followRequest: first })));
+    expect(renderer.setSelection).toHaveBeenCalledTimes(1);
+
+    // Archive entry and Return to Live retain this Stage but replace the frame
+    // source lineage. The shell clears its request then starts its local serial
+    // at one again for the new source.
+    source.publish(frame(1, "archive:run-one"));
+    await act(async () => root?.render(stage(source, { followRequest: null })));
+    source.publish(frame(2, "live:run-one"));
+    await act(async () => root?.render(stage(source, { followRequest: null })));
+    await act(async () => root?.render(stage(source, { followRequest: afterReturn })));
+
+    expect(renderer.setSelection).toHaveBeenCalledWith(afterReturn.selection);
+    expect(renderer.setSelection).toHaveBeenCalledTimes(2);
+
+    await act(async () => root?.render(stage(source, { followRequest: afterReturn })));
+    expect(renderer.setSelection).toHaveBeenCalledTimes(2);
+  });
+
   it("reapplies durable observer state to a replacement generation without letting an older focus serial win", async () => {
     const first = makeRenderer();
     const second = makeRenderer();
@@ -745,6 +783,83 @@ describe("PresentationWorldStage", () => {
     ]);
     expect(viewMoment).toHaveBeenCalledOnce();
     expect(viewMoment).toHaveBeenCalledWith("moment-2");
+  });
+
+  it("signals keyboard and wheel zooms before handing them to the renderer", async () => {
+    const renderer = makeRenderer();
+    const order: string[] = [];
+    vi.mocked(renderer.zoomCamera).mockImplementation(() => { order.push("zoom"); });
+    createRenderer.mockResolvedValue(renderer);
+    givenCanvasBounds(400, 300);
+    await act(async () => root?.render(stage(makeSource(frame(1)), {
+      onManualCameraGesture: () => { order.push("manual"); },
+    })));
+    await settle();
+    const canvas = container.querySelector("canvas")!;
+
+    canvas.dispatchEvent(new KeyboardEvent("keydown", { key: "+", bubbles: true }));
+    canvas.dispatchEvent(new WheelEvent("wheel", {
+      deltaY: -120,
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    }));
+
+    expect(order).toEqual(["manual", "zoom", "manual", "zoom"]);
+  });
+
+  it("reasserts an explicit Follow request after zoom kept the accepted mode", async () => {
+    const renderer = makeRenderer();
+    createRenderer.mockResolvedValue(renderer);
+    const source = makeSource(frame(1));
+    await mount(source);
+    const callbacks = createRenderer.mock.calls[0]![0].callbacks;
+
+    // A zoom leaves the nominal mode at Follow while the viewer owns framing.
+    // It must not itself reassert Follow.
+    await act(async () => {
+      callbacks.onCameraModeChange?.("follow");
+      callbacks.onCameraAuthorityChange?.(true);
+    });
+    vi.mocked(renderer.setCameraMode).mockClear();
+    expect(renderer.setCameraMode).not.toHaveBeenCalled();
+
+    // Selecting a different being is the separate, explicit hand-back that
+    // must reach the renderer even though its accepted mode still says Follow.
+    await act(async () => root?.render(stage(source, {
+      followRequest: { serial: 1, selection: { kind: "agent", id: "allen" } },
+    })));
+
+    expect(renderer.setSelection).toHaveBeenCalledWith({ kind: "agent", id: "allen" });
+    expect(renderer.setCameraMode).toHaveBeenCalledWith("follow");
+  });
+
+  it("treats keyboard region navigation as manual camera takeover while following", async () => {
+    const renderer = makeRenderer();
+    vi.mocked(renderer.setCameraMode).mockImplementation((mode) => {
+      createRenderer.mock.calls.at(-1)?.[0].callbacks.onCameraModeChange?.(mode);
+    });
+    createRenderer.mockResolvedValue(renderer);
+    const observeRegion = vi.fn();
+    const source = makeSource({
+      ...frame(2),
+      selection: { kind: "agent", id: "allen" },
+    });
+
+    await act(async () => root?.render(stage(source, {
+      cameraMode: "follow",
+      regionOrder: ["worn", "spring"],
+      onObserveRegion: observeRegion,
+    })));
+    await settle();
+    vi.mocked(renderer.setCameraMode).mockClear();
+    const canvas = container.querySelector("canvas")!;
+
+    canvas.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true }));
+
+    expect(renderer.setCameraMode).toHaveBeenCalledWith("free");
+    expect(renderer.observeRegion).toHaveBeenCalledWith("spring");
+    expect(observeRegion).toHaveBeenCalledWith("spring");
   });
 
   it("maps every arrow to the grabbed-content pan convention", async () => {
@@ -1217,6 +1332,8 @@ function stage(
     placement?: PlacementLedger;
     cameraMode?: CameraMode;
     focusRequest?: Readonly<{ serial: number; selection: Exclude<ObserverSelection, null> }> | null;
+    followRequest?: Readonly<{ serial: number; selection: Exclude<ObserverSelection, null> }> | null;
+    onManualCameraGesture?: () => void;
     observedRegionId?: string | null;
     onCameraModeRequestRejected?: (mode: CameraMode) => void;
     resumeStorySerial?: number;
@@ -1240,6 +1357,8 @@ function stage(
       onSceneSignals={options.onSceneSignals}
       cameraMode={options.cameraMode}
       focusRequest={options.focusRequest}
+      followRequest={options.followRequest}
+      onManualCameraGesture={options.onManualCameraGesture}
       observedRegionId={options.observedRegionId}
       onCameraModeRequestRejected={options.onCameraModeRequestRejected}
       resumeStorySerial={options.resumeStorySerial}

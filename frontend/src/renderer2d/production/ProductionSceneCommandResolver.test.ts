@@ -7,6 +7,19 @@ import type { PlacementLedgerSnapshot } from "./placement/PlacementLedger";
 import { createProductionSceneCommandResolver } from "./ProductionSceneCommandResolver";
 
 describe("ProductionSceneCommandResolver", () => {
+  it("clears the body pose as well as speech when a scene requests idle", () => {
+    const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
+    const batch = resolver(frame(scene({
+      actorIntents: [{ actorId: "aster", kind: "idle", target: null, marker: null }],
+    })));
+    const commands = batch?.commands.flatMap((command) =>
+      command.kind === "actor" && command.actorId === "aster" ? [command.command] : []);
+    expect(commands).toEqual(expect.arrayContaining([
+      { kind: "clear-body" },
+      { kind: "set-face", expression: "neutral" },
+    ]));
+  });
+
   it("RED: translates one typed retained scene identity into a deterministic command batch", () => {
     const resolver = createProductionSceneCommandResolver({
       getPlacement: () => placement(),

@@ -1254,6 +1254,19 @@ function placeProps(
       footY - 30,
       false,
     ));
+    // A small, side-stepping companion wisp gives the hero vent a little width without
+    // turning the plume into a second landmark. The alternating side and three-frame
+    // choice are both deterministic in the authored vent order.
+    const smallSteamOffsetX = index % 2 === 0 ? 18 : -18;
+    const smallSteamVariant = index % 3;
+    props.push(makeProp(
+      `vent:${index}:steam-small`,
+      `s.steamsmall.${smallSteamVariant}`,
+      "steamsmall",
+      footX + smallSteamOffsetX,
+      footY - 22,
+      false,
+    ));
   });
 
   for (const species of SPECIES) {

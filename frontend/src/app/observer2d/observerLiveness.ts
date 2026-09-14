@@ -103,10 +103,11 @@ export function resolveObserverLiveness(
     });
   }
   if (frame.backlog.state === "overflow" || frame.backlog.state === "behind") {
+    const finishingCurrentMoment = frame.backlog.state === "behind" && frame.backlog.pendingMoments === 0;
     return Object.freeze({
       state: "behind",
-      label: "Behind",
-      detail: `${frame.backlog.pendingMoments} moment${
+      label: finishingCurrentMoment ? "Playing" : "Behind",
+      detail: finishingCurrentMoment ? "Finishing the current moment." : `${frame.backlog.pendingMoments} moment${
         frame.backlog.pendingMoments === 1 ? "" : "s"
       } still to play.`,
       retryable: false,

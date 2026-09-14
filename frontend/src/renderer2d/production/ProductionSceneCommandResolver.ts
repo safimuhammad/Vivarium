@@ -596,7 +596,7 @@ function actorCommands(
       ];
     }
     case "idle":
-      return [{ kind: "set-face", expression: "neutral" }];
+      return [{ kind: "clear-body" }, { kind: "set-face", expression: "neutral" }];
     case "speak":
       return [{ kind: "set-face", expression: "talk-1" }];
     case "reach":

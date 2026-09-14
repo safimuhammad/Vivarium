@@ -23,6 +23,7 @@ Three properties it exists to guarantee:
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,13 +36,13 @@ from core.run_settings import derive_mating_proposal_timeout
 from memory.vector_store import VectorStore
 from observability.run_context import RunStatus
 from scripts.run import (
-    DEFAULT_GEMINI_CONTEXT_TOKENS,
-    DEFAULT_GEMINI_MODEL,
-    DEFAULT_MODEL,
     Simulation,
     build_simulation,
+    resolve_context_window,
+    resolve_default_model,
     run_simulation,
 )
+from server.recordings import update_recording_sidecar
 from server.run_config import (
     RunConfig,
     build_run_world,
@@ -392,6 +393,14 @@ class RunManager:
             task=task,
             warnings=warnings,
         )
+        try:
+            update_recording_sidecar(
+                simulation.run_context,
+                region_name=_recording_region_name(simulation.world),
+                status=simulation.run_context.status,
+            )
+        except OSError:
+            logger.exception("Could not persist starting metadata for run %s.", handle.run_id)
         handle.watcher = asyncio.create_task(
             self._watch(handle), name=f"vivarium-run-watch:{handle.run_id}"
         )
@@ -481,6 +490,15 @@ class RunManager:
         """
         if handle.status not in {"stopped", "failed"}:
             handle.simulation.run_context.mark_stopped()
+        try:
+            update_recording_sidecar(
+                handle.simulation.run_context,
+                region_name=_recording_region_name(handle.simulation.world),
+                status=handle.status,
+                ended_at=time.time(),
+            )
+        except OSError:
+            logger.exception("Could not persist terminal metadata for run %s.", handle.run_id)
         self._write_final_checkpoint(handle)
 
     def _write_final_checkpoint(self, handle: RunHandle) -> None:
@@ -523,7 +541,7 @@ class RunManager:
         """
         if self._settings.model is not None:
             return self._settings.model
-        return DEFAULT_GEMINI_MODEL if provider == "gemini" else DEFAULT_MODEL
+        return resolve_default_model(provider)
 
     def _resolve_context_window(self, provider: str) -> int | None:
         """Return the effective context window for a provider.
@@ -532,12 +550,10 @@ class RunManager:
             provider: The run's decider backend.
 
         Returns:
-            The configured override, else the hosted default for Gemini, else
-            ``None`` (the agent runtime's own default).
+            The configured override, else the provider default (262,144 for MLX,
+            720,000 for Gemini, or ``None`` for Ollama's agent default).
         """
-        if self._settings.context_window is not None:
-            return self._settings.context_window
-        return DEFAULT_GEMINI_CONTEXT_TOKENS if provider == "gemini" else None
+        return resolve_context_window(provider, self._settings.context_window)
 
     def derived_summary(self, config: RunConfig) -> dict[str, object]:
         """Return the values this run derived rather than accepted.
@@ -559,3 +575,12 @@ class RunManager:
             ),
             "memory_root": memory_root,
         }
+
+
+def _recording_region_name(simulation_world: object) -> str | None:
+    """Return the first deterministic region label without coupling metadata to config."""
+    get_all_regions = getattr(simulation_world, "get_all_regions", None)
+    if not callable(get_all_regions):
+        return None
+    regions = sorted(get_all_regions(), key=lambda region: region.name)
+    return regions[0].name if regions else None

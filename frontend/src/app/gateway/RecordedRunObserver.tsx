@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useState, type ReactElement } from "react";
+import "./RecordedRunObserver.css";
 
 import { Vivarium2DApp } from "../Vivarium2DApp";
 import {
@@ -50,6 +51,7 @@ export interface RecordedRunObserverProps {
   readonly load?: (base: string) => Promise<RecordedRun>;
   /** Rendered while the recording is being read, and on failure. */
   readonly onFailure?: (error: unknown) => void;
+  readonly onExit?: () => void;
 }
 
 type CreateRuntime = (options?: ObserverShellRuntimeOptions) => ObserverShellRuntime;
@@ -67,19 +69,30 @@ export function RecordedRunObserver({
   rate,
   load = fetchRecordedRun,
   onFailure,
+  onExit,
 }: RecordedRunObserverProps): ReactElement {
   const [state, setState] = useState<LoadState>(LOADING_STATE);
+  const [finished, setFinished] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     let releaseResources: (() => void) | null = null;
     setState(LOADING_STATE);
+    setFinished(false);
 
     void load(base).then(
       (recording) => {
         if (cancelled) return;
         const bridge = createRecordedRunBridge(recording.run, recording.firstSnapshot);
-        const driver = createRecordedRunDriver({ recording, bridge, rate });
+        const driver = createRecordedRunDriver({
+          recording, bridge, rate,
+          onComplete: () => {
+            if (cancelled) return;
+            const last = recording.entries.at(-1);
+            bridge.heartbeat(last?.event.timestamp ?? recording.firstSnapshot.world_time, "stopped");
+            setFinished(true);
+          },
+        });
         const createRuntime: CreateRuntime = (options) => createObserverShellRuntime({
           ...options,
           createLiveBundle: () => createProductionObserverSession({
@@ -111,21 +124,23 @@ export function RecordedRunObserver({
     // change, not whenever a caller passes a structurally-new inline function.
   }, [base, rate]);
 
-  if (state.status === "loading") {
-    return (
-      <main aria-busy="true" aria-label="Loading recorded run">
-        Loading the recorded run…
-      </main>
-    );
-  }
-  if (state.status === "failed") {
-    return (
-      <main role="alert" aria-label="Recorded run failed to load">
-        The recorded run could not be loaded: {state.message}
-      </main>
-    );
-  }
-  return <Vivarium2DApp createRuntime={state.createRuntime} />;
+  return (
+    <div className="recorded-run-shell">
+      {onExit && <nav className="recorded-run-navigation" aria-label="Recording navigation">
+        <button type="button" onClick={onExit}>← Saved Runs</button>
+        <span role="status">{finished ? "Replay finished" : "Replay"}</span>
+      </nav>}
+      {state.status === "loading" ? (
+        <main className="recorded-run-message" aria-busy="true" aria-label="Loading recorded run">
+          Loading the recorded run…
+        </main>
+      ) : state.status === "failed" ? (
+        <main className="recorded-run-message" role="alert" aria-label="Recorded run failed to load">
+          The recorded run could not be loaded: {state.message}
+        </main>
+      ) : <Vivarium2DApp createRuntime={state.createRuntime} />}
+    </div>
+  );
 }
 
 function failureMessage(error: unknown): string {

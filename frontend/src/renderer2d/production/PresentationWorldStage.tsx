@@ -102,6 +102,14 @@ export interface PresentationWorldStageProps {
     serial: number;
     selection: Exclude<ObserverSelection, null>;
   }> | null;
+  /**
+   * A viewer has deliberately changed the viewport without changing its nominal camera mode.
+   *
+   * Zoom keeps its current mode so the camera can later be released through the normal Story
+   * path. A shell with a pursuit still waiting for its subject can use this synchronous signal to
+   * stand that pursuit down before a later mounted-scene publication tries to engage it.
+   */
+  readonly onManualCameraGesture?: () => void;
   readonly onCameraModeRequestRejected?: (mode: CameraMode) => void;
   readonly regionOrder?: readonly string[];
   readonly activeMomentId?: string | null;
@@ -126,9 +134,17 @@ interface StageObserverControls {
   acceptedCameraMode: CameraMode;
   requestedCameraMode: CameraMode;
   pendingCameraMode: CameraMode | null;
+  viewerControlsCamera: boolean;
   frameAccepted: boolean;
   focusSerial: number;
   observedRegionId: string | null;
+}
+
+/** Follow serials are local to one presented source lineage. */
+interface FollowSerialFence {
+  readonly runId: string;
+  readonly sourceKey: string;
+  serial: number;
 }
 
 /** Own one route-independent production Canvas renderer lifetime. */
@@ -149,9 +165,15 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
   const activeMomentIdRef = useRef(props.activeMomentId ?? null);
   const onViewMomentRef = useRef(props.onViewMoment);
   const onObserveRegionRef = useRef(props.onObserveRegion);
+  const onManualCameraGestureRef = useRef(props.onManualCameraGesture);
   const onSemanticSnapshotRef = useRef(props.onSemanticSnapshot);
   const resumeStorySerialRef = useRef(props.resumeStorySerial ?? 0);
-  const followSerialRef = useRef(props.followRequest?.serial ?? 0);
+  const initialFollowFrame = props.frameSource.getSnapshot();
+  const followSerialRef = useRef<FollowSerialFence>({
+    runId: initialFollowFrame.runId,
+    sourceKey: initialFollowFrame.sourceKey,
+    serial: props.followRequest?.serial ?? 0,
+  });
   const restoreCanvasFocusRef = useRef(false);
   const highestFocusSerialRef = useRef(props.focusRequest?.serial ?? Number.NEGATIVE_INFINITY);
   const controlsRef = useRef<StageObserverControls | null>(null);
@@ -182,7 +204,16 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
   activeMomentIdRef.current = props.activeMomentId ?? null;
   onViewMomentRef.current = props.onViewMoment;
   onObserveRegionRef.current = props.onObserveRegion;
+  onManualCameraGestureRef.current = props.onManualCameraGesture;
   onSemanticSnapshotRef.current = props.onSemanticSnapshot;
+  const followFrame = props.frameSource.getSnapshot();
+  if (!sameFollowSerialLineage(followSerialRef.current, followFrame)) {
+    followSerialRef.current = {
+      runId: followFrame.runId,
+      sourceKey: followFrame.sourceKey,
+      serial: 0,
+    };
+  }
   if (props.focusRequest === null) {
     latestFocusRequestRef.current = null;
   } else if (props.focusRequest !== undefined
@@ -245,12 +276,20 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
     const controls = controlsRef.current;
     const request = props.followRequest ?? null;
     if (controls === null || !controls.frameAccepted || request === null
-      || request.serial <= followSerialRef.current) return;
-    followSerialRef.current = request.serial;
+      || request.serial <= followSerialRef.current.serial) return;
+    followSerialRef.current.serial = request.serial;
     // Selection first: it re-latches a follow that is already running, and it is
     // what the mode request below resolves against when one is not.
     controls.renderer.setSelection(request.selection);
-    requestCameraMode(controls, "follow", cameraModeRequestRejectedRef.current);
+    // Zoom deliberately leaves the nominal Follow mode intact while giving the viewer authority.
+    // A newly requested being is a separate, explicit hand-back, so it must reach the renderer
+    // even when ordinary mode de-duplication would see Follow already accepted.
+    requestCameraMode(
+      controls,
+      "follow",
+      cameraModeRequestRejectedRef.current,
+      controls.acceptedCameraMode === "follow" && controls.viewerControlsCamera,
+    );
   }, [props.followRequest]);
 
   useEffect(() => {
@@ -272,6 +311,10 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
     canvas.setAttribute("aria-describedby", "world-keyboard-help");
     canvas.tabIndex = 0;
     stage.prepend(canvas);
+    const overlayCanvas = document.createElement("canvas");
+    overlayCanvas.className = "presentation-world-stage__overlay";
+    overlayCanvas.setAttribute("aria-hidden", "true");
+    canvas.after(overlayCanvas);
     const controller = new AbortController();
     let cancelled = false;
     let installed: ObserverRendererPort | null = null;
@@ -303,6 +346,7 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
         activeMomentIdRef.current,
         onViewMomentRef.current,
         onObserveRegionRef.current,
+        onManualCameraGestureRef.current,
         cameraModeRequestRejectedRef.current,
       )) event.preventDefault();
     };
@@ -351,6 +395,7 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
         controls.renderer.panCamera(intent.deltaCss);
         requestCameraMode(controls, "free", cameraModeRequestRejectedRef.current);
       } else {
+        onManualCameraGestureRef.current?.();
         controls.renderer.zoomCamera(intent.factor, intent.anchorCss);
       }
       event.preventDefault();
@@ -492,6 +537,8 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
       },
       onCameraAuthorityChange: (viewerControlled) => {
         if (!isActiveGeneration()) return;
+        const controls = controlsRef.current;
+        if (controls !== null) controls.viewerControlsCamera = viewerControlled;
         setViewerControlsCamera(viewerControlled);
         callbacksRef.current?.onCameraAuthorityChange?.(viewerControlled);
       },
@@ -549,6 +596,7 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
     const captureTiming = props.capture?.createRendererTiming();
     const rendererOptions: ProductionCanvasSceneRendererOptions = {
       canvas,
+      overlayCanvas,
       callbacks,
       diagnosticsEnabled: () => callbacksRef.current?.onDiagnostics !== undefined,
       signal: controller.signal,
@@ -596,6 +644,7 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
         acceptedCameraMode: "story",
         requestedCameraMode: "story",
         pendingCameraMode: null,
+        viewerControlsCamera: false,
         frameAccepted: false,
         focusSerial: Number.NEGATIVE_INFINITY,
         observedRegionId: null,
@@ -655,6 +704,7 @@ export function PresentationWorldStage(props: PresentationWorldStageProps): Reac
       canvas.removeEventListener("pointerleave", onPointerLeave);
       canvas.removeEventListener("lostpointercapture", onLostPointerCapture);
       canvas.remove();
+      overlayCanvas.remove();
     };
   }, [generation, props.atlasCommitScheduler, props.atlasPool, props.capture, props.placement, props.recipes, props.frameAcceptance, props.onSceneSignals, props.reducedMotion]);
 
@@ -712,6 +762,7 @@ function handleCanvasKey(
   activeMomentId: string | null,
   onViewMoment: ((momentId: string) => void) | undefined,
   onObserveRegion: ((regionId: string) => void) | undefined,
+  onManualCameraGesture: (() => void) | undefined,
   onCameraRejected: ((mode: CameraMode) => void) | undefined,
 ): boolean {
   const key = event.key.toLowerCase();
@@ -747,6 +798,7 @@ function handleCanvasKey(
   }
   if (["+", "="].includes(event.key) || ["-", "_"].includes(event.key)) {
     const bounds = canvas.getBoundingClientRect();
+    onManualCameraGesture?.();
     controls.renderer.zoomCamera(["+", "="].includes(event.key) ? 1.25 : 0.8, {
       x: bounds.width / 2,
       y: bounds.height / 2,
@@ -763,6 +815,7 @@ function handleCanvasKey(
       : event.key === "Home" ? regionOrder[0]
         : event.key === "End" ? regionOrder.at(-1) : undefined;
   if (target === undefined) return false;
+  requestCameraMode(controls, "free", onCameraRejected);
   controls.renderer.observeRegion(target);
   controls.observedRegionId = target;
   onObserveRegion?.(target);
@@ -778,6 +831,13 @@ function sameFrameIdentity(
     && left.revision === right.revision
     && left.firstCursor === right.firstCursor
     && left.lastCursor === right.lastCursor;
+}
+
+function sameFollowSerialLineage(
+  fence: FollowSerialFence,
+  frame: PresentedObserverFrame,
+): boolean {
+  return fence.runId === frame.runId && fence.sourceKey === frame.sourceKey;
 }
 
 function restoreDurableObserverControls(
@@ -838,9 +898,10 @@ function requestCameraMode(
   controls: StageObserverControls,
   mode: CameraMode,
   onRejected: ((mode: CameraMode) => void) | undefined,
+  reassertAcceptedMode = false,
 ): void {
   controls.requestedCameraMode = mode;
-  if (controls.acceptedCameraMode === mode) return;
+  if (controls.acceptedCameraMode === mode && !reassertAcceptedMode) return;
   controls.pendingCameraMode = mode;
   controls.renderer.setCameraMode(mode);
   if (controls.pendingCameraMode !== mode) return;

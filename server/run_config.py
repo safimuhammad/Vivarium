@@ -295,8 +295,8 @@ class RunConfig(BaseModel):
             together, preserving the authored richness gradient.
         seed: World RNG seed. It shapes the land; it reproduces almost nothing else.
         duration_seconds: Wall-clock bound, or ``None`` for an unbounded run.
-        provider: Where the minds run (``"gemini"`` = the cloud, ``"ollama"`` = this
-            machine).
+        provider: Where the minds run (``"mlx"`` = this Mac's local MLX model,
+            ``"ollama"`` = an explicit local Ollama model, or ``"gemini"`` = the cloud).
         reflect_every_n_breaths: How often a being pauses and may write about who it
             has become.
         max_offspring: Per-being offspring ceiling -- the population cap.

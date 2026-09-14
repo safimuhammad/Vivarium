@@ -10,6 +10,7 @@ import pytest
 from agents.decider import Decision, ToolCall
 from memory.embedding import FakeEmbeddingFunction
 from memory.vector_store import FakeVectorStore, VectorStore
+from scripts.run import DEFAULT_MLX_CONTEXT_TOKENS, DEFAULT_MLX_MODEL
 from server.run_manager import RunManager, RunManagerSettings, RunNotStartedError
 from tests.conftest import MockDecider
 
@@ -62,6 +63,12 @@ async def test_the_model_and_window_follow_the_chosen_provider(tmp_path: Path) -
 
     local = config.model_copy(update={"provider": "ollama"})
     assert await _started_provider_wiring(manager, local) == ("qwen3:8b", None)
+
+    mlx = config.model_copy(update={"provider": "mlx"})
+    assert await _started_provider_wiring(manager, mlx) == (
+        DEFAULT_MLX_MODEL,
+        DEFAULT_MLX_CONTEXT_TOKENS,
+    )
 
     await manager.shutdown()
 

@@ -16,6 +16,24 @@ import {
 } from "./publicViewModels";
 
 describe("observer public view-model boundary", () => {
+  it("shows a ruin's age from the presented frame instead of a raw epoch timestamp", () => {
+    const base = makeFrame();
+    const at = 1_789_298_433.351244;
+    const frame = makeFrame({
+      world: { ...base.world, worldTime: at + 65.14336895942688, ruins: [
+        { completeness: "exact", value: { home_id: "ruin_1", status: "ruin", ruined_at: at } },
+      ] },
+      selection: { kind: "ruin", id: "ruin_1" },
+    });
+    const card = projectSelection(frame, makeChronicle())!;
+    expect(card.facts.find((fact) => fact.label === "Ruin age")?.value).toBe("1m 5s");
+    expect(card.facts.some((fact) => fact.label === "Ruined at")).toBe(false);
+    const unknown = makeFrame({ ...frame, world: { ...frame.world, ruins: [
+      { completeness: "exact", value: { home_id: "ruin_1", status: "ruin", ruined_at: null } },
+    ] } });
+    expect(projectSelection(unknown, makeChronicle())?.facts.find((fact) => fact.label === "Ruin age")?.value).toBe("Unknown");
+  });
+
   it("projects honest HUD totals and leaves missing partial status unresolved", () => {
     const base = makeFrame();
     const frame = makeFrame({
@@ -44,6 +62,16 @@ describe("observer public view-model boundary", () => {
     expect(formatWorldTime(86_400 + (12 * 3_600) + 60)).toBe("Day 2, 12:01 PM");
     expect(() => formatWorldTime(-1)).toThrowError("world seconds");
     expect(() => formatWorldTime(Number.NaN)).toThrowError("world seconds");
+  });
+
+  it("shows recorded wall-clock timestamps as UTC dates instead of elapsed world days", () => {
+    const worldTime = Date.UTC(2026, 8, 13, 12, 2, 0) / 1_000;
+    expect(formatWorldTime(worldTime)).toBe("Sep 13, 2026 · 12:02 PM UTC");
+    expect(formatWorldTime(Date.UTC(2026, 8, 14, 0, 0, 0) / 1_000))
+      .toBe("Sep 14, 2026 · 12:00 AM UTC");
+    const base = makeFrame();
+    expect(projectObserverHud(makeFrame({ world: { ...base.world, worldTime } })).humanTimeLabel)
+      .toBe("Sep 13, 2026 · 12:02 PM UTC");
   });
 
   it("keeps atlas edges directed and redacts unknown queued regions", () => {
@@ -251,6 +279,39 @@ describe("observer public view-model boundary", () => {
     }
   });
 
+  it("formats the observed fractional hearth gain without changing its event evidence", () => {
+    const base = makeFrame();
+    const frame = makeFrame({ world: {
+      ...base.world,
+      agents: base.world.agents.map((record) => record.value.id === "agent_001"
+        ? { ...record, value: { ...record.value, name: "Allen" } }
+        : record),
+    } });
+    const energyGained = 14.389616680145265;
+    const moment = makeMoment({
+      id: "7:7:single",
+      type: "hearth_used",
+      payload: { agent_id: "agent_001", energy_gained: energyGained },
+    });
+    const row = projectChronicle(frame, makeChronicle({ now: moment })).now!;
+
+    expect(`${row.title}. ${row.summary}`)
+      .toBe("Hearth tended. Allen warmed at a hearth and gained 14.4 energy.");
+    expect(moment.representative.event.payload.energy_gained).toBe(energyGained);
+  });
+
+  it.each([
+    ["resource_changed", { amount: 1.0000000000000002, resource_type: "materials" }, "Aster gathered 1 material."],
+    ["resource_changed", { amount: -3.456789, resource_type: "materials" }, "Aster spent 3.5 materials."],
+    ["resource_transferred", { amount: 12, resource_type: "energy" }, "Aster shared 12 energy."],
+    ["ruins_scavenged", { amount: 0.04 }, "Aster recovered 0 materials from a ruin."],
+    ["home_collapsed", { remnant_materials: 8.789123 }, "A shelter fell into ruin, leaving 8.8 materials behind."],
+  ])("uses concise quantities in %s narration", (type, payload, expected) => {
+    const moment = makeMoment({ id: "7:7:single", type, payload });
+    const row = projectChronicle(makeFrame(), makeChronicle({ now: moment })).now!;
+    expect(row.summary).toBe(expected);
+  });
+
   it("denies arbitrary frame and payload entity IDs from every rendered public view", () => {
     const frame = makeFrame({
       world: {
@@ -371,6 +432,30 @@ describe("observer public view-model boundary", () => {
       story,
       cards: [agent, home, ruin, region].map(({ key: _key, ...card }) => card),
     })).not.toMatch(/mystic_007|raider_12|newcomer_3/);
+  });
+
+  it("formats fractional region resource ratios without floating-point noise", () => {
+    const base = makeFrame();
+    const frame = makeFrame({
+      world: {
+        ...base.world,
+        regions: base.world.regions.map((record) => record.value.name === "warm_springs"
+          ? {
+            ...record,
+            value: {
+              ...record.value,
+              current_materials: 84.80000000000007,
+              max_materials: 130,
+            },
+          }
+          : record),
+      },
+      selection: { kind: "region", id: "warm_springs" },
+    });
+
+    const region = projectSelection(frame, makeChronicle())!;
+    expect(region.facts.find((fact) => fact.label === "Materials")?.value)
+      .toBe("84.8 / 130");
   });
 
   it("uses current shelter event names and public quantities for contest consequences", () => {

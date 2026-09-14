@@ -317,7 +317,7 @@ function withCameraClaim(state: FollowPursuit, claiming: boolean): FollowPursuit
 function abandon(name: string, because: string): FollowOutcome {
   return outcome(FOLLOW_RELEASED, {
     kind: "abandon",
-    notice: `${name} ${because} Story framing resumed.`,
+    notice: `${name} ${because} Auto framing resumed.`,
   });
 }
 
@@ -334,7 +334,7 @@ export function requestFollow(
   if (fact === undefined) {
     return outcome(FOLLOW_RELEASED, {
       kind: "abandon",
-      notice: "That being is no longer in the world. Story framing resumed.",
+      notice: "That being is no longer in the world. Auto framing resumed.",
     });
   }
   if (!fact.living) return abandon(fact.name, "is no longer living.");

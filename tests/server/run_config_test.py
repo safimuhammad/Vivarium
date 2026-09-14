@@ -112,6 +112,7 @@ def test_defaults_payload_carries_bounds_labels_and_the_locked_regions(
     derived = payload["derived"]
     assert isinstance(derived, dict)
     assert derived["mating_proposal_timeout_seconds"] == {
+        "mlx": OLLAMA_MATING_PROPOSAL_TIMEOUT_FLOOR_SECONDS,
         "gemini": GEMINI_MATING_PROPOSAL_TIMEOUT_SECONDS,
         "ollama": OLLAMA_MATING_PROPOSAL_TIMEOUT_FLOOR_SECONDS,
     }

@@ -2666,6 +2666,7 @@ function validHumanCommand(candidate: HumanPrimitiveCommand): boolean {
     case "set-status":
       return command.status === "alive" || command.status === "paralyzed" || command.status === "dead";
     case "recover":
+    case "clear-body":
       return true;
     case "reposition":
       return validFinitePoint(command.position)

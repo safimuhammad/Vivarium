@@ -32,6 +32,9 @@ vi.mock("../renderer2d/production/PresentationWorldStage", () => ({
       <button type="button" onClick={() => props.callbacks?.onCameraAuthorityChange?.(false)}>
         Director takes the camera
       </button>
+      <button type="button" onClick={() => props.onManualCameraGesture?.()}>
+        Manual zoom
+      </button>
       <button type="button" onClick={() => props.callbacks?.onSelectionChange?.({ kind: "region", id: "meadow" })}>
         Select world region
       </button>
@@ -46,6 +49,9 @@ vi.mock("../renderer2d/production/PresentationWorldStage", () => ({
       </button>
       <button type="button" onClick={() => props.onCameraModeRequestRejected?.(props.cameraMode ?? "story")}>
         Reject camera request
+      </button>
+      <button type="button" onClick={() => props.onCameraModeRequestRejected?.("follow")}>
+        Reject follow latch
       </button>
       {/* What the renderer does when a resume-story SERIAL arrives: it releases
           viewer authority and reports `story`, whatever mode was requested. */}
@@ -65,6 +71,9 @@ vi.mock("../renderer2d/production/PresentationWorldStage", () => ({
       </button>
       <button type="button" onClick={() => props.callbacks?.onSemanticSnapshot?.(semanticSnapshot(frame))}>
         Publish world subjects
+      </button>
+      <button type="button" onClick={() => props.callbacks?.onSemanticSnapshot?.(semanticSnapshotWithRhea(frame))}>
+        Publish target after mount
       </button>
       <button type="button" onClick={() => props.callbacks?.onSemanticSnapshot?.({
         ...semanticSnapshot(frame),
@@ -113,6 +122,88 @@ afterEach(async () => {
 });
 
 describe("Vivarium2DApp", () => {
+  it("shows the scene dock only while every drawer is closed", async () => {
+    const fixture = runtimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    expect(container.querySelector(".observer-dock")).toBeNull();
+    expect(container.querySelector(".chronicle-killfeed .observer-camera-controls")).not.toBeNull();
+    await click("Close Chronicle");
+    expect(container.querySelector(".observer-dock")).not.toBeNull();
+    expect(container.querySelector(".observer-hud select")).toBeNull();
+    for (const name of ["World", "Selection", "Archive", "Chronicle"]) {
+      await click(name);
+      expect(container.querySelector(".observer-dock")).toBeNull();
+      expect(container.querySelector(".dialogue-now")).toBeNull();
+      await click(`Close ${name}`);
+      expect(container.querySelector(".observer-dock")).not.toBeNull();
+    }
+  });
+
+  it("reclaims the bottom of the scene when the drawer replaces the dock", () => {
+    const insets = observerSafeFrameFromRects(1440, 900, "chronicle", {
+      hud: { x: 16, y: 16, width: 330, height: 68 },
+      dialogue: null,
+      triggers: { x: 1010, y: 16, width: 410, height: 44 },
+      drawer: { x: 1014, y: 76, width: 410, height: 808 },
+    });
+    expect(insets.bottom).toBeLessThanOrEqual(20);
+    expect(insets.right).toBe(434);
+  });
+
+  it("keeps a selected standing home as the Follow target in a populated world", async () => {
+    const frame = twoRegionFrame();
+    const fixture = runtimeFixture({
+      frame: { ...frame, selection: { kind: "home", id: "test-home" }, world: {
+        ...frame.world, homes: [{ completeness: "exact", value: {
+          home_id: "test-home", owner_id: "aster", region: "meadow", status: "standing",
+        } }],
+      } },
+      recipes: new Map([["meadow", {} as never], ["willow", {} as never]]),
+    });
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+    await click("Follow");
+    expect(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-follow-subject")).toBe("");
+    expect(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-requested-camera")).toBe("follow");
+  });
+
+  it("follows from a dock shortcut and hands back to Auto from Chronicle", async () => {
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+    await click("Close Chronicle");
+    const shortcut = required<HTMLButtonElement>("[data-follow-shortcut]");
+    await act(async () => shortcut.click());
+    expect(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-follow-subject")).toBe("aster");
+    const firstFollowSerial = Number(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-follow-serial"));
+    expect(container.querySelector(".observer-dock")).not.toBeNull();
+    await click("Report follow latched");
+    await click("Chronicle");
+    expect(button("Follow")?.getAttribute("aria-pressed")).toBe("true");
+    const resumeSerial = Number(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-resume-serial"));
+    await click("Stop following");
+    expect(Number(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-resume-serial"))).toBe(resumeSerial + 1);
+    await click("Report story framing");
+    expect(button("Auto")?.getAttribute("aria-pressed")).toBe("true");
+    expect(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-follow-subject")).toBe("");
+    await click("Follow");
+    expect(Number(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-follow-serial"))).toBeGreaterThan(firstFollowSerial);
+    await click("Reject follow latch");
+    await click("Select world being");
+    expect(heading("Selection")).not.toBeNull();
+  });
+
   it("threads an optional atlas pool while leaving ordinary renderer ownership omitted", async () => {
     const fixture = runtimeFixture();
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
@@ -144,7 +235,7 @@ describe("Vivarium2DApp", () => {
       triggers: { x: 1_396, y: 314, width: 44, height: 272 },
       drawer: { x: 1_014, y: 10, width: 416, height: 880 },
     });
-    expect(drawer).toEqual({ top: 72, right: 434, bottom: 148, left: 20 });
+    expect(drawer).toEqual({ top: 72, right: 434, bottom: 16, left: 20 });
 
     const mobile = observerSafeFrameFromRects(390, 844, "chronicle", {
       hud: { x: 8, y: 8, width: 374, height: 104 },
@@ -248,14 +339,14 @@ describe("Vivarium2DApp", () => {
     expect(heading("Chronicle")).toBeNull();
   });
 
-  it("keeps only game status persistent and moves controls, Atlas, and diagnostics into World", async () => {
+  it("keeps identity compact and relocates controls between the dock and drawers", async () => {
     const fixture = runtimeFixture();
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
 
     expect(required<HTMLElement>(".observer-hud").textContent?.replace(/\s+/g, " ").trim())
-      .toBe("Meadow · Day 1, 12:00 AM · World totals: 1 living · 0 dead · 0 homes"
-        + " · 0 ruinsFramingStoryFollowAutomatic");
+      .toContain("VivariumMeadow");
+    expect(required<HTMLElement>(".observer-hud").querySelector("select")).toBeNull();
     // Framing is a PERSISTENT control on the status line, not a badge that
     // materialises over the art once the viewer has already been stranded. It is
     // present and inert while the story owns the camera.
@@ -271,8 +362,8 @@ describe("Vivarium2DApp", () => {
     // now opens by default and carries its own copy, so this is asserted of the
     // state a viewer reaches by closing it.
     await click("Close Chronicle");
-    expect(button("Pause story")).toBeNull();
-    expect(button("Free")).toBeNull();
+    expect(button("Pause view")).not.toBeNull();
+    expect(button("Free")).not.toBeNull();
     expect(container.querySelector(".living-atlas-2d")).toBeNull();
     expect(container.textContent).not.toContain("Shown 5 · Received 9");
     expect([...required(".observer-edge-triggers").querySelectorAll("button")]
@@ -281,7 +372,7 @@ describe("Vivarium2DApp", () => {
       ]);
 
     await click("World");
-    expect(button("Pause story")).not.toBeNull();
+    expect(button("Pause view")).not.toBeNull();
     expect(button("Free")).not.toBeNull();
     expect(button("Hold Now")).not.toBeNull();
     expect(container.querySelector(".world-drawer .living-atlas-2d")).not.toBeNull();
@@ -294,7 +385,7 @@ describe("Vivarium2DApp", () => {
     expect(required<HTMLElement>(".world-drawer").textContent).not.toContain("World Time 14");
 
     await act(async () => {
-      const select = required<HTMLSelectElement>("select[aria-label='Story speed']");
+      const select = required<HTMLSelectElement>("select[aria-label='View speed']");
       select.value = "1.5";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
@@ -523,6 +614,7 @@ describe("Vivarium2DApp", () => {
     });
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
+    await click("Close Chronicle");
 
     expect(container.querySelector(".dialogue-now")?.textContent).toContain("The meadow is quiet.");
     expect(container.querySelector("[data-story-now]")).toBeNull();
@@ -535,7 +627,7 @@ describe("Vivarium2DApp", () => {
     await act(async () => fixture.runtime.ready);
 
     await click("World");
-    await click("Pause story");
+    await click("Pause view");
     await click("Free");
     await click("Accept camera request");
     await click("Observe Meadow");
@@ -604,19 +696,20 @@ describe("Vivarium2DApp", () => {
     expect(fixture.runtime.dispose).toHaveBeenCalledOnce();
   });
 
-  it("shows only the accepted camera mode and permits Follow to retry after a valid selection", async () => {
-    const fixture = runtimeFixture();
+  it("acknowledges a Follow latch and permits retry after the renderer refuses it", async () => {
+    const fixture = followRuntimeFixture();
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
 
     await click("World");
     await click("Follow");
     expect(required<HTMLElement>('[aria-label="Production world"]')
-      .getAttribute("data-requested-camera")).toBe("follow");
+      .getAttribute("data-follow-subject")).toBe("aster");
     expect(required<HTMLElement>(".vivarium-2d-app").getAttribute("data-camera-mode")).toBe("story");
-    expect(button("Story")?.getAttribute("aria-pressed")).toBe("true");
+    expect(button("Auto")?.getAttribute("aria-pressed")).toBe("true");
 
-    await click("Reject camera request");
+    await click("Reject follow latch");
     expect(required<HTMLElement>('[aria-label="Production world"]')
       .getAttribute("data-requested-camera")).toBe("story");
     expect(fixture.runtime.setCameraMode).not.toHaveBeenCalledWith("follow");
@@ -624,7 +717,7 @@ describe("Vivarium2DApp", () => {
     await click("Select world being");
     await click("World");
     await click("Follow");
-    await click("Accept camera request");
+    await click("Report follow latched");
     expect(required<HTMLElement>(".vivarium-2d-app").getAttribute("data-camera-mode")).toBe("follow");
     expect(button("Follow")?.getAttribute("aria-pressed")).toBe("true");
     expect(fixture.runtime.setCameraMode).toHaveBeenCalledWith("follow");
@@ -641,7 +734,7 @@ describe("Vivarium2DApp", () => {
     await click("Publish world subjects");
 
     expect([...followSelect().options].map((option) => option.textContent))
-      .toEqual(["Automatic", "Aster", "Rhea"]);
+      .toEqual(["Auto", "Aster", "Rhea"]);
 
     await chooseFollowSubject("aster");
     expect(fixture.runtime.observeRegion).toHaveBeenCalledWith("meadow");
@@ -655,6 +748,62 @@ describe("Vivarium2DApp", () => {
     expect(followSelect().selectedOptions[0]?.textContent).toBe("Aster");
     expect(required<HTMLElement>(".observer-hud__follow").getAttribute("data-follow"))
       .toBe("following");
+  });
+
+  it("engages a Free-origin pursuit once its target mounts when the viewer makes no later gesture", async () => {
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+
+    await click("World");
+    await click("Free");
+    await click("Accept camera request");
+    await chooseFollowSubject("rhea");
+
+    const stage = required<HTMLElement>('[aria-label="Production world"]');
+    expect(fixture.runtime.observeRegion).toHaveBeenCalledWith("willow");
+    expect(stage.getAttribute("data-follow-serial")).toBe("0");
+
+    await click("Publish target after mount");
+
+    expect(stage.getAttribute("data-follow-serial")).toBe("1");
+    expect(stage.getAttribute("data-follow-subject")).toBe("rhea");
+  });
+
+  it("does not engage a Free-origin pursuit after a later manual zoom", async () => {
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+
+    await click("World");
+    await click("Free");
+    await click("Accept camera request");
+    await chooseFollowSubject("rhea");
+    await click("Manual zoom");
+    await click("Publish target after mount");
+
+    const stage = required<HTMLElement>('[aria-label="Production world"]');
+    expect(stage.getAttribute("data-follow-serial")).toBe("0");
+    expect(stage.getAttribute("data-follow-subject")).toBe("");
+    expect(followSelect().value).toBe("");
+  });
+
+  it("keeps a settled follow after a manual zoom", async () => {
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+    await chooseFollowSubject("aster");
+    await click("Report follow latched");
+
+    const stage = required<HTMLElement>('[aria-label="Production world"]');
+    const serial = stage.getAttribute("data-follow-serial");
+    await click("Manual zoom");
+
+    expect(stage.getAttribute("data-follow-serial")).toBe(serial);
+    expect(followSelect().value).toBe("aster");
   });
 
   it("keeps following a being across a border by re-observing the region they entered", async () => {
@@ -676,6 +825,30 @@ describe("Vivarium2DApp", () => {
     expect(container.querySelector(".observer-hud__follow-notice")).toBeNull();
   });
 
+  it("keeps the first Atlas region choice after it releases an active follow", async () => {
+    const fixture = followRuntimeFixture();
+    await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
+    await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
+    await chooseFollowSubject("aster");
+    await click("Report follow latched");
+    vi.mocked(fixture.runtime.observeRegion).mockClear();
+
+    await click("World");
+    await click("Observe Willow");
+
+    // Choosing a place is manual camera takeover. It must release the old
+    // pursuit before the synchronous observed-region publication can tick it
+    // and steer the view straight back to Aster in Meadow.
+    expect(fixture.runtime.observeRegion).toHaveBeenCalledOnce();
+    expect(fixture.runtime.observeRegion).toHaveBeenCalledWith("willow");
+    expect(required<HTMLElement>('[aria-label="Production world"]')
+      .getAttribute("data-requested-camera")).toBe("free");
+
+    await click("Accept camera request");
+    expect(followSelect().value).toBe("");
+  });
+
   it("says the followed being died and returns framing — it never re-aims in silence", async () => {
     const fixture = followRuntimeFixture();
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
@@ -689,7 +862,7 @@ describe("Vivarium2DApp", () => {
     await act(async () => fixture.replaceWorld(twoRegionFrame({ asterStatus: "dead" })));
 
     expect(required<HTMLElement>(".observer-hud__follow-notice").textContent)
-      .toBe("Aster has died. Story framing resumed.");
+      .toBe("Aster has died. Auto framing resumed.");
     expect(followSelect().value).toBe("");
     expect(Number(required<HTMLElement>('[aria-label="Production world"]')
       .getAttribute("data-resume-serial"))).toBe(serialBefore + 1);
@@ -754,13 +927,14 @@ describe("Vivarium2DApp", () => {
   });
 
   it("drops a pending camera request before presenting the first frame of a replacement run", async () => {
-    const fixture = runtimeFixture();
+    const fixture = followRuntimeFixture();
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
+    await click("Publish world subjects");
     await click("World");
     await click("Follow");
     expect(required<HTMLElement>('[aria-label="Production world"]')
-      .getAttribute("data-requested-camera")).toBe("follow");
+      .getAttribute("data-follow-subject")).toBe("aster");
 
     const prior = fixture.runtime.frameSource.getSnapshot();
     await act(async () => fixture.replaceFrame({
@@ -772,6 +946,7 @@ describe("Vivarium2DApp", () => {
 
     expect(required<HTMLElement>('[aria-label="Production world"]')
       .getAttribute("data-requested-camera")).toBe("story");
+    expect(required<HTMLElement>(".presentation-world-stage").getAttribute("data-follow-subject")).toBe("");
     expect(required<HTMLElement>(".vivarium-2d-app").getAttribute("data-camera-mode")).toBe("story");
   });
 
@@ -780,7 +955,7 @@ describe("Vivarium2DApp", () => {
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
 
-    const worldTriggers = [...container.querySelectorAll("button")]
+    const worldTriggers = [...container.querySelectorAll(".observer-edge-triggers button")]
       .filter((candidate) => candidate.textContent?.trim() === "World");
     expect(worldTriggers).toHaveLength(1);
     expect(container.querySelector(".observer-edge-triggers button")?.textContent).toBe("World");
@@ -963,7 +1138,7 @@ describe("Vivarium2DApp", () => {
     await click("Close Chronicle");
     expect(safeFrame()).toEqual({ top: 64, right: 56, bottom: 176, left: 20 });
     await click("Chronicle");
-    expect(safeFrame()).toEqual({ top: 64, right: 436, bottom: 176, left: 20 });
+    expect(safeFrame()).toEqual({ top: 64, right: 436, bottom: 16, left: 20 });
 
     setViewport(600, 800);
     await act(async () => window.dispatchEvent(new Event("resize")));
@@ -993,7 +1168,7 @@ describe("Vivarium2DApp", () => {
     await click("Close Chronicle");
     expect(safeFrame()).toEqual({ top: 72, right: 52, bottom: 176, left: 20 });
     await click("Chronicle");
-    expect(safeFrame()).toEqual({ top: 72, right: 434, bottom: 176, left: 20 });
+    expect(safeFrame()).toEqual({ top: 72, right: 434, bottom: 16, left: 20 });
   });
 
   it("falls back to the reserved narrative band when nothing occupies the slot", async () => {
@@ -1070,6 +1245,7 @@ describe("Vivarium2DApp", () => {
     });
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
+    await click("Close Chronicle");
 
     expect(required(".dialogue-now")).not.toBeNull();
     // Correct: bottom is bound by the 700px-tall app box (bottom 144), not the 900px
@@ -1130,6 +1306,7 @@ describe("Vivarium2DApp", () => {
 
     await act(async () => root.render(<Vivarium2DApp createRuntime={() => fixture.runtime} />));
     await act(async () => fixture.runtime.ready);
+    await click("Close Chronicle");
     const empty = observers.at(-1)!;
     expect(observesCaption(empty)).toBe(false);
     expect(safeFrame().bottom).toBe(8);
@@ -1785,6 +1962,32 @@ function semanticSnapshot(frame: PresentedObserverFrame): RendererSemanticSnapsh
     subjects: [
       { selection: { kind: "region", id: "meadow" }, stableSelectionKey: "stable-region", kind: "region", regionId: "meadow", position: null, status: "exact", action: null },
       { selection: { kind: "agent", id: "aster" }, stableSelectionKey: "stable-agent", kind: "agent", regionId: "meadow", position: { x: 64, y: 96 }, status: "alive", action: "moving" },
+    ],
+  };
+}
+
+function semanticSnapshotWithRhea(frame: PresentedObserverFrame): RendererSemanticSnapshot {
+  return {
+    ...semanticSnapshot(frame),
+    subjects: [
+      {
+        selection: { kind: "region", id: "willow" },
+        stableSelectionKey: "stable-region-willow",
+        kind: "region",
+        regionId: "willow",
+        position: null,
+        status: "exact",
+        action: null,
+      },
+      {
+        selection: { kind: "agent", id: "rhea" },
+        stableSelectionKey: "stable-agent-rhea",
+        kind: "agent",
+        regionId: "willow",
+        position: { x: 64, y: 96 },
+        status: "alive",
+        action: "moving",
+      },
     ],
   };
 }

@@ -22,10 +22,8 @@
  *   - The checkpoint feed is a no-op (`inertRecordedCheckpointFeed`), isolating the
  *     story queue from checkpoint reconciliation — the QA harness's declared
  *     deviation #1.
- *   - Every recording is placed with `seed: 0`. A recording's true terrain seed is
- *     not present in `events.jsonl` / `snapshots.jsonl`, so map layout is
- *     deterministic across recordings rather than reproducing the real run's
- *     terrain — the same choice `recordedRunMetadata` in the QA harness makes.
+ *   - Local recordings retain their terrain seed and model through metadata.json.
+ *     Standalone legacy recordings without metadata retain the seed-zero fallback.
  *   - A caller's `runId` is a diagnostic label only. A recording's true identity
  *     is the `run_id` embedded in its first snapshot line; `loadRecordedRun`
  *     discovers it from the data rather than trusting the caller.
@@ -102,11 +100,19 @@ export interface RecordedRun {
   snapshotAt(cursor: number, worldTime: number): WorldSnapshot;
 }
 
+export interface RecordedRunMetadata {
+  readonly seed?: number | null;
+  readonly provider?: string | null;
+  readonly model?: string | null;
+  readonly started_at?: number | null;
+}
+
 export interface LoadRecordedRunInput {
   /** A diagnostic label only — see the module docstring. */
   readonly runId: string;
   readonly eventsText: string;
   readonly snapshotsText: string;
+  readonly metadata?: RecordedRunMetadata;
 }
 
 /** Parses `events.jsonl` + `snapshots.jsonl` text into a replayable recording. */
@@ -138,7 +144,7 @@ export function loadRecordedRun(input: LoadRecordedRunInput): RecordedRun {
   }
   const runId = firstLine.snapshot.run_id;
   const firstSnapshot = firstLine.snapshot;
-  const run = buildRecordedRunMetadata({ runId, snapshot: firstSnapshot });
+  const run = buildRecordedRunMetadata({ runId, snapshot: firstSnapshot, metadata: input.metadata });
 
   return {
     runId,
@@ -173,11 +179,32 @@ export async function fetchRecordedRun(
 ): Promise<RecordedRun> {
   const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
   const trimmedBase = base.replace(/\/$/u, "");
-  const [eventsText, snapshotsText] = await Promise.all([
+  const [eventsText, snapshotsText, metadata] = await Promise.all([
     fetchText(fetcher, `${trimmedBase}/events.jsonl`),
     fetchText(fetcher, `${trimmedBase}/snapshots.jsonl`),
+    trimmedBase.startsWith("/api/recordings/")
+      ? fetchMetadata(fetcher, `${trimmedBase}/metadata.json`)
+      : Promise.resolve(undefined),
   ]);
-  return loadRecordedRun({ runId: options.runId ?? "recorded", eventsText, snapshotsText });
+  return loadRecordedRun({ runId: options.runId ?? "recorded", eventsText, snapshotsText, metadata });
+}
+
+async function fetchMetadata(fetcher: typeof globalThis.fetch, url: string): Promise<RecordedRunMetadata | undefined> {
+  const response = await fetcher(url, { cache: "no-store" });
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(`Recorded run metadata failed: HTTP ${response.status}`);
+  const value: unknown = JSON.parse(await response.text());
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid recorded run metadata.");
+  }
+  const metadata = value as Record<string, unknown>;
+  if ((metadata.seed != null && !Number.isSafeInteger(metadata.seed))
+    || (metadata.started_at != null && (typeof metadata.started_at !== "number" || !Number.isFinite(metadata.started_at)))
+    || (metadata.provider != null && typeof metadata.provider !== "string")
+    || (metadata.model != null && typeof metadata.model !== "string")) {
+    throw new Error("Invalid recorded run metadata.");
+  }
+  return metadata as RecordedRunMetadata;
 }
 
 async function fetchText(fetcher: typeof globalThis.fetch, url: string): Promise<string> {
@@ -471,14 +498,13 @@ interface RecordedSnapshotLine {
 function buildRecordedRunMetadata(input: Readonly<{
   runId: string;
   snapshot: WorldSnapshot;
+  metadata?: RecordedRunMetadata;
 }>): RunMetadata {
   return {
     schema: 1,
     run_id: input.runId,
-    // A recording's true terrain seed is not present in the recorded files — see
-    // the module docstring's "impersonated seams" list.
-    seed: 0,
-    started_at: input.snapshot.world_time,
+    seed: input.metadata?.seed ?? 0,
+    started_at: input.metadata?.started_at ?? input.snapshot.world_time,
     status: "running",
     event_cursor: input.snapshot.event_cursor,
     world_time: input.snapshot.world_time,
@@ -489,8 +515,8 @@ function buildRecordedRunMetadata(input: Readonly<{
     // live run to ask. Older recordings state none, and their beings each carry
     // their own copy, so nothing is lost either way.
     seed_persona: input.snapshot.seed_persona ?? null,
-    provider: "gemini",
-    model: "recorded",
+    provider: input.metadata?.provider ?? "recorded",
+    model: input.metadata?.model ?? "recorded",
     context_window: null,
     timing: {},
     artifacts: {

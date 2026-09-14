@@ -2,6 +2,14 @@ import type { FrameIdentity, PresentedSceneView } from "./contracts";
 import { PresentedWorldModel } from "./PresentedWorldModel";
 import type { StoryMoment } from "./BeatDirector";
 
+/** Expected backpressure while an asynchronous renderer commits the exact scene frame. */
+export class ScenePublicationPending extends Error {
+  constructor() {
+    super("The scene is waiting for its renderer receipt.");
+    this.name = "ScenePublicationPending";
+  }
+}
+
 export type StoryPhase = "enter" | "hold" | "consequence" | "recover" | "exit";
 
 export type SceneMarkerRole =

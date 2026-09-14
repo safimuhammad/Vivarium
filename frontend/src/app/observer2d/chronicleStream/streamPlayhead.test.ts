@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatFeedTime, resolveStreamPlayhead } from "./streamPlayhead";
+import { formatEventTime, formatFeedTime, resolveStreamPlayhead } from "./streamPlayhead";
 
 describe("resolveStreamPlayhead", () => {
   const base = { clockMs: 20_000, liveMs: 20_000, floorMs: 0, bufferMs: 90_000 };
@@ -76,5 +76,22 @@ describe("formatFeedTime", () => {
     expect(formatFeedTime(9_120)).toBe("0:09.1");
     expect(formatFeedTime(61_500)).toBe("1:01.5");
     expect(formatFeedTime(-500)).toBe("0:00.0");
+  });
+});
+
+describe("formatEventTime", () => {
+  it("formats epoch seconds as UTC independently of page age", () => {
+    expect(formatEventTime(1_789_341_765.9, 421_900)).toBe("23:22:45 UTC");
+    expect(formatEventTime(946_684_800, 421_900)).toBe("00:00:00 UTC");
+  });
+
+  it("preserves elapsed formatting for synthetic event clocks", () => {
+    expect(formatEventTime(61.5, 421_900)).toBe("1:01.5");
+    expect(formatEventTime(0, 421_900)).toBe("0:00.0");
+  });
+
+  it("retains arrival-clock fallback when an event has no valid timestamp", () => {
+    expect(formatEventTime(null, 9_120)).toBe("0:09.1");
+    expect(formatEventTime(Number.NaN, 9_120)).toBe("0:09.1");
   });
 });

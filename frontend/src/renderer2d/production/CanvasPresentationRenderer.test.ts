@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RegionSnapshot } from "../../app/schemas";
+import type { PresentedEventType } from "../../presentation/eventPayloads";
 import type {
   ObserverRendererCallbacks,
   ObserverRendererDiagnostics,
@@ -2681,14 +2682,12 @@ describe("CanvasPresentationRenderer", () => {
    * See `.superpowers/sdd/world-navigation-report.md`.
    */
   /**
-   * Automatic framing stays in the region the viewer is watching.
+   * Auto owns typed live-event region changes, while legacy untyped frames remain conservative.
    *
-   * Owner direction (Safi, 2026-08-27), after watching the director cut between regions on
-   * every beat: *"for the automatic, can we for now establish that it is not allowed to move
-   * region but stick within the region"*. See `STORY_FRAMING_HOLDS_THE_OBSERVED_REGION`, which
-   * is the one place this is decided and the one place to lift it again.
+   * The live path proves its own dwell/action gate below. The neighboring checks preserve viewer
+   * ownership and the legacy fallback that deliberately has no event-priority evidence to infer.
    */
-  describe("automatic framing holds the observed region", () => {
+  describe("automatic region ownership", () => {
     /** A renderer parked inside "worn" on a live sheet, one frame drawn, camera on Story. */
     const insideWorn = async (): Promise<Awaited<ReturnType<typeof harness>>> => {
       const fixture = await harness({ worldSheetSnapshots: true });
@@ -2702,7 +2701,7 @@ describe("CanvasPresentationRenderer", () => {
       return fixture;
     };
 
-    it("keeps the viewer where they are when the story moves to another region", async () => {
+    it("keeps the current region for an untyped remote scene", async () => {
       const fixture = await insideWorn();
 
       fixture.renderer.updatePresentation(frame({ revision: 2, sceneRegion: "spring" }));
@@ -2711,15 +2710,75 @@ describe("CanvasPresentationRenderer", () => {
       await settle();
       fixture.driver.fire(48);
 
-      // The beat is still RECEIVED -- the frame handed to the graph still carries the story's
-      // own scene, off in "spring", and the Chronicle still lists it. What must not happen is
-      // the camera being carried off to watch it.
+      // The beat is still received. With no typed event authority, the compatibility route keeps
+      // the mounted region instead of inventing a priority from the scene alone.
       expect(fixture.graph.frames.at(-1)?.scene?.regionId).toBe("spring");
       expect(fixture.debug()).toMatchObject({
         visibleRegionId: "worn",
         loadingRegionId: null,
       });
       expect(fixture.debug().camera.mode).toBe("story");
+      fixture.renderer.dispose();
+    });
+
+    it("keeps the mounted graph region and camera target through a remote Auto beat, then changes after dwell and completion", async () => {
+      const fixture = await harness();
+      const wornTarget = {
+        selection: { kind: "agent" as const, id: "agent-a" },
+        worldBounds: { x: 80, y: 70, width: 24, height: 32 },
+        feetY: 102,
+        selectionKey: "agent:agent-a",
+      };
+      fixture.graph.debugValue.hitTargets = [wornTarget];
+      fixture.renderer.updatePresentation(frame({
+        revision: 1,
+        sceneRegion: "worn",
+        eventType: "resource_changed",
+      }));
+      await settle();
+      expect(fixture.debug().visibleRegionId).toBe("worn");
+      const mountedCamera = structuredClone(fixture.debug().camera);
+
+      fixture.driver.fire(1);
+      fixture.renderer.updatePresentation(frame({
+        revision: 2,
+        sceneRegion: "spring",
+        eventType: "resource_changed",
+      }));
+      await settle();
+      expect(fixture.debug().visibleRegionId).toBe("worn");
+      // The renderer passes the Auto-held region into the graph, so the scene cannot render
+      // Spring's entities against Worn's terrain cache. Its stable local target keeps the
+      // camera framed within that same mounted world while the remote beat waits its turn.
+      expect(fixture.graph.update.mock.calls.at(-1)?.[2]).toBe("worn");
+      expect(fixture.graph.debugValue.visibleRegionId).toBe("worn");
+      expect(fixture.debug().camera).toMatchObject({
+        mode: "story",
+        storyEntityId: wornTarget.selectionKey,
+        storyTarget: wornTarget.worldBounds,
+        worldBounds: mountedCamera.worldBounds,
+      });
+
+      fixture.driver.fire(29_999);
+      fixture.renderer.updatePresentation(frame({
+        revision: 3,
+        sceneRegion: "worn",
+        scenePhase: "exit",
+        eventType: "resource_changed",
+      }));
+      await settle();
+      fixture.driver.fire(30_000);
+      fixture.renderer.updatePresentation(frame({
+        revision: 4,
+        sceneRegion: "spring",
+        eventType: "agent_born",
+      }));
+      await settle();
+
+      expect(fixture.debug()).toMatchObject({
+        visibleRegionId: "spring",
+        loadingRegionId: null,
+      });
       fixture.renderer.dispose();
     });
 
@@ -2769,10 +2828,7 @@ describe("CanvasPresentationRenderer", () => {
       fixture.renderer.dispose();
     });
 
-    it("leaves a renderer with no world sheet exactly as it was", async () => {
-      // "Stick within the region" is a statement about being INSIDE one. A renderer built
-      // without the sheet has no scope at all, so the director is untouched there -- which is
-      // what keeps every other case in this file exercising the behaviour it was written for.
+    it("keeps the untyped no-sheet compatibility path unchanged", async () => {
       const fixture = await harness();
       fixture.renderer.resize(800, 600);
       fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "worn" }));
@@ -4913,30 +4969,139 @@ describe("CanvasPresentationRenderer", () => {
     fixture.renderer.dispose();
   });
 
-  it.each([false, true])(
-    "temporarily frames checkpoint structure beats and restores prior Free camera ownership (reduced=%s)",
-    async (reducedMotion) => {
+  it("reclaims Follow framing for a newly selected being after zoom kept the Follow mode", async () => {
+    const onCameraAuthorityChange = vi.fn();
+    const fixture = await harness({
+      reducedMotion: true,
+      callbacks: { onCameraAuthorityChange },
+    });
+    const allen = {
+      selection: { kind: "agent" as const, id: "allen" },
+      worldBounds: { x: 80, y: 70, width: 24, height: 32 },
+      feetY: 102,
+      selectionKey: "agent:allen",
+    };
+    const joe = {
+      selection: { kind: "agent" as const, id: "joe" },
+      worldBounds: { x: 480, y: 470, width: 24, height: 32 },
+      feetY: 502,
+      selectionKey: "agent:joe",
+    };
+    fixture.graph.debugValue.hitTargets = [allen, joe];
+    fixture.renderer.updatePresentation(frame({ revision: 1, selection: allen.selection }));
+    await settle();
+
+    fixture.renderer.setSelection(allen.selection);
+    fixture.renderer.setCameraMode("follow");
+    fixture.renderer.zoomCamera(1.25, { x: 160, y: 144 });
+
+    // A zoom is deliberately a viewer takeover without changing the nominal Follow mode.
+    expect(fixture.debug().camera).toMatchObject({
+      mode: "follow",
+      viewerControlled: true,
+      followEntityId: allen.selectionKey,
+    });
+
+    // Choosing another being is a new explicit Follow request, so same-mode Follow must release
+    // that takeover and point the camera at the new subject.
+    fixture.renderer.setSelection(joe.selection);
+    fixture.renderer.setCameraMode("follow");
+
+    expect(fixture.debug().camera).toMatchObject({
+      mode: "follow",
+      viewerControlled: false,
+      followEntityId: joe.selectionKey,
+      guidedTarget: joe.worldBounds,
+    });
+    expect(onCameraAuthorityChange.mock.calls.map(([viewerControlled]) => viewerControlled))
+      .toEqual([true, false]);
+    fixture.renderer.dispose();
+  });
+
+  it("frames an ordinary checkpoint while Auto owns the camera", async () => {
+    const fixture = await harness({ reducedMotion: true });
+    fixture.graph.debugValue.hitTargets = [{
+      selection: { kind: "home", id: "home-repair" },
+      worldBounds: { x: 480, y: 470, width: 64, height: 64 },
+      feetY: 534,
+      selectionKey: "home:home-repair",
+    }];
+    fixture.renderer.resize(390, 844);
+    fixture.renderer.setSafeFrame({ top: 28, right: 12, bottom: 64, left: 20 });
+    fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "worn" }));
+    await settle();
+
+    fixture.renderer.updatePresentation(frame({
+      revision: 2,
+      settled: true,
+      checkpointFocus: {
+        regionId: "spring",
+        kind: "home",
+        entityId: "home-repair",
+        segmentIndex: 0,
+        segmentCount: 1,
+        removed: false,
+      },
+    }));
+    await settle();
+
+    const focused = fixture.debug();
+    expect(focused).toMatchObject({
+      visibleRegionId: "spring",
+      camera: {
+        mode: "story",
+        storyEntityId: "home:home-repair",
+        storyTarget: { x: 480, y: 470, width: 64, height: 64 },
+      },
+    });
+    const target = focused.camera.storyTarget!;
+    const screen = {
+      x: focused.camera.rasterOrigin.x + target.x * focused.camera.zoom,
+      y: focused.camera.rasterOrigin.y + target.y * focused.camera.zoom,
+      width: target.width * focused.camera.zoom,
+      height: target.height * focused.camera.zoom,
+    };
+    expect(screen.x).toBeGreaterThanOrEqual(focused.camera.safeFrame.x);
+    expect(screen.y).toBeGreaterThanOrEqual(focused.camera.safeFrame.y);
+    expect(screen.x + screen.width).toBeLessThanOrEqual(
+      focused.camera.safeFrame.x + focused.camera.safeFrame.width,
+    );
+    expect(screen.y + screen.height).toBeLessThanOrEqual(
+      focused.camera.safeFrame.y + focused.camera.safeFrame.height,
+    );
+    fixture.renderer.dispose();
+  });
+
+  it.each(["free", "follow"] as const)(
+    "keeps explicit %s ownership through an ordinary checkpoint focus",
+    async (mode) => {
       const onCameraModeChange = vi.fn();
       const fixture = await harness({
-        reducedMotion,
+        reducedMotion: true,
         callbacks: { onCameraModeChange },
       });
+      const selected = { kind: "agent" as const, id: "agent-a" };
       fixture.graph.debugValue.hitTargets = [{
-        selection: { kind: "home", id: "home-repair" },
-        worldBounds: { x: 480, y: 470, width: 64, height: 64 },
-        feetY: 534,
-        selectionKey: "home:home-repair",
+        selection: selected,
+        worldBounds: { x: 80, y: 70, width: 24, height: 32 },
+        feetY: 102,
+        selectionKey: "agent:agent-a",
       }];
-      fixture.renderer.resize(390, 844);
-      fixture.renderer.setSafeFrame({ top: 28, right: 12, bottom: 64, left: 20 });
-      fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "worn" }));
+      fixture.renderer.updatePresentation(frame({
+        revision: 1,
+        sceneRegion: "worn",
+        selection: selected,
+      }));
       await settle();
-      fixture.renderer.setCameraMode("free");
-      fixture.renderer.panCamera({ x: 32, y: 16 });
+      fixture.renderer.setSelection(selected);
+      fixture.renderer.setCameraMode(mode);
+      if (mode === "free") fixture.renderer.panCamera({ x: 32, y: 16 });
       const before = structuredClone(fixture.debug().camera);
 
       fixture.renderer.updatePresentation(frame({
         revision: 2,
+        sceneRegion: "worn",
+        selection: selected,
         settled: true,
         checkpointFocus: {
           regionId: "spring",
@@ -4948,51 +5113,17 @@ describe("CanvasPresentationRenderer", () => {
         },
       }));
       await settle();
-      if (!reducedMotion) {
-        fixture.driver.fire(0);
-        fixture.driver.fire(240);
-      }
 
-      const focused = fixture.debug();
-      expect(focused).toMatchObject({
-        visibleRegionId: "spring",
-        camera: {
-          mode: "story",
-          storyEntityId: "home:home-repair",
-          storyTarget: { x: 480, y: 470, width: 64, height: 64 },
-        },
-      });
-      const target = focused.camera.storyTarget!;
-      const screen = {
-        x: focused.camera.rasterOrigin.x + target.x * focused.camera.zoom,
-        y: focused.camera.rasterOrigin.y + target.y * focused.camera.zoom,
-        width: target.width * focused.camera.zoom,
-        height: target.height * focused.camera.zoom,
-      };
-      expect(screen.x).toBeGreaterThanOrEqual(focused.camera.safeFrame.x);
-      expect(screen.y).toBeGreaterThanOrEqual(focused.camera.safeFrame.y);
-      expect(screen.x + screen.width).toBeLessThanOrEqual(
-        focused.camera.safeFrame.x + focused.camera.safeFrame.width,
-      );
-      expect(screen.y + screen.height).toBeLessThanOrEqual(
-        focused.camera.safeFrame.y + focused.camera.safeFrame.height,
-      );
-
-      fixture.renderer.updatePresentation(frame({
-        revision: 3,
-        settled: true,
-        checkpointFocus: null,
-      }));
-      await settle();
       expect(fixture.debug()).toMatchObject({
         visibleRegionId: "worn",
         camera: {
-          mode: "free",
+          mode,
           center: before.center,
           zoom: before.zoom,
         },
       });
-      expect(onCameraModeChange.mock.calls.map(([mode]) => mode)).toEqual(["free"]);
+      expect(fixture.graph.update.mock.calls.at(-1)?.[2]).toBe("worn");
+      expect(onCameraModeChange.mock.calls.map(([changedMode]) => changedMode)).toEqual([mode]);
       fixture.renderer.dispose();
     },
   );
@@ -5052,6 +5183,44 @@ describe("CanvasPresentationRenderer", () => {
       followEntityId: "agent:agent-a",
     });
     expect(onCameraModeChange).toHaveBeenLastCalledWith("follow");
+    fixture.renderer.dispose();
+  });
+
+  it("keeps explicit Follow with its being across a region boundary while Free stays put", async () => {
+    const fixture = await harness();
+    const selected = { kind: "agent" as const, id: "agent-a" };
+    fixture.graph.debugValue.hitTargets = [{
+      selection: selected,
+      worldBounds: { x: 80, y: 70, width: 24, height: 32 },
+      feetY: 102,
+      selectionKey: "agent:agent-a",
+    }];
+    fixture.renderer.updatePresentation(frame({
+      revision: 1,
+      sceneRegion: "worn",
+      selection: selected,
+    }));
+    await settle();
+    fixture.renderer.setCameraMode("follow");
+
+    fixture.renderer.updatePresentation(frame({
+      revision: 2,
+      sceneRegion: "spring",
+      selection: selected,
+    }));
+    await settle();
+    expect(fixture.debug().camera.mode).toBe("follow");
+    expect(fixture.debug().visibleRegionId).toBe("spring");
+
+    fixture.renderer.setCameraMode("free");
+    fixture.renderer.updatePresentation(frame({
+      revision: 3,
+      sceneRegion: "worn",
+      selection: selected,
+    }));
+    await settle();
+    expect(fixture.debug().camera.mode).toBe("free");
+    expect(fixture.debug().visibleRegionId).toBe("spring");
     fixture.renderer.dispose();
   });
 
@@ -6568,6 +6737,7 @@ function frame(overrides: Readonly<{
   execution?: boolean;
   speak?: boolean;
   scenePhase?: "enter" | "hold" | "consequence" | "recover" | "exit";
+  eventType?: PresentedEventType;
   settled?: boolean;
   checkpointFocus?: PresentedObserverFrame["checkpointFocus"];
 }> = {}): PresentedObserverFrame {
@@ -6616,8 +6786,14 @@ function frame(overrides: Readonly<{
       effectIntents: [],
       safeCancelMarkers: [],
       reducedMotion: false,
-      ...(overrides.execution
-        ? { execution: { sceneToken: 9, programId: `program-${cursor}` } }
+      ...(overrides.execution || overrides.eventType !== undefined
+        ? {
+          execution: {
+            sceneToken: 9,
+            programId: `program-${cursor}`,
+            ...(overrides.eventType === undefined ? {} : { eventType: overrides.eventType }),
+          },
+        }
         : {}),
     },
     checkpointFocus: overrides.checkpointFocus ?? null,

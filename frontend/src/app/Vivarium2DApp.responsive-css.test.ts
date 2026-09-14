@@ -11,7 +11,7 @@ describe("Vivarium2DApp responsive and media CSS contract", () => {
     expect(css).toMatch(/min-height:\s*44px/);
     expect(css).toMatch(/min-width:\s*44px/);
     expect(css).toMatch(/:focus-visible[\s\S]*outline:\s*3px/);
-    expect(css).toMatch(/max-height:[^;]*48dvh[^;]*112px/);
+    expect(css).toMatch(/max-height:[^;]*58dvh[^;]*safe-area-inset-bottom/);
   });
 
   it("wraps the compact header without clipping and keeps four mobile drawer triggers reachable", () => {

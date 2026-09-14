@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from agents.decider import Decider
 from bus.events import Event, ScopeType
 from core.logging import configure_logging
+from core.run_knobs import PROVIDER_CHOICES
 from memory.vector_store import VectorStore
 from observability.event_log import FeedReadResult, serialize_event
 from observability.replay_archive import ReplayArchive, ReplayStreamName
@@ -34,6 +35,16 @@ from scripts.run import (
     DEFAULT_SEED,
     DEFAULT_WORLD_TICK_INTERVAL,
     Simulation,
+)
+from server.recordings import (
+    RecordingError,
+    RecordingNotFoundError,
+    RecordingPathError,
+    RecordingSecurityError,
+    iter_recording_file,
+    list_recordings,
+    load_recording,
+    recording_metadata,
 )
 from server.run_config import (
     RunConfigError,
@@ -247,6 +258,48 @@ def create_app(
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
             },
+        )
+
+    @app.get("/api/recordings")
+    async def get_recordings() -> dict[str, object]:
+        """List replayable historical runs without starting inference."""
+        runs = await asyncio.to_thread(list_recordings, resolved_settings.run_dir)
+        return {"runs": runs}
+
+    @app.get("/api/recordings/{recording_id}/metadata.json")
+    async def get_recording_metadata(recording_id: str) -> dict[str, object]:
+        """Return generated safe metadata for one replayable recording."""
+        try:
+            return await asyncio.to_thread(
+                recording_metadata,
+                resolved_settings.run_dir,
+                recording_id,
+            )
+        except RecordingPathError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RecordingSecurityError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except RecordingNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RecordingError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/recordings/{recording_id}/events.jsonl")
+    def get_recording_events(recording_id: str) -> StreamingResponse:
+        """Stream one validated recording's fixed events JSONL artifact."""
+        return _recording_artifact_response(
+            resolved_settings.run_dir,
+            recording_id,
+            "events.jsonl",
+        )
+
+    @app.get("/api/recordings/{recording_id}/snapshots.jsonl")
+    def get_recording_snapshots(recording_id: str) -> StreamingResponse:
+        """Stream one validated recording's fixed snapshots JSONL artifact."""
+        return _recording_artifact_response(
+            resolved_settings.run_dir,
+            recording_id,
+            "snapshots.jsonl",
         )
 
     @app.get("/api/replay/manifest")
@@ -467,6 +520,29 @@ def _replay_artifact_response(
         raise HTTPException(status_code=403, detail=f"{label} archive is not the current run.")
     return StreamingResponse(
         _stream_archive_lines(archive, stream),
+        media_type=NDJSON_MEDIA_TYPE,
+        headers=REPLAY_ARTIFACT_HEADERS,
+    )
+
+
+def _recording_artifact_response(
+    run_dir: str | Path,
+    recording_id: str,
+    artifact: str,
+) -> StreamingResponse:
+    """Validate and stream one fixed historical recording artifact."""
+    try:
+        load_recording(run_dir, recording_id)
+    except RecordingPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RecordingSecurityError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RecordingNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RecordingError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return StreamingResponse(
+        iter_recording_file(run_dir, recording_id, artifact),
         media_type=NDJSON_MEDIA_TYPE,
         headers=REPLAY_ARTIFACT_HEADERS,
     )
@@ -1037,7 +1113,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--provider", default=DEFAULT_PROVIDER, choices=("ollama", "gemini"))
+    parser.add_argument(
+        "--provider",
+        default=DEFAULT_PROVIDER,
+        choices=PROVIDER_CHOICES,
+        help="Decider backend: local 'mlx' (default), local 'ollama', or hosted 'gemini'.",
+    )
     parser.add_argument("--model", default=None)
     parser.add_argument("--context-tokens", type=int, default=None)
     parser.add_argument("--pace", type=float, default=DEFAULT_PACE)

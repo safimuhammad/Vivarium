@@ -142,6 +142,38 @@ function agentIdForRig(rig: "human-a" | "human-b"): string {
 }
 
 describe("LayeredHumanActor mechanics-faithful state", () => {
+  it("clears a completed gather body pose without waiting for another action", () => {
+    const { actor } = createActor();
+    actor.apply({ kind: "play-body", action: "gather" }, 0);
+    expect(actor.snapshot().activeAction).not.toBeNull();
+    actor.apply({ kind: "clear-body" }, 1);
+    expect(actor.snapshot().activeAction).toBeNull();
+  });
+
+  it.each(["paralyzed", "dead"] as const)("body cleanup preserves %s state", (status) => {
+    const { actor } = createActor();
+    actor.apply({ kind: "set-status", status }, 0);
+    actor.apply({ kind: "clear-body" }, 1);
+    expect(actor.snapshot().activeAction).toBe(status === "dead" ? "dead" : "prone");
+    expect(actor.snapshot().terminal).toBe(status === "dead");
+    actor.apply({ kind: "move", waypoints: [{ x: 80, y: 61 }], speedPixelsPerSecond: 10, gait: "walk" }, 2);
+    expect(actor.snapshot().routeActive).toBe(false);
+  });
+
+  it("body cleanup preserves an active route and turn timing", () => {
+    const { actor } = createActor({ position: { x: 0, y: 0 }, facing: "south" });
+    actor.apply({ kind: "move", waypoints: [{ x: 50, y: 0 }], speedPixelsPerSecond: 10, gait: "walk" }, 0);
+    const before = actor.snapshot();
+    const deadline = actor.nextDeadlineMs();
+    actor.apply({ kind: "clear-body" }, 0);
+    expect(actor.snapshot().activeAction).toBe(before.activeAction);
+    expect(actor.snapshot().routeActive).toBe(true);
+    expect(actor.nextDeadlineMs()).toBe(deadline);
+    actor.advance(0.5, 500);
+    actor.advance(0.5, 1_000);
+    expect(actor.snapshot().position.x).toBeGreaterThan(0);
+  });
+
   it("exposes only the currently active bounded semantic primitive", () => {
     const { actor } = createActor();
     expect(actor.snapshot().activeAction).toBeNull();

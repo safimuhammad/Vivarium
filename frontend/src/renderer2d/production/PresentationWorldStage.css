@@ -20,6 +20,14 @@
   cursor: grab;
 }
 
+/* Bubble text is rasterised at display resolution, independent of world zoom. */
+.presentation-world-stage__overlay {
+  position: absolute;
+  inset: 0 auto auto 0;
+  pointer-events: none;
+  image-rendering: auto;
+}
+
 /**
  * Hover affordance at world zoom: an island under the pointer is a place you can enter, so the
  * cursor says so. Declared BEFORE `--dragging` on purpose — equal specificity, so a grab in

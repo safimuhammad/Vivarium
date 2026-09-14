@@ -436,6 +436,8 @@ export interface PresentationIngressSnapshot {
 
 export interface PresentedObserverFrame extends FrameIdentity {
   readonly source: PresentationSource;
+  /** Actual run metadata; omitted where a recording does not identify its model. */
+  readonly inference?: Readonly<{ provider: string; model: string }>;
   readonly ingestedCursor: number;
   readonly presentedCursor: number;
   readonly world: PresentedWorldView;

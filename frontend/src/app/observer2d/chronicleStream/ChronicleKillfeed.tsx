@@ -57,7 +57,7 @@ import { StreamGlyph } from "./StreamGlyph";
 import { chainAround, detailFor } from "./streamDetail";
 import { regionTag, type StreamEvent } from "./streamEvent";
 import type { ChronicleStreamBuffer, StreamPresence } from "./streamBuffer";
-import { formatFeedTime, resolveStreamPlayhead, type StreamSeek } from "./streamPlayhead";
+import { formatEventTime, formatFeedTime, resolveStreamPlayhead, type StreamSeek } from "./streamPlayhead";
 import type { StandingCondition } from "./streamSalience";
 import type { ChronicleStreamView } from "./useChronicleStream";
 
@@ -93,6 +93,9 @@ const CARD_EXIT_MS = 280;
 /** The playhead lands slightly before the event, so you see it *arrive*. */
 const PREROLL_MS = 900;
 
+/** The Chronicle lens chosen by the reader. World is always the complete feed. */
+export type ChronicleFeedFilter = "world" | "nearby" | "following";
+
 export interface ChronicleKillfeedProps {
   readonly stream: ChronicleStreamView;
   /** Ranges the viewer did not see, offered to the Archive. */
@@ -115,6 +118,20 @@ export interface ChronicleKillfeedProps {
    * old full-width bottom bar has nowhere left to be.
    */
   readonly sourceControls?: ReactNode;
+  /**
+   * The reading lens. Omitting it preserves the complete World feed for older
+   * callers; providing it makes the tabs controlled by the observer shell.
+   */
+  readonly filter?: ChronicleFeedFilter;
+  readonly onFilterChange?: (filter: ChronicleFeedFilter) => void;
+  /** Region the observer is currently looking at, for the Nearby lens. */
+  readonly nearbyRegionId?: string | null;
+  /** Being the observer is currently pursuing, for the Following lens. */
+  readonly followingBeingId?: string | null;
+  /** Releases the observer's real camera pursuit when the reader offers Stop following. */
+  readonly onStopFollowing?: () => void;
+  /** Camera controls shared with the world surface, placed beside the filters. */
+  readonly cameraControls?: ReactNode;
   /**
    * How the world itself is doing, as opposed to where the playhead is.
    *
@@ -214,6 +231,41 @@ export function fittingCount(
     if (count >= max) break;
   }
   return Math.max(1, count);
+}
+
+/**
+ * Selects a reader lens without changing the chronological order or the source
+ * buffer. A missing Nearby/Following context intentionally yields no events:
+ * inventing a region or person would make the filter lie.
+ */
+export function eventsForChronicleFilter(
+  events: readonly StreamEvent[],
+  filter: ChronicleFeedFilter,
+  nearbyRegionId: string | null | undefined,
+  followingBeingId: string | null | undefined,
+): readonly StreamEvent[] {
+  switch (filter) {
+    case "nearby":
+      return nearbyRegionId === null || nearbyRegionId === undefined
+        ? []
+        : events.filter((event) => event.regionId === nearbyRegionId);
+    case "following":
+      return followingBeingId === null || followingBeingId === undefined
+        ? []
+        : events.filter((event) => event.participants.includes(followingBeingId));
+    case "world":
+      return events;
+  }
+}
+
+/** Whether a reader has scrolled close enough to the newest retained card. */
+export function isNearChronicleEnd(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+  tolerance = 20,
+): boolean {
+  return scrollHeight - clientHeight - scrollTop <= tolerance;
 }
 
 /**
@@ -341,7 +393,16 @@ export function beingNow(
     });
   }
   if (presence.gone.has(beingId)) {
-    return Object.freeze({ line: `${name}'s body lies at ${where}.`, reachable: true });
+    return Object.freeze({
+      line: `${name}'s body lies at ${where}. There is no present being to follow.`,
+      reachable: false,
+    });
+  }
+  if (regionId === null) {
+    return Object.freeze({
+      line: `${name}'s current place is unknown. Replay the event to revisit it.`,
+      reachable: false,
+    });
   }
   return Object.freeze({ line: `${name} is at ${where} now.`, reachable: true });
 }
@@ -359,8 +420,15 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
   const { stream } = props;
   const [seek, setSeek] = useState<StreamSeek | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
-  const [followBeingId, setFollowBeingId] = useState<string | null>(null);
-  const flowRef = useRef<HTMLOListElement | null>(null);
+  const [localFollowBeingId, setLocalFollowBeingId] = useState<string | null>(null);
+  const [localFilter, setLocalFilter] = useState<ChronicleFeedFilter>("world");
+  const [autoScrollPaused, setAutoScrollPaused] = useState(false);
+  const readerRef = useRef<HTMLDivElement | null>(null);
+  const followBeingId = props.followingBeingId === undefined
+    ? localFollowBeingId
+    : props.followingBeingId;
+  const followIsControlled = props.followingBeingId !== undefined;
+  const canStopFollowing = !followIsControlled || props.onStopFollowing !== undefined;
 
   const playhead = resolveStreamPlayhead({
     seek,
@@ -377,6 +445,16 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
     () => stream.events.filter((event) => event.cursor <= throughCursor),
     [stream.events, throughCursor],
   );
+  const filter = props.filter ?? localFilter;
+  const filtered = useMemo(
+    () => eventsForChronicleFilter(
+      delivered,
+      filter,
+      props.nearbyRegionId,
+      followBeingId,
+    ),
+    [delivered, filter, props.nearbyRegionId, followBeingId],
+  );
   const presence = useMemo(
     () => stream.buffer.derivePresence(throughCursor),
     [stream.buffer, throughCursor],
@@ -385,22 +463,19 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
     () => stream.buffer.deriveStanding(throughCursor),
     [stream.buffer, throughCursor],
   );
-  const visible = useMemo(
-    () => delivered.slice(-MAX_RENDERED_CARDS),
-    [delivered],
-  );
-  const items = useMemo(() => buildFlowItems(visible), [visible]);
-  const flow = useFittedFlow(flowRef, items);
+  const items = useMemo(() => buildFlowItems(filtered), [filtered]);
   const ahead = stream.events.length - delivered.length;
   const openDetail = detailId === null
     ? null
-    : delivered.find((event) => event.id === detailId) ?? null;
+    : filtered.find((event) => event.id === detailId) ?? null;
   const quietMs = delivered.length === 0
     ? null
     : playhead.nowMs - (delivered.at(-1)?.atMs ?? 0);
   const livenessState = props.liveness?.state ?? "live";
   const livenessLabel = props.liveness?.label ?? "Live";
   const livenessDetail = props.liveness?.detail ?? "Watching the world as it happens.";
+  const feedCount = filter === "world" ? delivered.length : filtered.length;
+  const feedCountLabel = filter === "world" ? "recent" : "matching";
 
   /**
    * The one card that is the present tense, and what to call it.
@@ -410,7 +485,7 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
    * current moment, and the "Behind live" banner already owns that state. A
    * badge saying NOW over a rewound feed would be a lie.
    */
-  const newest = playhead.atLive ? delivered.at(-1) ?? null : null;
+  const newest = playhead.atLive && filter === "world" ? delivered.at(-1) ?? null : null;
   const activeRange = props.activeMomentRange ?? null;
   const leadingEdge: Readonly<{ id: string; label: "Now" | "Latest" }> | null = newest === null
     ? null
@@ -426,8 +501,18 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
   const goLive = (): void => {
     setSeek(null);
   };
+  const chooseFilter = (next: ChronicleFeedFilter): void => {
+    if (props.filter === undefined) setLocalFilter(next);
+    props.onFilterChange?.(next);
+    setAutoScrollPaused(false);
+    setDetailId(null);
+  };
+  const resumeAutoScroll = (): void => {
+    setAutoScrollPaused(false);
+    const reader = readerRef.current;
+    if (reader !== null) reader.scrollTop = reader.scrollHeight;
+  };
   const openEvent = (event: StreamEvent): void => {
-    setFollowBeingId(null);
     // Viewing the CURRENT moment must not rewind. Every other card seeks back a
     // beat so the viewer sees the event arrive; doing that to the leading edge
     // would drop the feed 900ms behind live and hang a "Behind live" banner over
@@ -438,24 +523,60 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
     props.onViewCursor(event.cursor);
   };
   const follow = (beingId: string): void => {
-    setFollowBeingId(beingId);
+    if (!followIsControlled) setLocalFollowBeingId(beingId);
     props.onFocusBeing(beingId);
+  };
+  const stopFollowing = (): void => {
+    if (followIsControlled) {
+      props.onStopFollowing?.();
+    } else {
+      setLocalFollowBeingId(null);
+    }
   };
 
   const lens = followBeingId === null
     ? null
     : beingNow(followBeingId, presence, (id) => stream.buffer.nameOf(id));
 
+  useLayoutEffect(() => {
+    const reader = readerRef.current;
+    if (reader !== null && !autoScrollPaused) reader.scrollTop = reader.scrollHeight;
+  }, [autoScrollPaused, filtered.length, filter]);
+
   return (
     <section
-      className={`observer-drawer chronicle-killfeed${playhead.atLive ? "" : " is-behind"}`}
+      className={`observer-drawer chronicle-killfeed chronicle-killfeed--reader${playhead.atLive ? "" : " is-behind"}`}
       aria-labelledby="chronicle-drawer-heading"
     >
       <div className="chronicle-killfeed__top">
       <header className="chronicle-killfeed__head">
-        <h2 id="chronicle-drawer-heading" tabIndex={-1}>Chronicle</h2>
+        <span>
+          <h2 id="chronicle-drawer-heading" tabIndex={-1}>Chronicle</h2>
+          <small className={`chronicle-killfeed__live-note is-${livenessState}`}>
+            <i aria-hidden="true" />{livenessLabel}
+          </small>
+        </span>
         <button type="button" aria-label="Close Chronicle" onClick={props.onClose}>Close</button>
       </header>
+
+      <div className="chronicle-killfeed__filters" role="tablist" aria-label="Chronicle events">
+        {(["world", "nearby", "following"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            role="tab"
+            aria-selected={filter === option}
+            className={filter === option ? "is-selected" : ""}
+            onClick={() => chooseFilter(option)}
+          >{option.charAt(0).toUpperCase() + option.slice(1)}</button>
+        ))}
+      </div>
+
+      {props.cameraControls === undefined ? null : (
+        <div className="chronicle-killfeed__camera" aria-label="Camera controls">
+          {props.cameraControls}
+        </div>
+      )}
 
       <StandingStrip
         conditions={standing}
@@ -480,27 +601,43 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
         </div>
       )}
 
-      <ol
-        ref={flowRef}
-        className="chronicle-killfeed__flow"
-        aria-label="World events, newest last"
+      <div
+        ref={readerRef}
+        className="chronicle-killfeed__reader"
+        data-autoscroll={autoScrollPaused ? "paused" : "on"}
+        onScroll={(event) => {
+          const reader = event.currentTarget;
+          setAutoScrollPaused(!isNearChronicleEnd(
+            reader.scrollTop,
+            reader.scrollHeight,
+            reader.clientHeight,
+          ));
+        }}
       >
+      <ol className="chronicle-killfeed__flow" aria-label={`${filter} events, oldest first`}>
         {stream.evictedCount > 0 && delivered.length > 0 ? (
           <li className="chronicle-killfeed__horizon" aria-hidden="true">
             {stream.evictedCount} left the buffer · {Math.round(playhead.bufferMs / 1000)}s retained
           </li>
         ) : null}
-        {delivered.length === 0 ? (
-          <li className="chronicle-killfeed__quiet">The world is quiet.</li>
+        {filtered.length === 0 ? (
+          <li className="chronicle-killfeed__quiet">{
+            filter === "world"
+              ? "The world is quiet."
+              : filter === "nearby"
+                ? props.nearbyRegionId === null || props.nearbyRegionId === undefined
+                  ? "No observed region is available yet."
+                  : "Nothing has happened here in the retained history."
+                : followBeingId === null
+                  ? "No being is being followed yet."
+                  : "No retained events involve the followed being."
+          }</li>
         ) : null}
-        {[
-          ...flow.leaving.map((item) => [item, true] as const),
-          ...flow.shown.map((item) => [item, false] as const),
-        ].map(([item, isLeaving]) => (item.kind === "burst"
+        {items.map((item) => (item.kind === "burst"
           ? (
             <li
               key={item.key}
-              className={`chronicle-killfeed__burst${isLeaving ? " is-leaving" : ""}`}
+              className="chronicle-killfeed__burst"
               aria-hidden="true"
             >
               <b>{item.count}</b>
@@ -512,7 +649,7 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
             <KillfeedCard
               key={item.key}
               event={item.event}
-              leaving={isLeaving}
+              leaving={false}
               leadingEdge={item.event.id === leadingEdge?.id ? leadingEdge.label : null}
               presence={presence}
               nameOf={(id) => stream.buffer.nameOf(id)}
@@ -524,18 +661,28 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
             />
           )))}
       </ol>
+      </div>
 
-      {quietMs !== null && quietMs > 6_000 && playhead.atLive ? (
+      {quietMs !== null && quietMs > 6_000 && playhead.atLive && filter === "world" ? (
         <p className="chronicle-killfeed__still">still for {formatFeedTime(quietMs)}</p>
+      ) : null}
+
+      {autoScrollPaused ? (
+        <p className="chronicle-killfeed__reader-pause" role="status">
+          Reading history. The world continues; new events wait below.
+          <button type="button" aria-label="Resume auto-scroll" onClick={resumeAutoScroll}>
+            Resume auto-scroll
+          </button>
+        </p>
       ) : null}
 
       {lens === null ? null : (
         <p className={`chronicle-killfeed__lens${lens.reachable ? "" : " is-gone"}`}>
           <span>following</span>
           {lens.line}
-          <button type="button" aria-label="Stop following" onClick={() => setFollowBeingId(null)}>
-            Clear
-          </button>
+          {canStopFollowing ? (
+            <button type="button" aria-label="Stop following" onClick={stopFollowing}>Clear</button>
+          ) : null}
         </p>
       )}
 
@@ -601,13 +748,13 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
         ) : null}
         <button
           type="button"
-          aria-label={props.paused ? "Resume story" : "Pause story"}
+          aria-label={props.paused ? "Resume view" : "Pause view"}
           onClick={props.paused ? props.onResume : props.onPause}
-        >{props.paused ? "Resume" : "Pause"}</button>
+        >{props.paused ? "Resume view" : "Pause view"}</button>
         <label>
-          <span>Speed</span>
+          <span>View speed</span>
           <select
-            aria-label="Story speed"
+            aria-label="View speed"
             value={props.speed}
             onChange={(event) => props.onSpeedChange(parseSpeed(event.currentTarget.value))}
           >
@@ -617,9 +764,7 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
           </select>
         </label>
         <span className="chronicle-killfeed__contract">
-          {delivered.length} shown · {stream.diagnostics.eventCount} held
-          {stream.evictedCount > 0 ? ` · ${stream.evictedCount} aged out` : ""}
-          {playhead.atFloor ? " · at the edge of the buffer" : ""}
+          {feedCount} {feedCountLabel} event{feedCount === 1 ? "" : "s"}
         </span>
         {props.sourceControls}
       </div>
@@ -631,6 +776,169 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
 function parseSpeed(value: string): 0.5 | 1 | 1.5 | 2 {
   const speed = Number(value);
   return speed === 0.5 || speed === 1 || speed === 1.5 || speed === 2 ? speed : 1;
+}
+
+type ChronicleCardGrammar =
+  | "speech"
+  | "private-thought"
+  | "proposal"
+  | "travel"
+  | "resource"
+  | "interaction"
+  | "shelter"
+  | "lifecycle"
+  | "world";
+
+interface QuotePresentation {
+  readonly kind: "speech" | "private-thought" | "proposal" | "refusal";
+  readonly label: string;
+  readonly text: string;
+}
+
+interface TravelRoute {
+  readonly from: string;
+  readonly to: string;
+  readonly state: "departed" | "arrived";
+}
+
+interface LifecycleNotice {
+  readonly state: "born" | "fallen" | "recovered" | "dead" | "decayed";
+  readonly label: string;
+}
+
+function grammarFor(event: StreamEvent): ChronicleCardGrammar {
+  switch (event.type) {
+    case "speak": return "speech";
+    case "self_talk": return "private-thought";
+    case "mating_initiated":
+    case "mating_rejected":
+    case "mating_proposal_invalidated":
+    case "mating_proposal_timeout": return "proposal";
+    case "agent_left_region":
+    case "agent_entered_region": return "travel";
+    case "resource_changed":
+    case "resource_transferred":
+    case "ruins_scavenged": return "resource";
+    case "attack": return "interaction";
+    case "home_built":
+    case "hearth_used":
+    case "home_joined":
+    case "home_left":
+    case "home_started_hoarding":
+    case "home_collapsed":
+    case "home_breached":
+    case "home_thieved":
+    case "home_colonized": return "shelter";
+    case "agent_born":
+    case "agent_paralyzed":
+    case "agent_recovered":
+    case "agent_died":
+    case "agent_decayed": return "lifecycle";
+    default: return "world";
+  }
+}
+
+function grammarLabel(grammar: ChronicleCardGrammar, event: StreamEvent): string {
+  switch (grammar) {
+    case "speech": return event.targetId === null ? "Speech" : "Directed speech";
+    case "private-thought": return "Private thought";
+    case "proposal": return "Proposal";
+    case "travel": return event.type === "agent_entered_region" ? "Arrival" : "Travel";
+    case "resource": return "Resource fact";
+    case "interaction": return "Interaction";
+    case "shelter": return event.type === "home_built" ? "Shelter built" : "Shelter";
+    case "lifecycle": return "Life cycle";
+    case "world": return "World";
+  }
+}
+
+function stringPayload(event: StreamEvent, key: string): string | null {
+  const value = event.payload[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function numberPayload(event: StreamEvent, key: string): number | null {
+  const value = event.payload[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function displayNumber(value: number): string {
+  const rounded = Math.round(value * 10) / 10;
+  const normalized = Object.is(rounded, -0) ? 0 : rounded;
+  return String(normalized);
+}
+
+function quotePresentationFor(event: StreamEvent): QuotePresentation | null {
+  const text = event.narration.quote;
+  if (text === null) return null;
+  switch (event.type) {
+    case "speak":
+      return Object.freeze({
+        kind: "speech",
+        label: event.targetName === null ? "Spoken aloud" : `Spoken to ${event.targetName}`,
+        text,
+      });
+    case "self_talk":
+      return Object.freeze({ kind: "private-thought", label: "Private thought", text });
+    case "mating_initiated":
+      return Object.freeze({ kind: "proposal", label: "Proposal", text });
+    case "mating_rejected":
+      return Object.freeze({ kind: "refusal", label: "Refusal", text });
+    default:
+      return null;
+  }
+}
+
+function travelRouteFor(event: StreamEvent): TravelRoute | null {
+  if (event.type !== "agent_left_region" && event.type !== "agent_entered_region") return null;
+  const from = stringPayload(event, "from_region");
+  const to = stringPayload(event, "to_region");
+  if (from === null || to === null) return null;
+  return Object.freeze({
+    from: titleCase(from),
+    to: titleCase(to),
+    state: event.type === "agent_entered_region" ? "arrived" : "departed",
+  });
+}
+
+function resourceFactFor(event: StreamEvent): string | null {
+  const amount = numberPayload(event, "amount");
+  const resource = stringPayload(event, "resource_type");
+  if (amount === null || resource === null) return null;
+  const sign = amount > 0 ? "+" : amount < 0 ? "−" : "";
+  return `${sign}${displayNumber(Math.abs(amount))} ${resource}`;
+}
+
+function shelterNoticeFor(event: StreamEvent): string | null {
+  switch (event.type) {
+    case "home_built": {
+      const cost = numberPayload(event, "materials_cost");
+      return cost === null ? "Shelter built" : `Shelter built · −${displayNumber(cost)} materials`;
+    }
+    case "home_collapsed": {
+      const remains = numberPayload(event, "remnant_materials");
+      return remains === null ? "Shelter became ruins" : `Shelter became ruins · ${displayNumber(remains)} materials remain`;
+    }
+    case "home_breached": return "Shelter breached";
+    case "home_thieved": return "Shelter raided";
+    case "home_colonized": return "Shelter claimed";
+    case "hearth_used": return "Hearth used";
+    case "home_joined": return "Shelter joined";
+    case "home_left": return "Shelter left";
+    case "home_started_hoarding": return "Shelter hoarding";
+    default: return null;
+  }
+}
+
+function lifecycleNoticeFor(event: StreamEvent): LifecycleNotice | null {
+  switch (event.type) {
+    case "agent_born": return Object.freeze({ state: "born", label: "Born" });
+    case "agent_paralyzed": return Object.freeze({ state: "fallen", label: "Fallen — recoverable" });
+    case "agent_recovered": return Object.freeze({ state: "recovered", label: "Recovered" });
+    case "agent_died": return Object.freeze({ state: "dead", label: "Died" });
+    case "agent_decayed": return Object.freeze({ state: "decayed", label: "Returned to earth" });
+    default: return null;
+  }
 }
 
 interface KillfeedCardProps {
@@ -655,11 +963,19 @@ interface KillfeedCardProps {
 
 function KillfeedCard(props: KillfeedCardProps): JSX.Element {
   const { event } = props;
+  const [quoteExpanded, setQuoteExpanded] = useState(false);
   const where = placeWithin(event, props.presence);
+  const grammar = grammarFor(event);
+  const quote = quotePresentationFor(event);
+  const route = travelRouteFor(event);
+  const resourceFact = resourceFactFor(event);
+  const shelterNotice = shelterNoticeFor(event);
+  const lifecycleNotice = lifecycleNoticeFor(event);
+  const actorStatus = event.actorId === null
+    ? null
+    : beingNow(event.actorId, props.presence, props.nameOf);
   const meta = [
-    formatFeedTime(event.atMs),
-    regionTag(event.regionId),
-    event.narration.detail,
+    resourceFact === null ? event.narration.detail : null,
     event.notable ? where : null,
   ].filter((part): part is string => part !== null && part.length > 0);
 
@@ -688,6 +1004,20 @@ function KillfeedCard(props: KillfeedCardProps): JSX.Element {
       {event.posture === "rupture" ? (
         <span className="chronicle-killfeed__tear" aria-hidden="true" />
       ) : null}
+      <header className="chronicle-killfeed__card-head">
+        <span className="chronicle-killfeed__kind" data-event-grammar={grammar}>
+          {grammarLabel(grammar, event)}
+        </span>
+        <time>{formatEventTime(event.wallTimestamp, event.atMs)}</time>
+        {event.regionLabel === null ? null : <span>{event.regionLabel}</span>}
+        <PortraitPair
+          event={event}
+          nameOf={props.nameOf}
+          presence={props.presence}
+          followingBeingId={props.followBeingId}
+          onFollow={props.onFollow}
+        />
+      </header>
       <button
         type="button"
         className="chronicle-killfeed__replay"
@@ -719,8 +1049,41 @@ function KillfeedCard(props: KillfeedCardProps): JSX.Element {
         </span>
         <span className="chronicle-killfeed__line">{event.narration.line}</span>
       </button>
-      {event.narration.quote === null ? null : (
-        <em className={`chronicle-killfeed__quote is-${event.kind}`}>{event.narration.quote}</em>
+      {quote === null ? null : (
+        <p
+          className={`chronicle-killfeed__quote is-${quote.kind}${quoteExpanded ? " is-expanded" : ""}`}
+          data-quote-kind={quote.kind}
+        >
+          <span>{quote.label}</span>
+          <q>{quote.text}</q>
+          <button
+            type="button"
+            className="chronicle-killfeed__quote-disclosure"
+            aria-label={quoteExpanded ? "Show message preview" : "Read full message"}
+            aria-expanded={quoteExpanded}
+            onClick={(click) => {
+              click.stopPropagation();
+              setQuoteExpanded((expanded) => !expanded);
+            }}
+          >{quoteExpanded ? "Show preview" : "Read full message"}</button>
+        </p>
+      )}
+      {route === null ? null : (
+        <p className="chronicle-killfeed__travel-route" data-travel-route>
+          <span>{route.from}</span><b aria-hidden="true">→</b><span>{route.to}</span>
+          <small>{route.state}</small>
+        </p>
+      )}
+      {resourceFact === null ? null : (
+        <p className="chronicle-killfeed__resource-fact" data-resource-fact>{resourceFact}</p>
+      )}
+      {shelterNotice === null ? null : (
+        <p className="chronicle-killfeed__shelter-notice">{shelterNotice}</p>
+      )}
+      {lifecycleNotice === null ? null : (
+        <p className="chronicle-killfeed__lifecycle-notice" data-lifecycle-state={lifecycleNotice.state}>
+          {lifecycleNotice.label}
+        </p>
       )}
       <p className="chronicle-killfeed__meta">
         <BeingChip
@@ -759,8 +1122,92 @@ function KillfeedCard(props: KillfeedCardProps): JSX.Element {
           }}
         >⋯</button>
       </p>
+      <div className="chronicle-killfeed__card-actions">
+        <button
+          type="button"
+          aria-label={`Replay historical event: ${event.narration.line}`}
+          onClick={(click) => {
+            click.stopPropagation();
+            props.onOpen(event);
+          }}
+        >Replay</button>
+        <button
+          type="button"
+          aria-label={`What exactly happened: ${event.narration.line}`}
+          onClick={(click) => {
+            click.stopPropagation();
+            props.onToggleDetail(event.id);
+          }}
+        >Details</button>
+        {event.actorId === null || actorStatus?.reachable !== true ? null : (
+          <button
+            type="button"
+            aria-label={`Follow ${props.nameOf(event.actorId)} now`}
+            onClick={(click) => {
+              click.stopPropagation();
+              if (event.actorId !== null) props.onFollow(event.actorId);
+            }}
+          >Follow now</button>
+        )}
+      </div>
     </li>
   );
+}
+
+interface PortraitPairProps {
+  readonly event: StreamEvent;
+  readonly nameOf: (id: string) => string;
+  readonly presence: StreamPresence;
+  readonly followingBeingId: string | null;
+  readonly onFollow: (beingId: string) => void;
+}
+
+/** A deterministic identity tile, never an invented likeness or portrait image. */
+function PortraitPair(props: PortraitPairProps): JSX.Element | null {
+  const candidates = props.event.type === "agent_born"
+    ? props.event.participants
+    : [props.event.actorId, props.event.targetId].filter((id): id is string => id !== null);
+  const people = [...new Set(candidates)].slice(0, 3).map((id) => Object.freeze({
+    id,
+    hue: id === props.event.actorId
+      ? props.event.actorHue
+      : id === props.event.targetId
+        ? props.event.targetHue
+        : null,
+  }));
+  if (people.length === 0) return null;
+  return (
+    <span className="chronicle-killfeed__portraits" aria-label="People involved">
+      {people.map((person) => {
+        const status = beingNow(person.id, props.presence, props.nameOf);
+        const name = props.nameOf(person.id);
+        return (
+          <button
+            key={person.id}
+            type="button"
+            className={[
+              "chronicle-killfeed__portrait",
+              status.reachable ? "" : "is-gone",
+              props.followingBeingId === person.id ? "is-following" : "",
+            ].filter((token) => token.length > 0).join(" ")}
+            style={{ ["--portrait-hue" as string]: person.hue ?? "#7f8b6c" }}
+            title={status.line}
+            aria-label={status.reachable ? `Follow ${name}` : status.line}
+            disabled={!status.reachable}
+            onClick={(click) => {
+              click.stopPropagation();
+              if (status.reachable) props.onFollow(person.id);
+            }}
+          >{initialsFor(name)}</button>
+        );
+      })}
+    </span>
+  );
+}
+
+function initialsFor(name: string): string {
+  const letters = name.match(/[\p{L}\p{N}]+/gu) ?? [];
+  return letters.map((word) => word.charAt(0).toUpperCase()).join("").slice(0, 2) || "?";
 }
 
 interface BeingChipProps {
@@ -895,7 +1342,7 @@ function DetailPanel(props: Readonly<{
               {chain.map((related) => (
                 <li key={related.id} style={{ ["--accent" as string]: related.accent }}>
                   <StreamGlyph name={related.glyph} size={10} />
-                  <b>{formatFeedTime(related.atMs)}</b>
+                  <b>{formatEventTime(related.wallTimestamp, related.atMs)}</b>
                   {related.narration.line}
                 </li>
               ))}

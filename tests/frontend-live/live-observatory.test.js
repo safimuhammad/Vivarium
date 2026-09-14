@@ -21,7 +21,7 @@ test('parseCliArgs defaults observatory ports to auto and real provider defaults
     label: 'VIVARIUM_OBSERVATORY_FRONTEND_PORT',
   });
   assert.equal(config.host, '127.0.0.1');
-  assert.equal(config.provider, 'ollama');
+  assert.equal(config.provider, 'mlx');
   assert.equal(config.model, null);
   assert.equal(config.seed, 7);
   assert.equal(config.duration, 1800);

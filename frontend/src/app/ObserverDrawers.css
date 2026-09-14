@@ -1,0 +1,205 @@
+/* World, Selection and Archive share the Chronicle's quiet visual language.
+   Scope every rule to these drawers so the approved Chronicle stays unchanged. */
+.vivarium-2d-app .observer-drawer--quiet {
+  width: min(29rem, 42vw);
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #8c93694d;
+  border-radius: 18px;
+  color: var(--observer-ink);
+  font-size: .875rem;
+  line-height: 1.5;
+  box-shadow: 0 18px 55px #00161066, inset 0 1px #fff4c914;
+}
+.vivarium-2d-app:has(.observer-drawer--quiet) {
+  --observer-active-drawer-width: min(29rem, 42vw);
+}
+.vivarium-2d-app .observer-drawer--quiet .observer-drawer__header {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid #98b19a26;
+  background: #08251fe0;
+}
+.observer-drawer--quiet .observer-drawer__title { min-width: 0; }
+.vivarium-2d-app .observer-drawer--quiet .observer-drawer__header h2 {
+  font-size: 1.7rem;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: -.04em;
+}
+.observer-drawer--quiet .observer-drawer__subtitle {
+  margin: 6px 0 0;
+  color: var(--observer-muted);
+  font-size: .78rem;
+  line-height: 1.5;
+}
+.vivarium-2d-app .observer-drawer--quiet .observer-drawer__scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px 18px 22px;
+  scroll-padding: 16px;
+  scrollbar-gutter: stable;
+  overflow-x: hidden;
+}
+.observer-drawer--quiet .observer-drawer__scroll > * { flex-shrink: 0; min-width: 0; }
+.vivarium-2d-app .observer-drawer--quiet :is(button, select) {
+  min-width: 44px;
+  min-height: 44px;
+  max-width: 100%;
+  padding: 9px 12px;
+  border: 1px solid #60887880;
+  border-radius: 10px;
+  background: #102f29e8;
+  color: var(--observer-ink);
+  box-shadow: none;
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.vivarium-2d-app .observer-drawer--quiet button:not(:disabled):hover {
+  background: #23463b;
+  border-color: #9bb19a;
+}
+.vivarium-2d-app .observer-drawer--quiet button[aria-pressed="true"] {
+  border-color: #d8c27a;
+  background: #4c492be8;
+  color: #fff1bf;
+}
+.vivarium-2d-app .observer-drawer--quiet :is(button, select, summary):focus-visible {
+  outline: 3px solid #f0d68d;
+  outline-offset: 3px;
+}
+.observer-drawer--quiet .observer-drawer__header > button { flex: 0 0 auto; }
+.observer-drawer--quiet :is(.observer-drawer__camera, .world-drawer__controls, .world-drawer__diagnostics, .selection-inspector__subject, .observer-drawer__empty) {
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #7d9b7838;
+  border-radius: 13px;
+  background: #06241edb;
+}
+.observer-drawer--quiet .observer-camera-controls { gap: 12px; }
+.observer-drawer--quiet .observer-drawer__camera--collapsible { padding: 0 14px; }
+.observer-drawer--quiet .observer-drawer__camera--collapsible > summary { min-height: 48px; padding: 13px 0; cursor: pointer; font-size: .8rem; color: #d3ddc9; }
+.observer-drawer--quiet .observer-drawer__camera--collapsible[open] { padding-bottom: 14px; }
+.observer-drawer--quiet .observer-drawer__camera--collapsible[open] > summary { margin-bottom: 10px; border-bottom: 1px solid #8fab9126; }
+.observer-drawer--quiet .observer-camera-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.observer-drawer--quiet .observer-camera-modes > span { grid-column: 1 / -1; margin-bottom: 2px; }
+.vivarium-2d-app .observer-drawer--quiet .observer-camera-modes button { padding-inline: 6px; white-space: nowrap; }
+.observer-drawer--quiet .observer-focus-control { gap: 12px; }
+.vivarium-2d-app .observer-drawer--quiet .observer-focus-control select { flex: 1; width: 100%; min-width: 0; }
+.observer-drawer--quiet .observer-view-controls { width: 100%; gap: 8px; padding: 0 0 12px; border-bottom: 1px solid #8fab9126; }
+.observer-drawer--quiet .observer-view-controls > button { margin-left: auto; }
+.observer-drawer--quiet :is(.observer-drawer__hint, .observer-drawer__empty p) {
+  margin: 10px 0 0;
+  color: var(--observer-muted);
+  font-size: .78rem;
+  line-height: 1.6;
+}
+.observer-drawer--quiet .observer-drawer__empty > :first-child { margin-top: 0; }
+.observer-drawer--quiet :is(h3, .observer-kicker) { color: #e5d398; }
+.observer-drawer--quiet :is(.world-drawer__controls, .world-drawer__diagnostics) h3 { font-size: .72rem; letter-spacing: .09em; margin: 0 0 12px; }
+.observer-drawer--quiet .world-drawer__overview { display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 10px; padding: 2px 0 4px; }
+.observer-drawer--quiet .world-drawer__overview > div { display: flex; flex-direction: column; gap: 2px; padding-left: 12px; border-left: 1px solid #8fab9145; min-width: 0; }
+.observer-drawer--quiet .world-drawer__overview > div:first-child { border: 0; padding-left: 0; }
+.observer-drawer--quiet .world-drawer__overview strong { font-size: 1.65rem; font-weight: 550; line-height: 1.2; }
+.observer-drawer--quiet .world-drawer__overview span { font-size: .72rem; color: var(--observer-muted); }
+.observer-drawer--quiet .world-drawer__state { justify-content: center; }
+.observer-drawer--quiet .world-drawer__state strong { font-size: .9rem; overflow-wrap: anywhere; }
+.observer-drawer--quiet .world-drawer__control-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
+.observer-drawer--quiet .world-drawer__control-row label { grid-column: 2; grid-row: 1 / span 2; align-self: stretch; display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+.observer-drawer--quiet .world-drawer__control-row select { width: 100%; }
+.observer-drawer--quiet .world-drawer__diagnostics > p { font-size: .82rem; color: var(--observer-muted); margin: 0 0 10px; }
+.observer-drawer--quiet dl > div { grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 14px; padding-block: 11px; border-color: #93b19224; }
+.observer-drawer--quiet dt { font-size: .78rem; }
+.observer-drawer--quiet dd { font-size: .85rem; line-height: 1.6; }
+.observer-drawer--quiet .world-drawer__technical { margin-top: 12px; color: var(--observer-muted); font-size: .78rem; }
+.observer-drawer--quiet .world-drawer__technical summary { cursor: pointer; min-height: 44px; padding-block: 11px; }
+
+/* Atlas labels remain readable in a narrow drawer and details can wrap. */
+.vivarium-2d-app .observer-drawer--quiet .living-atlas-2d { margin: 0; padding: 14px; border: 1px solid #7d9b7838; border-radius: 13px; background: #06241ee8; backdrop-filter: none; }
+.observer-drawer--quiet .living-atlas-2d header { font-size: .72rem; color: var(--observer-muted); gap: 8px; }
+.observer-drawer--quiet .living-atlas-2d header > span:last-child { display: block; }
+.observer-drawer--quiet .living-atlas-2d__map { border: 0; background: radial-gradient(ellipse at center, #28463970, #08271c00 75%); margin-top: 12px; }
+.observer-drawer--quiet .living-atlas-2d__map[data-roomy] { height: 13rem; }
+.observer-drawer--quiet .living-atlas-2d__node { filter: none; }
+.observer-drawer--quiet .living-atlas-2d__path { stroke: #91aa77; stroke-width: 1.1; stroke-dasharray: 3 5; opacity: .6; }
+.observer-drawer--quiet .living-atlas-2d__node[data-observed="true"]::after { border: 1px solid #e7cd80; border-radius: 12px; inset: -3px; }
+.observer-drawer--quiet .living-atlas-2d__node[data-active="true"]::before { border-width: 1px; border-radius: 13px; }
+.vivarium-2d-app .observer-drawer--quiet .living-atlas-2d__observe { min-height: 60px; padding: 8px; gap: 6px; border-radius: 10px; }
+.observer-drawer--quiet .living-atlas-2d__observe strong { font-size: .76rem; font-weight: 550; }
+.observer-drawer--quiet .living-atlas-2d__pip { width: 4px; height: 4px; border-radius: 50%; }
+.observer-drawer--quiet .living-atlas-2d__detail { position: static; display: grid; width: auto; grid-template-columns: minmax(0, 1fr) 44px; max-height: none; overflow: visible; margin-top: 10px; padding: 12px 0 0; border-top: 1px solid #8fab9133; background: transparent; gap: 10px; align-items: center; }
+.observer-drawer--quiet .living-atlas-2d__detail-copy { position: static; width: auto; height: auto; margin: 0; padding: 0; clip: auto; white-space: normal; overflow: visible; gap: 6px; font-size: .74rem; line-height: 1.5; }
+.observer-drawer--quiet .living-atlas-2d__detail-copy strong { font-size: .88rem; }
+.observer-drawer--quiet .living-atlas-2d__detail-copy > span { white-space: normal; overflow: visible; }
+.vivarium-2d-app .observer-drawer--quiet .living-atlas-2d__inspect { display: grid; place-items: center; padding: 0; color: #e5d398; }
+
+.observer-drawer--quiet .selection-inspector__subject h3 { margin: 6px 0 12px; font-size: 1.65rem; line-height: 1.2; }
+.observer-drawer--quiet .selection-inspector__subject > p { font-size: .8rem; color: var(--observer-muted); }
+.observer-drawer--quiet .selection-inspector__prose { grid-template-columns: minmax(0, 1fr); }
+.observer-drawer--quiet .selection-inspector__observer-actions { margin-top: 16px; }
+.observer-drawer--quiet .selection-inspector__observer-actions + dl { margin-top: 14px; }
+.observer-drawer--quiet .selection-inspector__observer-actions > button { flex: 1; }
+.vivarium-2d-app .observer-drawer--quiet .selection-inspector__observer-actions > button:first-child { border-color: #d8c27a; background: #4c492be8; color: #fff1bf; }
+.observer-drawer--quiet .semantic-world-mirror--selection { padding: 0; margin: 0; border: 0; }
+.observer-drawer--quiet .semantic-world-mirror header { align-items: baseline; gap: 12px; }
+.observer-drawer--quiet .semantic-world-mirror h2 { font-size: .88rem; font-weight: 550; }
+.observer-drawer--quiet .semantic-world-mirror header > span { white-space: nowrap; font-size: .72rem; }
+.observer-drawer--quiet .semantic-world-mirror ul { gap: 8px; margin-top: 12px; }
+.vivarium-2d-app .observer-drawer--quiet .semantic-world-mirror button { padding: 13px; gap: 3px; text-align: left; font-size: .76rem; font-weight: 400; color: var(--observer-muted); line-height: 1.5; background: #08271fe8; }
+.observer-drawer--quiet .semantic-world-mirror button strong { font-size: .9rem; color: var(--observer-ink); font-weight: 600; }
+.observer-drawer--quiet .semantic-world-mirror__state { font-size: .65rem; letter-spacing: .06em; margin-top: 4px; }
+
+.observer-drawer--quiet .archive-drawer__intro { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0; font-size: .8rem; color: var(--observer-muted); }
+.observer-drawer--quiet .archive-drawer__intro p { margin: 0; }
+.observer-drawer--quiet .archive-drawer__count { flex-shrink: 0; font-size: .72rem; color: #dbd7b4; }
+.observer-drawer--quiet .archive-drawer__checkpoints { display: grid; gap: 10px; margin: 0; }
+.vivarium-2d-app .observer-drawer--quiet .archive-drawer__checkpoints button { margin: 0; padding: 16px; text-align: left; background: #08271fe8; }
+.observer-drawer--quiet .archive-drawer__checkpoint { position: relative; grid-template-columns: 22px minmax(0, 1fr); column-gap: 12px; }
+.observer-drawer--quiet .archive-drawer__checkpoint > :not(.archive-drawer__checkpoint-icon) { grid-column: 2; min-width: 0; }
+.observer-drawer--quiet .archive-drawer__checkpoint-icon { grid-row: 1 / span 4; padding-top: 2px; }
+.observer-drawer--quiet .archive-drawer__checkpoint-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.observer-drawer--quiet .archive-drawer__badge { padding: 2px 6px; border: 1px solid #d8c27a77; border-radius: 5px; color: #fff1bf; font-size: .65rem; font-weight: 500; }
+.observer-drawer--quiet .archive-drawer__checkpoint svg { color: #d8c584; width: 20px; height: 20px; flex-shrink: 0; }
+.observer-drawer--quiet .archive-drawer__checkpoint strong { font-size: .92rem; font-weight: 600; }
+.observer-drawer--quiet .archive-drawer__time { font-size: .78rem; line-height: 1.5; }
+.observer-drawer--quiet .archive-drawer__cursor { font-size: .7rem; font-variant-numeric: tabular-nums; }
+.observer-drawer--quiet .archive-drawer__reason { color: #d6ddcb; font-size: .78rem; }
+.observer-drawer--quiet :is(.archive-drawer__more, .archive-drawer__return) { width: 100%; margin: 0; }
+
+@media (max-width: 760px) {
+  .vivarium-2d-app .observer-drawer--quiet {
+    inset: auto max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    width: auto;
+    height: min(76dvh, calc(100dvh - 132px));
+    max-height: calc(100dvh - 132px);
+    max-width: none;
+    padding: 0;
+  }
+  .vivarium-2d-app .observer-drawer--quiet .observer-drawer__header { padding: 16px; gap: 10px; }
+  .vivarium-2d-app .observer-drawer--quiet .observer-drawer__header h2 { font-size: 1.5rem; }
+  .vivarium-2d-app .observer-drawer--quiet .observer-drawer__scroll { padding: 14px; gap: 14px; }
+  .observer-drawer--quiet .observer-drawer__subtitle { font-size: .75rem; }
+}
+@media (max-height: 500px) and (min-width: 761px) {
+  .vivarium-2d-app .observer-drawer--quiet { top: 68px; bottom: 8px; }
+  .vivarium-2d-app .observer-drawer--quiet .observer-drawer__header { padding: 12px 16px; }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .observer-drawer--quiet :is(.observer-drawer__camera, .world-drawer__controls, .world-drawer__diagnostics, .selection-inspector__subject, .observer-drawer__empty) { background: #06231f; }
+}
+@media (forced-colors: active) {
+  .vivarium-2d-app .observer-drawer--quiet :is(button, select) { background: Canvas; color: CanvasText; border-color: ButtonText; }
+  .vivarium-2d-app .observer-drawer--quiet button[aria-pressed="true"] { background: Highlight; color: HighlightText; }
+}

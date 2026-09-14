@@ -69,6 +69,11 @@ def test_ollama_timeout_never_drops_below_the_measured_floor() -> None:
     )
 
 
+def test_mlx_timeout_uses_the_existing_serialized_local_regime() -> None:
+    """MLX shares the local serialized wrapper, so proposals get the same safe window."""
+    assert derive_mating_proposal_timeout("mlx", 4) == (derive_mating_proposal_timeout("ollama", 4))
+
+
 def test_unknown_provider_falls_back_to_the_conservative_serialized_value() -> None:
     """An unrecognised backend is assumed serialized: too long merely delays a refund."""
     assert derive_mating_proposal_timeout("something-new", 4) == (
