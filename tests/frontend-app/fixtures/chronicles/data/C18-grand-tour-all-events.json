@@ -2052,7 +2052,7 @@
           "display_only": true,
           "message": "I am my own, now -- I will see what is beyond."
         },
-        "region": null,
+        "region": "warm_springs",
         "scope": "private",
         "source": "wisdom_de34",
         "target": null,
@@ -2060,7 +2060,8 @@
         "type": "self_talk"
       },
       "resolved": {
-        "actor_id": "wisdom_de34"
+        "actor_id": "wisdom_de34",
+        "region": "warm_springs"
       },
       "snapshot_after": null
     },

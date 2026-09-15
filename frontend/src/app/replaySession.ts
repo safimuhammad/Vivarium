@@ -3,6 +3,7 @@ import type {
   ReplayPresentationWindow,
 } from "./replayArtifactClient";
 import type { ReplayState } from "./replayReducer";
+import { parseSpatialTravelEvent } from "../presentation/eventPayloads";
 import {
   restoreReplayFromArtifacts,
   type ReplayRestoreCheckpointSelector,
@@ -131,6 +132,112 @@ export function createReplaySession(): ReplaySession {
       };
     },
   };
+}
+
+/**
+ * Builds a renderer-safe historical window for one authoritative travel event.
+ *
+ * The ordinary Archive picker restores a selected checkpoint and gives its
+ * whole retained suffix to the normal presentation queue. A Chronicle replay
+ * card needs a stricter boundary: the selected card's world must be established
+ * before anything later can clear or relocate that body. This selects the
+ * newest checkpoint that was already true at the event's recorded time, applies
+ * only the contiguous prefix through the card, and leaves the later suffix for
+ * the archive session's replay clock.
+ *
+ * `null` is intentional. It preserves the prior moment-focus behavior when a
+ * recording lacks a spatial checkpoint, the clicked event is malformed or
+ * non-spatial, or the bounded artifact cannot prove a contiguous prefix.
+ */
+export function createHistoricalReplayPresentationWindow(
+  artifacts: ReplayArtifacts,
+  targetCursor: number,
+): ReplayPresentationWindow | null {
+  if (!Number.isSafeInteger(targetCursor) || targetCursor < 0) return null;
+  if (!Array.isArray(artifacts.events) || !Array.isArray(artifacts.checkpoints)) {
+    return null;
+  }
+
+  const byCursor = new Map<number, ReplayArtifacts["events"][number]>();
+  for (const entry of artifacts.events) {
+    if (!Number.isSafeInteger(entry.cursor) || entry.cursor < 0) return null;
+    if (byCursor.has(entry.cursor)) return null;
+    byCursor.set(entry.cursor, entry);
+  }
+  const target = byCursor.get(targetCursor);
+  if (target === undefined || !Number.isFinite(target.event.timestamp)) return null;
+  try {
+    if (parseSpatialTravelEvent(target) === null) return null;
+  } catch {
+    return null;
+  }
+
+  const selected = artifacts.checkpoints
+    .map((checkpoint, index) => ({ checkpoint, index }))
+    .filter(({ checkpoint }) => (
+      (artifacts.runId === undefined || checkpoint.run_id === artifacts.runId)
+      && checkpoint.snapshot.run_id === checkpoint.run_id
+      && checkpoint.event_cursor <= targetCursor
+      && checkpoint.world_time <= target.event.timestamp
+      && checkpoint.snapshot.event_cursor === checkpoint.event_cursor
+      && checkpoint.snapshot.world_time === checkpoint.world_time
+      && checkpoint.snapshot.regions.some((region) => region.spatial !== undefined)
+    ))
+    .sort((left, right) => (
+      right.checkpoint.event_cursor - left.checkpoint.event_cursor
+      || right.checkpoint.world_time - left.checkpoint.world_time
+      || right.index - left.index
+    ))[0];
+  if (selected === undefined) return null;
+
+  const prefix: ReplayPresentationWindow["entries"][number][] = [];
+  let priorTimestamp = selected.checkpoint.world_time;
+  for (let cursor = selected.checkpoint.event_cursor + 1; cursor <= targetCursor; cursor += 1) {
+    const entry = byCursor.get(cursor);
+    if (
+      entry === undefined
+      || !Number.isFinite(entry.event.timestamp)
+      || entry.event.timestamp < priorTimestamp
+    ) return null;
+    prefix.push(structuredClone(entry));
+    priorTimestamp = entry.event.timestamp;
+  }
+
+  const continuation: ReplayPresentationWindow["entries"][number][] = [];
+  let expectedCursor = targetCursor + 1;
+  let continuationTimestamp = target.event.timestamp;
+  for (;;) {
+    const entry = byCursor.get(expectedCursor);
+    if (entry === undefined) break;
+    if (
+      !Number.isFinite(entry.event.timestamp)
+      || entry.event.timestamp < continuationTimestamp
+    ) return null;
+    continuation.push(structuredClone(entry));
+    continuationTimestamp = entry.event.timestamp;
+    expectedCursor += 1;
+  }
+
+  const checkpoint = selected.checkpoint;
+  const checkpointIdentity = checkpoint.lineNumber === undefined
+    ? `index-${selected.index}`
+    : `line-${checkpoint.lineNumber}`;
+  return deepFreeze({
+    sourceKey: `archive:${encodeURIComponent(checkpoint.run_id)}:${checkpointIdentity}:replay-${checkpoint.event_cursor}-${targetCursor}`,
+    checkpointIndex: selected.index,
+    checkpointLineNumber: checkpoint.lineNumber ?? null,
+    checkpointReason: checkpoint.reason,
+    checkpointWorldTime: checkpoint.world_time,
+    firstCursor: checkpoint.event_cursor,
+    lastCursor: targetCursor,
+    snapshot: structuredClone(checkpoint.snapshot),
+    entries: prefix,
+    historical: {
+      targetCursor,
+      targetWorldTime: target.event.timestamp,
+      continuation,
+    },
+  });
 }
 
 function idleState(): ReplaySessionState {

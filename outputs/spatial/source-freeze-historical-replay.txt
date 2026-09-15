@@ -1,0 +1,11 @@
+source_frozen_at=2026-09-15T01:52:12Z
+node=v22.23.2
+6c974b6f61c48d0b07901eb7b5b6bdc754ff2399
+3eda29daefaf48a6e21b9d880eaee021e946a53a  src/app/Vivarium2DApp.tsx
+67d76db0bc38b53989f3c6d85d4d47f72eb6be6e  src/app/observer2d/observerShellRuntime.ts
+a8017b471da12fe0eb12d7af2527afc108b513f1  src/app/observer2d/observerShellRuntime.test.ts
+820d8b3cf559f991ca86ee44bd9fbdd67e5a3981  src/app/observer2d/observerLiveness.ts
+a7e3cf3fe81b9757f3938ed6bb34e76ab0ed0758  src/app/observer2d/chronicleStream/ChronicleKillfeed.tsx
+71cd8f01612e10294eae40983e35371d155972c1  src/app/gateway/recordedRunClient.ts
+b05d9397a81a5a8a53820ed4be69ec66df7487ef  src/app/replaySession.ts
+ec87fafbc598f6bb3c6cec12ae32512db7524904  src/presentation/PresentationSession.ts

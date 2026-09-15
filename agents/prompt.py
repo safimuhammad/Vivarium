@@ -73,7 +73,7 @@ WORLD_MECHANICS: str = (
 )
 
 
-def build_system_prompt(persona: str, tool_names: list[str]) -> str:
+def build_system_prompt(persona: str, tool_names: list[str], *, spatial: bool = False) -> str:
     """Compose an agent's system prompt from persona, world mechanics, and affordances.
 
     The result is the persona verbatim, the shared :data:`WORLD_MECHANICS`
@@ -86,14 +86,38 @@ def build_system_prompt(persona: str, tool_names: list[str]) -> str:
         persona: The agent's persona/identity text, included verbatim.
         tool_names: Names of the tools available to the agent; each is listed as
             an available action, in the given order.
+        spatial: Whether the being currently has physical local walking and senses.
 
     Returns:
         The assembled system-prompt string.
     """
     affordances = "\n".join(f"- {name}" for name in tool_names)
+    walking = (
+        "\n\nWalking through the world: You occupy a real spot on the ground in each region. "
+        "go_to(destination_id) starts walking along paths toward a named place. "
+        "Walking continues while you think; repeating the same destination keeps the journey. "
+        "stop_moving stops where you are; another go_to changes your destination. "
+        "Gathering requires arrival and a stop at a matching energy or materials site. "
+        "Your fresh surroundings tell you your position, travel, nearby beings and places. "
+        "You see and hear only within the stated local range. Known distant destinations are route "
+        "knowledge, not evidence of current activity. Speech reports what someone said, "
+        "not verified facts. "
+        "move names a connected region: you walk to its exit, then enter at the matching entrance. "
+        "go_to names a destination inside your current region; visiting an exit with go_to alone "
+        "does not cross into another region. Resting or choosing a local destination "
+        "cancels a regional journey. "
+        "These observations describe your own senses and possessions. "
+        "Perform actions by calling their available functions. "
+        "Ordinary words are private thoughts; "
+        "they do not move you, gather resources, or change the world. "
+        "Current observations and action results establish what actually happened. "
+        "Speak from your own perspective."
+        if spatial
+        else ""
+    )
     return (
         f"{persona}\n\n"
-        f"{WORLD_MECHANICS}\n\n"
+        f"{WORLD_MECHANICS}{walking}\n\n"
         "The things you can do:\n"
         f"{affordances}\n\n"
         "Choose freely. What you do is up to you."

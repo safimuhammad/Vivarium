@@ -39,6 +39,63 @@ def _event_line(marker: str) -> bytes:
     return (json.dumps({"type": "speak", "marker": marker}) + "\n").encode("utf-8")
 
 
+def test_checkpoint_append_decodes_once_and_preserves_exact_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = ReplayArchive(tmp_path / "run-test", "run-test")
+    line = b'{ "event_cursor": 7, "snapshot": {"message": "caf\\u00e9"} }\n'
+    original_loads = json.loads
+    decoded: list[object] = []
+
+    def count_loads(value: str | bytes | bytearray, **kwargs: Any) -> Any:
+        decoded.append(value)
+        return original_loads(value, **kwargs)
+
+    monkeypatch.setattr(json, "loads", count_loads)
+
+    assert archive.append_checkpoint_line(line) == 1
+    assert decoded == [line]
+    assert list(archive.iter_lines("checkpoints")) == [(1, line)]
+    summary = archive.summary()
+    assert summary.checkpoint_count == 1
+    assert summary.first_checkpoint_event_cursor == 7
+    assert summary.last_checkpoint_event_cursor == 7
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        b"",
+        b'{"event_cursor": 1}',
+        b'{"event_cursor": 1}\n\n',
+        b'{"event_cursor": 1}\n{}\n',
+        b"not JSON\n",
+        b"\xff\n",
+        b"null\n",
+        b"[]\n",
+        b"true\n",
+        b"{}\n",
+        b'{"event_cursor": -1}\n',
+        b'{"event_cursor": true}\n',
+        b'{"event_cursor": 1.0}\n',
+        b'{"event_cursor": "1"}\n',
+    ],
+)
+def test_invalid_checkpoint_cannot_advance_archive_or_write_bytes(
+    tmp_path: Path, line: bytes
+) -> None:
+    archive = ReplayArchive(tmp_path / "run-test", "run-test")
+    valid = _checkpoint_line(0, marker="retained")
+    archive.append_checkpoint_line(valid)
+
+    with pytest.raises(ReplayArchiveError):
+        archive.append_checkpoint_line(line)
+
+    assert list(archive.iter_lines("checkpoints")) == [(1, valid)]
+    assert archive.summary().last_checkpoint_event_cursor == 0
+    assert archive.append_checkpoint_line(_checkpoint_line(2, marker="next")) == 2
+
+
 def test_rotation_preserves_checkpoint_bytes_order_and_cursor_bounds(tmp_path: Path) -> None:
     archive = ReplayArchive(tmp_path / "run-test", "run-test", max_segment_bytes=1)
     lines = [

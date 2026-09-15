@@ -230,6 +230,36 @@ describe("production Nirvana painter", () => {
       expect(Number.isInteger(call[8])).toBe(true);
     }
   });
+
+  it("grounds an authored bridge sprite before its foot-sorted deck image", () => {
+    const region = createNirvanaRegion(
+      chunk(
+        { column: 0, row: 0 },
+        [],
+        undefined,
+        [{
+          id: "bridge-north-1",
+          frameId: "s.bridgedeckh.0",
+          tile: { column: 2, row: 2 },
+          at: { x: 48, y: 64 },
+          foot: { x: 64, y: 95 },
+          blocksMovement: false,
+        }],
+      ),
+    );
+    const plan = createNirvanaPaintPlan(region, assets, "nirvana:bridge-depth");
+    const accent = plan.operations.find((operation) => (
+      operation.stableId === "grounding:scenery:0,0:bridge-north-1"
+    ));
+    const deckIndex = plan.operations.findIndex((operation) => (
+      operation.stableId === "scenery:0,0:bridge-north-1"
+    ));
+    expect(accent).toMatchObject({ layer: "scenery", pivotY: 95 });
+    expect(accent).toBeDefined();
+    expect(plan.operations.indexOf(accent!)).toBeLessThan(deckIndex);
+    expect(accent!.destination.x).toBeGreaterThan(48);
+    expect(accent!.destination.y).toBeGreaterThan(64);
+  });
 });
 
 function recordedContext(width: number, height: number): RecordedContext {
@@ -252,6 +282,14 @@ function chunk(
     at: Readonly<{ x: number; y: number }>;
     frameId: NirvanaLandmarkFrameId;
   }>,
+  scenery: readonly Readonly<{
+    id: string;
+    frameId: string;
+    tile: Readonly<{ column: number; row: number }>;
+    at: Readonly<{ x: number; y: number }>;
+    foot: Readonly<{ x: number; y: number }>;
+    blocksMovement: boolean;
+  }>[] = [],
 ): NirvanaChunk {
   const landmarks = visual === undefined ? [] : [{
     id: `${visual.id}-landmark`,
@@ -281,7 +319,7 @@ function chunk(
     roadCells: [],
     roadHub: { column: 0, row: 0 },
     landmarks,
-    scenery: [],
+    scenery,
     quietClearings: [],
     collision: Array.from({ length: 48 * 32 }, () => 0 as const),
     connectors,

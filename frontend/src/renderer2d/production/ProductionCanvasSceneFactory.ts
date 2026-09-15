@@ -1,6 +1,6 @@
 import type { ObserverRendererPort } from "../../presentation/rendererPort";
 import { deriveHumanAppearance } from "./actors/appearance";
-import { resolveBeingCharacter } from "./actors/beingChibiAtlas";
+import { resolveBeingVisualIdentity } from "./actors/visualIdentity";
 import { SpriteSheetHumanActor } from "./actors/SpriteSheetHumanActor";
 import { PRODUCTION_ASSET_MANIFEST } from "./assets/productionManifest";
 import {
@@ -8,6 +8,8 @@ import {
   type CanvasPresentationRendererOptions,
 } from "./CanvasPresentationRenderer";
 import { EnvironmentSystem } from "./environment/EnvironmentSystem";
+import { withDepthSceneryManifest } from "./depth/DepthSceneryAssets";
+import { withAtlasBridgeManifest } from "./world/AtlasBridgeAssets";
 import { HomeActor } from "./homes/HomeActor";
 import { createNirvanaProductionManifest } from "./nirvana/NirvanaAssetProfile";
 import { NIRVANA_STATIC_SCENE_PROVIDER } from "./nirvana/NirvanaStaticSceneProvider";
@@ -44,20 +46,20 @@ export const PRODUCTION_SCENE_FACTORIES: ProductionSceneFactories = Object.freez
     const name = input.record.value.name;
     const persona = input.record.value.persona;
     const personaValue = typeof persona === "string" ? persona : undefined;
-    // Resolved here (rather than left to the actor's own roster-context-free
-    // default) so every production being draws from the full 7-character
-    // roster: same agent id -> same appearance -> same character, forever
-    // (`resolveBeingCharacter`, `beingChibiAtlas.ts`). Passing the derived
-    // `appearance` through explicitly, instead of letting the actor
-    // re-derive it internally, keeps the character resolved here in lockstep
-    // with the appearance the actor actually renders against.
+    // The v2 identity is resolved from the stable id alone. Projected newborns
+    // do not have a persona yet, and the later exact checkpoint must therefore
+    // keep the same roster shape, garment family, and accessory. Passing both
+    // values explicitly keeps the factory and actor in lockstep while persona
+    // remains available for the actor's semantic snapshot.
     const appearance = deriveHumanAppearance(id, personaValue);
+    const visualIdentity = resolveBeingVisualIdentity(id);
     return new SpriteSheetHumanActor({
       id,
       name: typeof name === "string" && name.length > 0 ? name : id,
       persona: personaValue,
       appearance,
-      characterId: resolveBeingCharacter(appearance),
+      characterId: visualIdentity.characterId,
+      visualIdentity,
       position: input.position,
       facing: input.facing,
       manifest: input.manifest,
@@ -83,13 +85,15 @@ export const PRODUCTION_SCENE_FACTORIES: ProductionSceneFactories = Object.freez
  * own generation and re-checks the shared active-atlas ceiling as it is added, so a kit
  * that would push the world over budget fails at module load rather than at paint time.
  */
-export const PRODUCTION_SCENE_MANIFEST = createNirvanaWestProductionManifest(
-  createNirvanaEastProductionManifest(
-    createWarmSpringsProductionManifest(
-      createNirvanaProductionManifest(PRODUCTION_ASSET_MANIFEST),
+export const PRODUCTION_SCENE_MANIFEST = withAtlasBridgeManifest(withDepthSceneryManifest(
+  createNirvanaWestProductionManifest(
+    createNirvanaEastProductionManifest(
+      createWarmSpringsProductionManifest(
+        createNirvanaProductionManifest(PRODUCTION_ASSET_MANIFEST),
+      ),
     ),
   ),
-);
+));
 const PRODUCTION_STATIC_SCENE_PROVIDERS: ReadonlyMap<string, ProductionStaticSceneProvider> =
   Object.freeze(new Map([
     [NIRVANA_STATIC_SCENE_PROVIDER.kind, NIRVANA_STATIC_SCENE_PROVIDER],

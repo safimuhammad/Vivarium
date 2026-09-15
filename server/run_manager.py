@@ -490,6 +490,10 @@ class RunManager:
         """
         if handle.status not in {"stopped", "failed"}:
             handle.simulation.run_context.mark_stopped()
+        run_id = handle.simulation.run_context.run_id
+        if run_id in self._settled:
+            return
+        self._settled.add(run_id)
         try:
             update_recording_sidecar(
                 handle.simulation.run_context,
@@ -504,8 +508,9 @@ class RunManager:
     def _write_final_checkpoint(self, handle: RunHandle) -> None:
         """Append the run's last world snapshot to the durable archive.
 
-        Idempotent: a stop followed by a replacement and then process shutdown must
-        not append three copies of the same closing snapshot.
+        Called by :meth:`_settle`, which guards every terminal artifact write so a
+        stop followed by a replacement and process shutdown cannot append duplicate
+        closing snapshots.
 
         Args:
             handle: The finished run.
@@ -514,9 +519,6 @@ class RunManager:
             None.
         """
         simulation = handle.simulation
-        if simulation.run_context.run_id in self._settled:
-            return
-        self._settled.add(simulation.run_context.run_id)
         try:
             simulation.snapshot_log.write_snapshot(
                 simulation.world,

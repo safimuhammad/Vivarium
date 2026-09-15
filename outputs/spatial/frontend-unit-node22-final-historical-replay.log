@@ -1,0 +1,21 @@
+
+> vivarium-frontend@0.1.0 test:unit
+> vitest run
+
+
+ RUN  v4.1.9 /Users/safi/Desktop/work/Vivarium/frontend
+
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+
+ Test Files  255 passed (255)
+      Tests  4214 passed | 1 skipped (4215)
+   Start at  18:52:12
+   Duration  161.77s (transform 12.65s, setup 0ms, import 36.56s, tests 480.60s, environment 178.04s)
+

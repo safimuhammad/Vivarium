@@ -19,6 +19,8 @@ import {
 import type { RegionKitId } from "../maps/biomeKits";
 import type { RegionPresentationProfile } from "../maps/RegionMapRecipe";
 import type { ProductionAssetManifest } from "./productionManifest";
+import { DEPTH_SCENERY_ATLAS_ID } from "../depth/DepthSceneryAssets";
+import { ATLAS_BRIDGE_MATERIALS_ID } from "../world/AtlasBridgeAssets";
 
 /**
  * The profile kinds, DERIVED from the recipe's own union rather than re-declared.
@@ -113,6 +115,8 @@ export function productionAtlasIdsForRegion(
     .filter(({ group }) => group === "core")
     .map(({ id }) => id));
   for (const atlasId of pack.atlasIds) selected.add(atlasId);
+  if (manifest.atlases[DEPTH_SCENERY_ATLAS_ID] !== undefined) selected.add(DEPTH_SCENERY_ATLAS_ID);
+  if (manifest.atlases[ATLAS_BRIDGE_MATERIALS_ID] !== undefined) selected.add(ATLAS_BRIDGE_MATERIALS_ID);
 
   const profile = identity.presentationProfile;
   if (profile !== undefined) {

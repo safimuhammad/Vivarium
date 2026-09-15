@@ -474,13 +474,26 @@ function agentSelection(
       fact("Identity", optionalSafeText(value.persona, deniedIds)),
       fact("Status", optionalEnum(value.status)),
       fact("Region", optionalRegion(value.position)),
-      fact("Energy", optionalNumber(value.energy)),
-      fact("Materials", optionalNumber(value.materials)),
+      ...(value.spatial === undefined ? [] : [fact("Journey", physicalJourney(frame, value.spatial))]),
+      fact("Energy", optionalQuantity(value.energy)),
+      fact("Materials", optionalQuantity(value.materials)),
       fact("Home", home === null || home === undefined ? optionalRelationship(value.home_id) : homeTitle(home.value)),
       fact("Offspring", optionalNumber(value.offspring_count)),
       fact("Hoarding", optionalBoolean(value.is_hoarding)),
     ]),
   });
+}
+
+function physicalJourney(frame: PresentedObserverFrame, spatial: NonNullable<AgentSnapshot["spatial"]>): string {
+  const region = frame.world.regions.find((candidate) => candidate.value.name === spatial.region_id);
+  const destinationId = spatial.travel?.destination_id ?? spatial.at_landmark;
+  const landmark = region?.value.spatial?.landmarks.find((site) => site.id === destinationId);
+  const name = landmark === undefined ? "the destination" : safePublicCopy(landmark.name, "the destination");
+  if (spatial.travel === null) return landmark === undefined ? "Standing on the path" : `At ${name}`;
+  const at = frame.spatialPlayback?.sampledAt ?? spatial.observed_at;
+  const remaining = Math.max(0, Math.ceil(spatial.travel.arrives_at - at));
+  if (remaining === 0) return `At ${name}`;
+  return `Walking to ${name} · ${remaining}s remaining${frame.spatialPlayback?.paused === true ? " · view paused" : ""}`;
 }
 
 function homeSelection(
@@ -508,7 +521,7 @@ function homeSelection(
       fact("Region", optionalRegion(value.region)),
       fact("Integrity", ratio(value.integrity, value.max_integrity)),
       fact(relationshipLabel, relationshipNames(relationshipIds, names)),
-      fact(kind === "home" ? "Vault materials" : "Remnant materials", optionalNumber(
+      fact(kind === "home" ? "Vault materials" : "Remnant materials", optionalQuantity(
         kind === "home" ? value.vault_materials : value.remnant_materials,
       )),
       fact("Status", optionalEnum(value.status)),
@@ -925,6 +938,11 @@ function optionalRelationship(value: string | null | undefined): string {
 function optionalNumber(value: number | null | undefined): string {
   const number = finiteNumber(value);
   return number === null ? "Unknown" : String(number);
+}
+
+function optionalQuantity(value: number | null | undefined): string {
+  const number = finiteNumber(value);
+  return number === null ? "Unknown" : formatPublicNumber(number);
 }
 
 function optionalBoolean(value: boolean | undefined): string {

@@ -11,17 +11,19 @@
  * port are duplicated locally rather than shared, because sharing would mean
  * importing a QA-owned module into the production closure.
  *
- * Impersonated seams — identical to the QA harness, and no more:
+ * Recorded transport seams:
  *   - `LiveApiClient` is an offline bridge over the recording (`createRecordedRunBridge`);
  *     `getEvents` always answers empty because a recording is delivered purely
  *     through the SSE-shaped push path (`dispatch`), never through backfill polling.
  *   - `GET /api/world` answers with the newest REAL recorded checkpoint at or
- *     below the delivered cursor, restamped cursor-forward (`RecordedRun.snapshotAt`),
- *     because a live server's world endpoint is always cursor-forward while the
- *     recorded checkpoint cadence is coarser than the event cadence.
- *   - The checkpoint feed is a no-op (`inertRecordedCheckpointFeed`), isolating the
- *     story queue from checkpoint reconciliation — the QA harness's declared
- *     deviation #1.
+ *     below the delivered cursor and recorded time, restamped cursor-forward
+ *     (`RecordedRun.snapshotAt`) so a coarse checkpoint never leaks future state.
+ *   - Later real checkpoints enter the normal production reconciliation path at
+ *     their original world times through a per-session feed
+ *     (`createRecordedCheckpointFeedHub`).
+ *   - Exact `simulation_stopped` and `run_stopped` checkpoints are quiescent
+ *     terminal truth: they use that safe reconciliation channel without altering
+ *     their persisted reason. Other manual checkpoints remain archival only.
  *   - Local recordings retain their terrain seed and model through metadata.json.
  *     Standalone legacy recordings without metadata retain the seed-zero fallback.
  *   - A caller's `runId` is a diagnostic label only. A recording's true identity
@@ -46,12 +48,27 @@ import {
   type SerializedEvent,
   type WorldSnapshot,
 } from "../schemas";
-import type { CheckpointFeed } from "../../presentation/CheckpointFeed";
+import type {
+  CheckpointFeed,
+  CheckpointFeedDiagnostics,
+  CheckpointFeedFault,
+} from "../../presentation/CheckpointFeed";
+import type {
+  ClassifiedCheckpointRecord,
+  LiveCutSafety,
+} from "../../presentation/contracts";
+import {
+  reconcileReplaySelectorAfterArtifactShift,
+  type ReplayArtifactClient,
+  type ReplayArtifacts,
+} from "../replayArtifactClient";
+import type { SnapshotCheckpoint } from "../replayArtifacts";
 
 /** Real backend SSE poll cadence (`server/app.py` `sse_poll_interval = 0.25`). */
 export const SSE_POLL_MS = 250;
 
 const EVENT_SCOPES = ["local", "global", "targeted", "private"] as const;
+const RECORDED_QUIESCENT_FINAL_REASONS = new Set(["simulation_stopped", "run_stopped"]);
 
 const ACTOR_PAYLOAD_KEYS = [
   "actor_id",
@@ -78,7 +95,7 @@ const TARGET_PAYLOAD_KEYS = [
 
 /** One cursor-ordered live-shaped ingress entry, plus its recorded arrival offset. */
 export interface RecordedRunEntry extends EventEnvelopeEntry {
-  /** Milliseconds after the first recorded event at which this entry was emitted. */
+  /** Milliseconds after the initial recorded checkpoint at which this entry was emitted. */
   readonly offsetMs: number;
 }
 
@@ -88,16 +105,27 @@ export interface RecordedRun {
   readonly runId: string;
   /** Cursor-1-based entries in recorded timestamp order. */
   readonly entries: readonly RecordedRunEntry[];
+  /** Exact checkpoint records in their append order. */
+  readonly checkpoints: readonly SnapshotCheckpoint[];
   readonly firstSnapshot: WorldSnapshot;
   readonly run: RunMetadata;
-  /** Milliseconds from the first recorded event to the last. */
+  /** Exact world time at which playback can truthfully finish. */
+  readonly endWorldTime: number;
+  /** Milliseconds from the initial checkpoint to the final recorded event or checkpoint. */
   readonly spanMs: number;
   /**
-   * The newest real recorded checkpoint at or below `cursor`, restamped onto
-   * `cursor` and `worldTime` so it reads as a live, cursor-forward `GET /api/world`
-   * answer rather than the coarser cadence a checkpoint is actually recorded at.
+   * The newest real recorded checkpoint at or below both `cursor` and
+   * `worldTime`, restamped onto the requested identity so it reads as a live,
+   * cursor-forward `GET /api/world` answer rather than the coarser cadence a
+   * checkpoint is actually recorded at.
    */
   snapshotAt(cursor: number, worldTime: number): WorldSnapshot;
+  /**
+   * Exact recording-owned event/checkpoint material for historical card replay.
+   * Optional so an older caller that only supplies the live bridge retains the
+   * existing focus-only behavior instead of borrowing a different run's API.
+   */
+  replayArtifacts?(): ReplayArtifacts;
 }
 
 export interface RecordedRunMetadata {
@@ -117,14 +145,16 @@ export interface LoadRecordedRunInput {
 
 /** Parses `events.jsonl` + `snapshots.jsonl` text into a replayable recording. */
 export function loadRecordedRun(input: LoadRecordedRunInput): RecordedRun {
+  const snapshotLines = parseJsonl(input.snapshotsText).map((raw) => parseRecordedSnapshotLine(raw));
+  const firstLine = snapshotLines[0];
+  if (firstLine === undefined) {
+    throw new Error(`recorded run ${input.runId} has no snapshots`);
+  }
   const lines = parseJsonl(input.eventsText)
     .map((raw) => parseRecordedEventLine(raw))
     .slice()
     .sort((left, right) => left.timestamp - right.timestamp);
-  if (lines.length === 0) {
-    throw new Error(`recorded run ${input.runId} has no events`);
-  }
-  const startedAt = lines[0].timestamp;
+  const startedAt = firstLine.snapshot.world_time;
   const entries: RecordedRunEntry[] = lines.map((line, index) => {
     const event = toSerializedEvent(line);
     return {
@@ -135,34 +165,115 @@ export function loadRecordedRun(input: LoadRecordedRunInput): RecordedRun {
       offsetMs: (line.timestamp - startedAt) * 1_000,
     };
   });
-  const spanMs = entries[entries.length - 1].offsetMs;
-
-  const snapshotLines = parseJsonl(input.snapshotsText).map((raw) => parseRecordedSnapshotLine(raw));
-  const firstLine = snapshotLines[0];
-  if (firstLine === undefined) {
-    throw new Error(`recorded run ${input.runId} has no snapshots`);
-  }
   const runId = firstLine.snapshot.run_id;
+  if (snapshotLines.some((line) => line.snapshot.run_id !== runId)) {
+    throw new Error(`recorded run ${input.runId} contains multiple snapshot run identities`);
+  }
   const firstSnapshot = firstLine.snapshot;
   const run = buildRecordedRunMetadata({ runId, snapshot: firstSnapshot, metadata: input.metadata });
+  const checkpoints = snapshotLines.map((line, index): SnapshotCheckpoint => ({
+    schema: 1,
+    type: "world_snapshot_checkpoint",
+    reason: line.reason,
+    run_id: runId,
+    world_time: line.snapshot.world_time,
+    event_cursor: line.snapshot.event_cursor,
+    snapshot: structuredClone(line.snapshot),
+    lineNumber: index + 1,
+  }));
+  const lastRecordedEventTime = entries[entries.length - 1]?.event.timestamp ?? startedAt;
+  const endWorldTime = Math.max(
+    lastRecordedEventTime,
+    checkpoints[checkpoints.length - 1]!.world_time,
+  );
+  const spanMs = Math.max(0, (endWorldTime - startedAt) * 1_000);
 
   return {
     runId,
     entries,
+    checkpoints,
     firstSnapshot,
     run,
+    endWorldTime,
     spanMs,
     snapshotAt(cursor, worldTime): WorldSnapshot {
-      // Snapshot lines are assumed to already be in non-decreasing eventCursor
-      // order, which is how a real run appends `snapshots.jsonl` — the newest
-      // one at or below `cursor` is therefore the last one accepted below.
-      let chosen = firstLine;
+      // A checkpoint may share the final event cursor while being written later
+      // by the world heartbeat or stop path. It is not legal bridge truth for an
+      // earlier delivered event, even though its cursor is equal. Choose only a
+      // checkpoint the recording had actually reached in both dimensions.
+      let chosen: RecordedSnapshotLine | null = null;
       for (const record of snapshotLines) {
-        if (record.eventCursor <= cursor) chosen = record;
-        else break;
+        if (record.eventCursor > cursor || record.snapshot.world_time > worldTime) continue;
+        if (chosen === null || record.snapshot.world_time >= chosen.snapshot.world_time) {
+          chosen = record;
+        }
+      }
+      if (chosen === null) {
+        throw new RangeError(`recorded run ${runId} has no checkpoint at cursor ${cursor} and time ${worldTime}`);
       }
       return restampSnapshot(chosen.snapshot, { runId, eventCursor: cursor, worldTime });
     },
+    replayArtifacts(): ReplayArtifacts {
+      return recordedReplayArtifacts(runId, entries, checkpoints);
+    },
+  };
+}
+
+/**
+ * Creates the artifact client for a saved run from the recording itself.
+ *
+ * This intentionally never falls through to `/api/replay`: that endpoint names
+ * whatever live run happens to be active, which is not authority for a saved
+ * recording. Callers with an old bridge-only `RecordedRun` receive `null` and
+ * retain their focus-only Chronicle click instead.
+ */
+export function createRecordedReplayArtifactClient(
+  recording: RecordedRun,
+): ReplayArtifactClient | null {
+  if (recording.replayArtifacts === undefined) return null;
+  const base = recording.replayArtifacts();
+  if (base.runId !== recording.runId) return null;
+  const copy = (): ReplayArtifacts => structuredClone(base);
+  return {
+    fetchArtifacts: async () => copy(),
+    fetchForRun: async (expectedRunId) => {
+      if (expectedRunId !== recording.runId) {
+        throw new Error(`recorded replay belongs to ${recording.runId}, not ${expectedRunId}`);
+      }
+      return copy();
+    },
+    fetchOlderArtifacts: async () => copy(),
+    reconcileSelector: async (previous, next, selector) => (
+      reconcileReplaySelectorAfterArtifactShift(previous, next, selector)
+    ),
+    exportEvents: async () => copy().events,
+    exportSnapshots: async () => copy().checkpoints,
+    fetchEvents: async () => copy().events,
+    fetchSnapshots: async () => copy().checkpoints,
+  };
+}
+
+function recordedReplayArtifacts(
+  runId: string,
+  entries: readonly RecordedRunEntry[],
+  checkpoints: readonly SnapshotCheckpoint[],
+): ReplayArtifacts {
+  return {
+    runId,
+    events: entries.map((entry) => structuredClone(entry)),
+    checkpoints: checkpoints.map((checkpoint) => structuredClone(checkpoint)),
+    checkpointIndex: checkpoints.map((checkpoint) => ({
+      lineNumber: checkpoint.lineNumber,
+      eventCursor: checkpoint.event_cursor,
+      worldTime: checkpoint.world_time,
+      reason: checkpoint.reason,
+      runId: checkpoint.run_id,
+    })),
+    eventTotalCount: entries.length,
+    checkpointTotalCount: checkpoints.length,
+    firstCheckpointLine: checkpoints[0]?.lineNumber ?? null,
+    nextCheckpointBefore: null,
+    hasOlderCheckpoints: false,
   };
 }
 
@@ -314,15 +425,23 @@ export interface RecordedRunDriverPlatform {
   readonly clearTimeout: (handle: number) => void;
 }
 
+/** Advances recording time for one or more session-owned checkpoint feeds. */
+export interface RecordedCheckpointTimeline {
+  advanceTo(worldTime: number): void;
+}
+
 export interface RecordedRunDriverOptions {
   readonly recording: RecordedRun;
   readonly bridge: RecordedRunBridge;
+  /** Exact checkpoints delivered through the production reconciliation path. */
+  readonly checkpointFeed?: RecordedCheckpointTimeline;
   /** Arrival-rate multiplier. 1 (the default) replays at the run's own recorded spacing. */
   readonly rate?: number;
   readonly scheduler?: RecordedRunDriverPlatform;
   /** Called after every delivered batch, with the wall-clock offset reached. */
   readonly onProgress?: (progress: RecordedRunDriverProgress) => void;
-  readonly onComplete?: () => void;
+  /** Called only after the final recorded checkpoint time is reached. */
+  readonly onComplete?: (worldTime: number) => void;
 }
 
 /** Drives a recording forward at its own recorded wall-clock spacing. */
@@ -348,7 +467,10 @@ export function createRecordedRunDriver(options: RecordedRunDriverOptions): Reco
   const platform = options.scheduler ?? browserRecordedRunDriverPlatform();
   const intervalMs = Math.max(16, SSE_POLL_MS / rate);
 
-  let index = 0;
+  // The initial bridge world is the first exact checkpoint. Its cursor already
+  // includes this many recorded events, so replaying them would duplicate old
+  // evidence after the world has started from its resulting state.
+  let index = Math.min(entries.length, Math.max(0, options.recording.firstSnapshot.event_cursor));
   let startedAt = 0;
   let reached = 0;
   let running = false;
@@ -380,9 +502,15 @@ export function createRecordedRunDriver(options: RecordedRunDriverOptions): Reco
         remaining: entries.length - index,
       });
     }
-    if (index >= entries.length && reached > spanMs) {
+    const reachedWorldTime = options.recording.firstSnapshot.world_time + reached / 1_000;
+    options.checkpointFeed?.advanceTo(reachedWorldTime);
+    if (index >= entries.length && reached >= spanMs) {
+      const terminal = options.recording.checkpoints[options.recording.checkpoints.length - 1];
+      if (terminal !== undefined && terminal.world_time === options.recording.endWorldTime) {
+        options.bridge.setSnapshot(terminal.snapshot);
+      }
       running = false;
-      options.onComplete?.();
+      options.onComplete?.(options.recording.endWorldTime);
       return;
     }
     scheduleNext();
@@ -406,6 +534,165 @@ export function createRecordedRunDriver(options: RecordedRunDriverOptions): Reco
   };
 }
 
+/** A recording-owned checkpoint feed advanced by the replay driver’s real timeline. */
+export interface RecordedCheckpointFeed extends CheckpointFeed, RecordedCheckpointTimeline {
+  /** Delivers each undispatched checkpoint at or before its original world time. */
+  advanceTo(worldTime: number): void;
+}
+
+/**
+ * Owns the recording timeline while each production session owns and disposes
+ * its own feed. This keeps a StrictMode probe from closing the survivor's feed,
+ * and lets a later session catch up from the timeline it joins.
+ */
+export interface RecordedCheckpointFeedHub extends RecordedCheckpointTimeline {
+  createFeed(): RecordedCheckpointFeed;
+  dispose(): void;
+}
+
+/**
+ * Supplies exact recorded checkpoints to the ordinary production reconciliation
+ * path. The first checkpoint is already the bridge's initial world, so this feed
+ * begins after it and never substitutes a later snapshot for an earlier event.
+ */
+export function createRecordedCheckpointFeed(recording: RecordedRun): RecordedCheckpointFeed {
+  let disposed = false;
+  let runId: string | null = null;
+  let sourceKey: string | null = null;
+  let nextIndex = 1;
+  let lastDeliveredLine = recording.checkpoints[0]?.lineNumber ?? 0;
+  let retainedSafeCheckpoints = 0;
+  let requestedWorldTime: number | null = null;
+  const listeners = new Set<(record: ClassifiedCheckpointRecord) => void>();
+  const faultListeners = new Set<(fault: CheckpointFeedFault) => void>();
+
+  const deliver = (record: ClassifiedCheckpointRecord): void => {
+    for (const listener of [...listeners]) {
+      if (disposed || runId === null || sourceKey === null) return;
+      try {
+        listener(record);
+      } catch {
+        // A view listener cannot block delivery to its peers or the replay clock.
+      }
+    }
+  };
+
+  const advanceTo = (worldTime: number): void => {
+    if (disposed) return;
+    requestedWorldTime = requestedWorldTime === null
+      ? worldTime
+      : Math.max(requestedWorldTime, worldTime);
+    if (runId === null || sourceKey === null) return;
+    while (nextIndex < recording.checkpoints.length) {
+      const checkpoint = recording.checkpoints[nextIndex]!;
+      if (checkpoint.world_time > requestedWorldTime) return;
+      nextIndex += 1;
+      lastDeliveredLine = checkpoint.lineNumber ?? nextIndex;
+      const safety = classifyRecordedCheckpointSafety(checkpoint);
+      if (safety === "safe-world-tick") retainedSafeCheckpoints += 1;
+      deliver({
+        line: checkpoint.lineNumber ?? nextIndex,
+        checkpoint: structuredClone(checkpoint),
+        safety,
+      });
+    }
+  };
+
+  const reset = (identity: { runId: string; sourceKey: string }): void => {
+    if (disposed) return;
+    if (identity.runId !== recording.runId) {
+      throw new Error(`recorded checkpoint feed belongs to ${recording.runId}, not ${identity.runId}`);
+    }
+    if (identity.sourceKey.trim() === "") {
+      throw new Error("recorded checkpoint feed source key must not be empty");
+    }
+    runId = identity.runId;
+    sourceKey = identity.sourceKey;
+    nextIndex = 1;
+    lastDeliveredLine = recording.checkpoints[0]?.lineNumber ?? 0;
+    retainedSafeCheckpoints = 0;
+    if (requestedWorldTime !== null) advanceTo(requestedWorldTime);
+  };
+
+  return {
+    start: reset,
+    reset,
+    subscribe(listener): () => void {
+      if (!disposed) listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    subscribeFault(listener): () => void {
+      if (!disposed) faultListeners.add(listener);
+      return () => { faultListeners.delete(listener); };
+    },
+    advanceTo,
+    diagnostics(): CheckpointFeedDiagnostics {
+      return {
+        disposed,
+        runId,
+        lastDeliveredLine,
+        polling: false,
+        retainedSafeCheckpoints,
+        faultCount: 0,
+      };
+    },
+    dispose(): void {
+      disposed = true;
+      runId = null;
+      sourceKey = null;
+      listeners.clear();
+      faultListeners.clear();
+    },
+  };
+}
+
+/** Creates independent session feeds coordinated by one recorded-time timeline. */
+export function createRecordedCheckpointFeedHub(recording: RecordedRun): RecordedCheckpointFeedHub {
+  let disposed = false;
+  let reachedWorldTime = recording.firstSnapshot.world_time;
+  const feeds = new Set<RecordedCheckpointFeed>();
+
+  return {
+    createFeed(): RecordedCheckpointFeed {
+      const inner = createRecordedCheckpointFeed(recording);
+      let released = false;
+      const feed: RecordedCheckpointFeed = {
+        start: (identity) => inner.start(identity),
+        reset: (identity) => inner.reset(identity),
+        subscribe: (listener) => inner.subscribe(listener),
+        subscribeFault: (listener) => inner.subscribeFault(listener),
+        advanceTo: (worldTime) => inner.advanceTo(worldTime),
+        diagnostics: () => inner.diagnostics(),
+        dispose: () => {
+          if (released) return;
+          released = true;
+          feeds.delete(feed);
+          inner.dispose();
+        },
+      };
+      if (disposed) {
+        feed.dispose();
+      } else {
+        feeds.add(feed);
+        // `createRecordedCheckpointFeed` retains a requested time before its
+        // session starts, then emits the exact prefix after it subscribes.
+        feed.advanceTo(reachedWorldTime);
+      }
+      return feed;
+    },
+    advanceTo(worldTime): void {
+      if (disposed) return;
+      reachedWorldTime = Math.max(reachedWorldTime, worldTime);
+      for (const feed of [...feeds]) feed.advanceTo(reachedWorldTime);
+    },
+    dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      for (const feed of [...feeds]) feed.dispose();
+    },
+  };
+}
+
 /** A checkpoint feed that does nothing, for a recording with no live archive to reconcile against. */
 export function inertRecordedCheckpointFeed(): CheckpointFeed {
   return {
@@ -423,6 +710,15 @@ export function inertRecordedCheckpointFeed(): CheckpointFeed {
     }),
     dispose: () => undefined,
   };
+}
+
+function classifyRecordedCheckpointSafety(checkpoint: SnapshotCheckpoint): LiveCutSafety {
+  if (
+    checkpoint.reason === "world_tick"
+    || RECORDED_QUIESCENT_FINAL_REASONS.has(checkpoint.reason)
+  ) return "safe-world-tick";
+  if (checkpoint.reason.startsWith("event:")) return "archive-event";
+  return "archive-manual";
 }
 
 /**
@@ -492,6 +788,7 @@ function toSerializedEvent(line: RecordedEventLine): SerializedEvent {
 
 interface RecordedSnapshotLine {
   readonly eventCursor: number;
+  readonly reason: string;
   readonly snapshot: WorldSnapshot;
 }
 
@@ -593,6 +890,7 @@ function parseRecordedSnapshotLine(value: unknown): RecordedSnapshotLine {
   const input = objectOf(value, "recorded snapshot line");
   return {
     eventCursor: numberOf(input.event_cursor, "recorded snapshot line.event_cursor"),
+    reason: stringOf(input.reason, "recorded snapshot line.reason"),
     snapshot: parseWorldSnapshot(input.snapshot),
   };
 }

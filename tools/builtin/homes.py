@@ -35,6 +35,7 @@ from core.constants import (
     HOME_BUILD_MATERIALS_COST,
     HOME_MAX_INTEGRITY,
 )
+from tools.builtin.movement import stop_moving
 from tools.builtin.resources import _announce_if_started_hoarding, _coerce_positive_amount
 from world.agents import AgentStatus, is_hoarding
 from world.homes import Home, HomeStatus, home_is_hoarding, max_integrity
@@ -133,14 +134,27 @@ async def build_home(world: WorldState, event_bus: EventBus, agent_id: str) -> s
             f"Invalid: You lack the materials to build a home "
             f"(need {HOME_BUILD_MATERIALS_COST:.0f}, you have {agent.current_materials})."
         )
+    region = agent.current_position
+    if not world.can_place_home(region):
+        return (
+            "Invalid: No legal shelter plot is free here; you cannot build a home "
+            "without a place for it."
+        )
 
     # Pre-mutation snapshot for the renderer (spec §4.2): the payload reports the
     # builder's materials after the build cost, so the "before" side is read here.
     builder_materials_before = agent.current_materials
     world.modify_agent_materials(agent_id, -HOME_BUILD_MATERIALS_COST)
     home_id = f"home_{world.rng.getrandbits(32):08x}"
-    region = agent.current_position
-    world.build_home(home_id, agent_id, region, built_at=world.now(), integrity=HOME_MAX_INTEGRITY)
+    if not world.build_home(
+        home_id,
+        agent_id,
+        region,
+        built_at=world.now(),
+        integrity=HOME_MAX_INTEGRITY,
+    ):
+        world.modify_agent_materials(agent_id, HOME_BUILD_MATERIALS_COST)
+        return "Invalid: No legal shelter plot is free here; your materials were not spent."
     await event_bus.publish(
         Event(
             "home_built",
@@ -194,6 +208,8 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
     Emits events:
         * One ``"hearth_used"`` event (:attr:`~bus.events.ScopeType.LOCAL`, source =
           the being, region = its current position, stamped ``world.now()``).
+        * A preceding ``"spatial_travel_cancelled"`` when hearth rest interrupts
+          an active local or regional journey.
         * One ``"agent_started_hoarding"`` event
           (:attr:`~bus.events.ScopeType.LOCAL`, stamped with the region and
           ``world.now()``) **only** when this hearth use lifts the being over a
@@ -228,6 +244,10 @@ async def use_hearth(world: WorldState, event_bus: EventBus, agent_id: str) -> s
         return "Invalid: You are not where your home stands; you can rest at its hearth only there."
     if agent.current_materials <= 0.0:
         return "Invalid: You have no materials to burn at the hearth."
+
+    # An accepted rest cancels the pending destination at the current feet.
+    # Validate first so a rejected hearth request cannot interrupt a journey.
+    await stop_moving(world, event_bus, agent_id)
 
     # Snapshot hoarding state before ANY mutation below (burn or credit) so we can
     # detect a *crossing* into hoarding, mirroring harvest_resources/transfer_resource.

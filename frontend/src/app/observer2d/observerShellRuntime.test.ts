@@ -6,10 +6,17 @@ import type {
   ReplayArtifacts,
   ReplayPresentationWindow,
 } from "../replayArtifactClient";
-import type {
-  PresentationControls,
-  PresentationSession,
+import {
+  createLegacyArchivePresentationSessionForTests,
+  type PresentationControls,
+  type PresentationSession,
 } from "../../presentation/PresentationSession";
+import { createManualPresentationClock } from "../../presentation/fixtures/ManualPresentationClock";
+import type { SceneRuntimePort } from "../../presentation/SceneSettlementCoordinator";
+import type {
+  EventEnvelopeEntry,
+  WorldSnapshot,
+} from "../schemas";
 import { PresentedWorldModel } from "../../presentation/PresentedWorldModel";
 import type {
   ObserverSelection,
@@ -671,6 +678,188 @@ describe("ObserverShellRuntime", () => {
     runtime.dispose();
   });
 
+  it("restores a recorded spatial card in an isolated historical Archive and gates its later stop", async () => {
+    // The currently active Live world has no spatial body. The only authoritative
+    // route comes from this saved recording, which also carries a later
+    // same-cursor checkpoint that must not leak into a rewind at t=10.
+    const live = fakeLiveBundle(frame("live", "run-a", 50), Promise.resolve(), 71);
+    const start = historicalSpatialEntry("spatial_travel_started", 1, 10);
+    const stop = historicalSpatialEntry("spatial_travel_cancelled", 2, 20);
+    const base = historicalSpatialSnapshot("run-a", 0, 0, { x: 20, y: 40 });
+    const futureSameCursor = historicalSpatialSnapshot("run-a", 1, 25, { x: 777, y: 40 });
+    const artifacts: ReplayArtifacts = {
+      runId: "run-a",
+      events: [start, stop],
+      checkpoints: [
+        recordedCheckpoint(base, 1),
+        recordedCheckpoint(futureSameCursor, 2),
+      ],
+      checkpointIndex: [],
+      hasOlderCheckpoints: false,
+      nextCheckpointBefore: null,
+    };
+    const replay = new FakeReplayArtifactClient(artifacts);
+    const clock = createManualPresentationClock();
+    const archiveFactory = vi.fn((input: {
+      window: ReplayPresentationWindow;
+      runSeed: number;
+      recipes: ReadonlyMap<string, RegionMapRecipeV1>;
+      reducedMotion: () => boolean;
+    }): ProductionArchiveObserverSessionBundle => {
+      const session = createLegacyArchivePresentationSessionForTests({
+        window: input.window,
+        clockFactory: () => clock,
+        runtimeFactory: historicalNoopRuntime,
+      });
+      const resources = live.bundle.getResources()!;
+      let disposed = false;
+      return {
+        session,
+        frameAcceptance: {
+          markAccepted: () => undefined,
+          accepts: () => false,
+          clear: () => undefined,
+          dispose: () => undefined,
+        },
+        getPlacementOwner: () => ({} as PlacementGenerationOwner),
+        getResources: () => resources,
+        dispose: ({ sessionAlreadyDisposed } = {}) => {
+          if (disposed) return;
+          disposed = true;
+          if (!sessionAlreadyDisposed) session.dispose();
+        },
+      };
+    });
+    const runtime = createObserverShellRuntime({
+      createLiveBundle: () => live.bundle,
+      createArchiveBundle: archiveFactory,
+      createReplayArtifactClient: () => replay,
+    });
+    await runtime.ready;
+
+    expect(spatialAgent(live.session.getFrame())).toBeUndefined();
+    // The UI can dispatch Pause and a speed change before async replay artifact
+    // loading resolves. This must pause the new archive, not only the Live
+    // session that happened to be selected at click time.
+    const replaying = runtime.replayCursor(1);
+    runtime.setSpeed(2);
+    runtime.pause();
+    expect(await replaying).toBe(true);
+
+    expect(archiveFactory).toHaveBeenCalledOnce();
+    expect(runtime.getSnapshot().frame).toMatchObject({
+      source: "archive",
+      presentedCursor: 1,
+      spatialPlayback: { sampledAt: 10, speed: 2, paused: true },
+    });
+    expect(spatialAgent(runtime.getSnapshot().frame!)).toMatchObject({
+      x: 20,
+      y: 40,
+      travel: { id: "journey-east", destination_id: "east-gate" },
+    });
+    expect(spatialAgent(runtime.getSnapshot().frame!)?.x).not.toBe(777);
+
+    // Paused archive time cannot drain the future recorded stop.
+    clock.advanceBy(60_000);
+    expect(runtime.getSnapshot().frame?.spatialPlayback).toMatchObject({ sampledAt: 10, paused: true });
+    expect(spatialAgent(runtime.getSnapshot().frame!)?.travel).not.toBeNull();
+
+    runtime.resume();
+    clock.advanceBy(4_999);
+    expect(spatialAgent(runtime.getSnapshot().frame!)?.travel).not.toBeNull();
+    clock.advanceBy(1);
+    expect(runtime.getSnapshot().frame).toMatchObject({
+      source: "archive",
+      presentedCursor: 2,
+      spatialPlayback: { sampledAt: 20, speed: 2, paused: false },
+    });
+    expect(spatialAgent(runtime.getSnapshot().frame!)).toMatchObject({
+      x: 120,
+      y: 40,
+      travel: null,
+    });
+
+    // Go Live must rebind the selected stage to the real current world rather
+    // than merely moving the Chronicle playhead inside the archive.
+    runtime.returnToLive();
+    expect(runtime.getSnapshot().frame).toBe(live.session.getFrame());
+    expect(runtime.getSnapshot().frame?.source).toBe("live");
+    runtime.dispose();
+  });
+
+  it("honors the latest historical card and ignores a slow card after Return to Live", async () => {
+    const start = historicalSpatialEntry("spatial_travel_started", 1, 10);
+    const stop = historicalSpatialEntry("spatial_travel_cancelled", 2, 20);
+    const base = historicalSpatialSnapshot("run-a", 0, 0, { x: 20, y: 40 });
+    const artifacts: ReplayArtifacts = {
+      runId: "run-a",
+      events: [start, stop],
+      checkpoints: [recordedCheckpoint(base, 1)],
+      checkpointIndex: [],
+      hasOlderCheckpoints: false,
+      nextCheckpointBefore: null,
+    };
+    const live = fakeLiveBundle(frame("live", "run-a", 50), Promise.resolve(), 71);
+    const firstFetch = deferred<ReplayArtifacts>();
+    const replay = new FakeReplayArtifactClient(artifacts);
+    replay.fetchForRun
+      .mockReset()
+      .mockReturnValueOnce(firstFetch.promise)
+      .mockResolvedValueOnce(artifacts);
+    const archiveFactory = vi.fn((input: {
+      window: ReplayPresentationWindow;
+      runSeed: number;
+      recipes: ReadonlyMap<string, RegionMapRecipeV1>;
+      reducedMotion: () => boolean;
+    }) => fakeArchiveBundle({
+      ...frame("archive", "run-a", input.window.lastCursor),
+      sourceKey: input.window.sourceKey,
+    }, Promise.resolve()).bundle);
+    const runtime = createObserverShellRuntime({
+      createLiveBundle: () => live.bundle,
+      createArchiveBundle: archiveFactory,
+      createReplayArtifactClient: () => replay,
+    });
+    await runtime.ready;
+
+    const staleFirstCard = runtime.replayCursor(1);
+    const newestCard = runtime.replayCursor(2);
+    expect(await newestCard).toBe(true);
+    firstFetch.resolve(artifacts);
+    // `true` means handled: the stale click must not fall through to focus its
+    // old moment after the newer card took ownership of the world.
+    expect(await staleFirstCard).toBe(true);
+    expect(runtime.getSnapshot().frame).toMatchObject({
+      source: "archive",
+      sourceKey: "archive:run-a:line-1:replay-0-2",
+      presentedCursor: 2,
+    });
+    expect(archiveFactory).toHaveBeenCalledOnce();
+    runtime.dispose();
+
+    const returnLive = fakeLiveBundle(frame("live", "run-a", 50), Promise.resolve(), 71);
+    const returnFetch = deferred<ReplayArtifacts>();
+    const returnReplay = new FakeReplayArtifactClient(artifacts);
+    returnReplay.fetchForRun.mockReset().mockReturnValueOnce(returnFetch.promise);
+    const returnArchiveFactory = vi.fn();
+    const returnRuntime = createObserverShellRuntime({
+      createLiveBundle: () => returnLive.bundle,
+      createArchiveBundle: returnArchiveFactory,
+      createReplayArtifactClient: () => returnReplay,
+    });
+    await returnRuntime.ready;
+
+    const staleAfterReturn = returnRuntime.replayCursor(1);
+    // There is no archive yet, but this is still a new navigation intent.
+    returnRuntime.returnToLive();
+    returnFetch.resolve(artifacts);
+    expect(await staleAfterReturn).toBe(true);
+    expect(returnRuntime.getSnapshot().frame).toBe(returnLive.session.getFrame());
+    expect(returnRuntime.getSnapshot().frame?.source).toBe("live");
+    expect(returnArchiveFactory).not.toHaveBeenCalled();
+    returnRuntime.dispose();
+  });
+
   it("loads a bounded sanitized Archive catalogue without exposing replay artifacts", async () => {
     const live = fakeLiveBundle(frame("live", "run-a", 4), Promise.resolve(), 71);
     const replay = new FakeReplayArtifactClient(replayArtifacts("run-a", 4, true));
@@ -1070,11 +1259,14 @@ describe("ObserverShellRuntime", () => {
 });
 
 class FakeSession implements PresentationSession {
+  private paused = false;
+  private speed: 0.5 | 1 | 1.5 | 2 = 1;
+  private held = false;
   readonly controlsValue: PresentationControls = {
-    pause: vi.fn(),
-    resume: vi.fn(),
-    setSpeed: vi.fn(),
-    holdCurrentMoment: vi.fn(),
+    pause: vi.fn(() => { this.paused = true; }),
+    resume: vi.fn(() => { this.paused = false; }),
+    setSpeed: vi.fn((speed: 0.5 | 1 | 1.5 | 2) => { this.speed = speed; }),
+    holdCurrentMoment: vi.fn((hold: boolean) => { this.held = hold; }),
     viewMoment: vi.fn(),
     viewCursor: vi.fn(),
   };
@@ -1122,9 +1314,9 @@ class FakeSession implements PresentationSession {
   diagnostics(): ReturnType<PresentationSession["diagnostics"]> {
     return {
       disposed: false,
-      paused: false,
-      speed: 1,
-      held: false,
+      paused: this.paused,
+      speed: this.speed,
+      held: this.held,
       hidden: false,
       recovery: { status: "idle" },
       lastCompletedRecovery: null,
@@ -1290,6 +1482,138 @@ function archiveWindow(runId: string, cursor: number) {
     snapshot: makeWorld({ run_id: runId, event_cursor: cursor }),
     entries: [],
   } as const;
+}
+
+function historicalSpatialSnapshot(
+  runId: string,
+  eventCursor: number,
+  worldTime: number,
+  position: Readonly<{ x: number; y: number }>,
+): WorldSnapshot {
+  const base = makeWorld({ run_id: runId, event_cursor: eventCursor, world_time: worldTime });
+  return {
+    ...base,
+    agents: [{
+      ...base.agents[0]!,
+      position: "nirvana",
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        ...position,
+        observed_at: worldTime,
+        at_landmark: null,
+        travel: null,
+      },
+    }],
+    regions: [{
+      ...base.regions[0]!,
+      name: "nirvana",
+      connections: [],
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        tile_size: 32,
+        landmarks: [{ id: "east-gate", name: "East Gate", x: 120, y: 40, affordances: ["travel"] }],
+        initial_pressure: { populationHighWater: 1, builtFootprintHighWater: 0 },
+      },
+    }],
+    homes: [],
+    ruins: [],
+    region_pressure: [{ region: "nirvana", population_high_water: 1, built_footprint_high_water: 0 }],
+    pending_proposals: [],
+  };
+}
+
+function historicalSpatialEntry(
+  type: "spatial_travel_started" | "spatial_travel_cancelled",
+  cursor: number,
+  timestamp: number,
+): EventEnvelopeEntry {
+  const traveling = type === "spatial_travel_started";
+  const position = traveling ? { x: 20, y: 40 } : { x: 120, y: 40 };
+  const route = [{ x: 20, y: 40 }, { x: 120, y: 40 }];
+  return {
+    cursor,
+    event: {
+      type,
+      source: "agent_001",
+      scope: "local",
+      region: "nirvana",
+      target: null,
+      timestamp,
+      payload: {
+        message: "Aster follows the east path.",
+        agent_id: "agent_001",
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        travel_id: "journey-east",
+        destination_id: "east-gate",
+        route,
+        started_at: 10,
+        arrives_at: 20,
+        position,
+        spatial: {
+          version: 1,
+          region_id: "nirvana",
+          map_id: "nirvana:test-layout",
+          layout_fingerprint: "test-layout",
+          ...position,
+          observed_at: timestamp,
+          at_landmark: traveling ? null : "east-gate",
+          travel: traveling ? {
+            id: "journey-east",
+            destination_id: "east-gate",
+            route,
+            started_at: 10,
+            arrives_at: 20,
+          } : null,
+        },
+        ...(traveling ? {} : { reason: "stopped" }),
+      },
+    },
+    resolved: { actor_id: "agent_001", region: "nirvana" },
+    snapshot_after: null,
+  };
+}
+
+function recordedCheckpoint(
+  snapshot: WorldSnapshot,
+  lineNumber: number,
+): ReplayArtifacts["checkpoints"][number] {
+  return {
+    schema: 1,
+    type: "world_snapshot_checkpoint",
+    reason: "recorded snapshot",
+    run_id: snapshot.run_id,
+    world_time: snapshot.world_time,
+    event_cursor: snapshot.event_cursor,
+    snapshot,
+    lineNumber,
+  };
+}
+
+function spatialAgent(frame: PresentedObserverFrame) {
+  return frame.world.agents.find((agent) => agent.value.id === "agent_001")?.value.spatial;
+}
+
+function historicalNoopRuntime(): SceneRuntimePort {
+  let token = 0;
+  return {
+    start: () => {
+      token += 1;
+      return token;
+    },
+    advance: () => [],
+    acknowledgePublishedConsequence: () => undefined,
+    requestSafeCancel: () => undefined,
+    nextDeadlineMs: () => null,
+    dispose: () => undefined,
+  };
 }
 
 function deferred<T>() {

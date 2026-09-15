@@ -36,6 +36,13 @@ DEFAULT_SNAPSHOT_CHECKPOINT_EVENT_TYPES: frozenset[str] = frozenset(
         "home_thieved",
         "home_colonized",
         "ruins_scavenged",
+        # Spatial travel changes are durable boundaries: reconnecting observers and
+        # replay readers need the exact route or stopped coordinate immediately,
+        # not only at the next five-second ecology heartbeat.
+        "spatial_travel_started",
+        "spatial_travel_cancelled",
+        "spatial_travel_arrived",
+        "agent_entered_region",
     }
 )
 

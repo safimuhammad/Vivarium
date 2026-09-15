@@ -70,6 +70,7 @@ import {
   type ProductionStaticScenePlan,
   type ProductionStaticScenePreparation,
 } from "../staticScene/ProductionStaticScene";
+import { createGroundingAccentOperation } from "../staticScene/StaticPainterAccents";
 import {
   createNirvanaWestAtlasAssets,
   requireNirvanaWestFrame,
@@ -146,6 +147,7 @@ interface SortableDraw {
   readonly operation: ProductionStaticDrawOperation;
   readonly pivotX: number;
   readonly pivotY: number;
+  readonly sortPriority: number;
   readonly stableId: string;
 }
 
@@ -292,6 +294,21 @@ function* nirvanaWestPaintOperations(
     const worldX = footX - frame.pivot.x;
     const worldY = footY - frame.pivot.y;
     const stableId = `authored:${placement.id}`;
+    if (isGroundingAccentScenery(frame.id)) {
+      const accent = createGroundingAccentOperation(
+        `grounding:${stableId}`,
+        frame,
+        footX,
+        footY,
+      );
+      sorted.push({
+        operation: accent,
+        pivotX: footX,
+        pivotY: footY,
+        sortPriority: 0,
+        stableId: accent.stableId,
+      });
+    }
     sorted.push({
       operation: frameOperation(
         stableId,
@@ -305,6 +322,7 @@ function* nirvanaWestPaintOperations(
       ),
       pivotX: footX,
       pivotY: footY,
+      sortPriority: 1,
       stableId,
     });
   }
@@ -314,6 +332,21 @@ function* nirvanaWestPaintOperations(
     if (isEmberwispFrame(prop.frameId)) continue;
     const frame = requireNirvanaWestFrame(assets, prop.frameId);
     const stableId = `prop:${prop.id}`;
+    if (isGroundingAccentScenery(prop.frameId)) {
+      const accent = createGroundingAccentOperation(
+        `grounding:${stableId}`,
+        frame,
+        prop.footX,
+        prop.footY,
+      );
+      sorted.push({
+        operation: accent,
+        pivotX: prop.footX,
+        pivotY: prop.footY,
+        sortPriority: 0,
+        stableId: accent.stableId,
+      });
+    }
     sorted.push({
       operation: frameOperation(
         stableId,
@@ -327,6 +360,7 @@ function* nirvanaWestPaintOperations(
       ),
       pivotX: prop.footX,
       pivotY: prop.footY,
+      sortPriority: 1,
       stableId,
     });
   }
@@ -334,6 +368,7 @@ function* nirvanaWestPaintOperations(
   sorted.sort((left, right) => (
     left.pivotY - right.pivotY
     || left.pivotX - right.pivotX
+    || left.sortPriority - right.sortPriority
     || left.stableId.localeCompare(right.stableId)
   ));
   for (const { operation } of sorted) yield operation;
@@ -369,6 +404,28 @@ function* nirvanaWestPaintOperations(
       );
     }
   }
+}
+
+/** Existing large/structural West frames that benefit from a small grounded edge. */
+function isGroundingAccentScenery(frameId: string): boolean {
+  return [
+    "s.snag.",
+    "s.snagtall.",
+    "s.snagfallen.",
+    "s.stump.",
+    "s.slagrock.",
+    "s.slabtilt.",
+    "s.causeway.",
+    "s.coolingtower.",
+    "s.reactorhusk.",
+    "s.gantry.",
+    "s.stack.",
+    "s.powerhall.",
+    "s.tankfarm.",
+    "s.tailings.",
+    "s.pipeline.",
+    "s.fence.",
+  ].some((prefix) => frameId.startsWith(prefix));
 }
 
 function continuationVariant(column: number, row: number): number {

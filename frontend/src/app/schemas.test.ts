@@ -54,6 +54,94 @@ describe("parseRunMetadata", () => {
 });
 
 describe("parseWorldSnapshot", () => {
+  it("keeps a fully specified Nirvana spatial pilot while old fixtures remain spatially absent", () => {
+    const legacy = parseWorldSnapshot(makeWorld());
+    expect(legacy.agents.every((agent) => agent.spatial === undefined)).toBe(true);
+    expect(legacy.regions.every((region) => region.spatial === undefined)).toBe(true);
+
+    const input = spatialNirvanaWorld();
+    const parsed = parseWorldSnapshot(input);
+
+    expect(parsed.regions[0]?.spatial).toMatchObject({
+      map_id: "nirvana:pilot-layout",
+      layout_fingerprint: "pilot-layout",
+      initial_pressure: { populationHighWater: 2, builtFootprintHighWater: 1 },
+    });
+    expect(parsed.agents[0]?.spatial).toMatchObject({
+      x: 16,
+      y: 48,
+      travel: { id: "travel-1", destination_id: "quiet-spring" },
+    });
+    expect(parsed.homes[0]?.spatial).toEqual({
+      version: 1,
+      region_id: "nirvana",
+      map_id: "nirvana:pilot-layout",
+      plot_id: "district-0-plot-1",
+      x: 48,
+      y: 80,
+      door: { x: 48, y: 112 },
+    });
+  });
+
+  it("accepts each v1 spatial shape for another region only when its map identity is exact", () => {
+    const input = spatialNirvanaWorld();
+    const region = (input.regions as Record<string, unknown>[])[0]!;
+    const agent = (input.agents as Record<string, unknown>[])[0]!;
+    const home = (input.homes as Record<string, unknown>[])[0]!;
+    region.name = "warm_springs";
+    (region.spatial as Record<string, unknown>).region_id = "warm_springs";
+    (region.spatial as Record<string, unknown>).map_id = "warm_springs:pilot-layout";
+    agent.position = "warm_springs";
+    (agent.spatial as Record<string, unknown>).region_id = "warm_springs";
+    (agent.spatial as Record<string, unknown>).map_id = "warm_springs:pilot-layout";
+    const travel = (agent.spatial as Record<string, unknown>).travel as Record<string, unknown>;
+    travel.id = "warm_springs:agent_001:travel:7";
+    travel.destination_region = "nirvana";
+    home.region = "warm_springs";
+    (home.spatial as Record<string, unknown>).region_id = "warm_springs";
+    (home.spatial as Record<string, unknown>).map_id = "warm_springs:pilot-layout";
+    ((input.region_pressure as Record<string, unknown>[])[0]!).region = "warm_springs";
+
+    expect(parseWorldSnapshot(input)).toMatchObject({
+      regions: [{ name: "warm_springs", spatial: { region_id: "warm_springs", map_id: "warm_springs:pilot-layout" } }],
+      agents: [{ position: "warm_springs", spatial: { region_id: "warm_springs", map_id: "warm_springs:pilot-layout", travel: { id: "warm_springs:agent_001:travel:7", destination_region: "nirvana" } } }],
+      homes: [{ region: "warm_springs", spatial: { region_id: "warm_springs", map_id: "warm_springs:pilot-layout" } }],
+    });
+
+    (agent.spatial as Record<string, unknown>).map_id = "nirvana:pilot-layout";
+    expect(() => parseWorldSnapshot(input)).toThrow(/matching current region/);
+  });
+
+  it.each([
+    ["a missing route", (world: Record<string, unknown>) => {
+      const agent = (world.agents as Record<string, unknown>[])[0]!;
+      (agent.spatial as Record<string, unknown>).travel = {
+        ...(agent.spatial as Record<string, unknown>).travel as Record<string, unknown>,
+        route: [],
+      };
+    }],
+    ["an unknown landmark", (world: Record<string, unknown>) => {
+      const agent = (world.agents as Record<string, unknown>[])[0]!;
+      (agent.spatial as Record<string, unknown>).at_landmark = "invented-place";
+    }],
+    ["a forged map identity", (world: Record<string, unknown>) => {
+      const region = (world.regions as Record<string, unknown>[])[0]!;
+      (region.spatial as Record<string, unknown>).map_id = "nirvana:forged";
+    }],
+    ["a duplicate reserved home plot", (world: Record<string, unknown>) => {
+      const home = (world.homes as Record<string, unknown>[])[0]!;
+      (world.ruins as Record<string, unknown>[]).push({
+        ...structuredClone(home),
+        home_id: "ruined-copy",
+        status: "ruin",
+      });
+    }],
+  ])("rejects malformed spatial truth: %s", (_label, mutate) => {
+    const malformed = spatialNirvanaWorld();
+    mutate(malformed);
+    expect(() => parseWorldSnapshot(malformed)).toThrow(/spatial/);
+  });
+
   it("derives deterministic pressure for legacy snapshots from exact current records", () => {
     const { region_pressure: _omitted, ...legacy } = makeWorld();
 
@@ -174,6 +262,78 @@ describe("parseWorldSnapshot", () => {
     );
   });
 });
+
+function spatialNirvanaWorld(): Record<string, unknown> {
+  const base = structuredClone(makeWorld()) as unknown as Record<string, unknown>;
+  base.region_pressure = [{
+    region: "nirvana",
+    population_high_water: 2,
+    built_footprint_high_water: 1,
+  }];
+  base.regions = [{
+    name: "nirvana",
+    description: "The first map-backed region.",
+    connections: [],
+    energy_rate: 1,
+    materials_rate: 1,
+    current_energy: 10,
+    current_materials: 10,
+    max_energy: 20,
+    max_materials: 20,
+    spatial: {
+      version: 1,
+      region_id: "nirvana",
+      map_id: "nirvana:pilot-layout",
+      layout_fingerprint: "pilot-layout",
+      tile_size: 32,
+      landmarks: [{
+        id: "quiet-spring",
+        name: "Quiet Spring",
+        x: 144,
+        y: 48,
+        affordances: ["energy"],
+      }],
+      initial_pressure: { populationHighWater: 2, builtFootprintHighWater: 1 },
+    },
+  }];
+  base.agents = [{
+    ...(base.agents as Record<string, unknown>[])[0],
+    position: "nirvana",
+    spatial: {
+      version: 1,
+      region_id: "nirvana",
+      map_id: "nirvana:pilot-layout",
+      layout_fingerprint: "pilot-layout",
+      x: 16,
+      y: 48,
+      observed_at: 10,
+      at_landmark: null,
+      travel: {
+        id: "travel-1",
+        destination_id: "quiet-spring",
+        route: [{ x: 16, y: 48 }, { x: 144, y: 48 }],
+        started_at: 10,
+        arrives_at: 20,
+      },
+    },
+  }];
+  base.homes = [{
+    ...(base.homes as Record<string, unknown>[])[0],
+    region: "nirvana",
+    spatial: {
+      version: 1,
+      region_id: "nirvana",
+      map_id: "nirvana:pilot-layout",
+      plot_id: "district-0-plot-1",
+      x: 48,
+      y: 80,
+      door: { x: 48, y: 112 },
+    },
+  }];
+  base.ruins = [];
+  base.pending_proposals = [];
+  return base;
+}
 
 /**
  * A being's persona is now published only when it differs from the run's own

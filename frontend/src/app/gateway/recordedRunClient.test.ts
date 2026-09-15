@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { EventStreamHandlers, LiveApiClient } from "../client";
 import type { RunMetadata, WorldSnapshot } from "../schemas";
 import {
+  createRecordedCheckpointFeed,
+  createRecordedCheckpointFeedHub,
+  createRecordedReplayArtifactClient,
   createRecordedRunBridge,
   createRecordedRunDriver,
   fetchRecordedRun,
@@ -139,13 +142,13 @@ describe("resolveEventHints", () => {
 });
 
 describe("loadRecordedRun", () => {
-  it("sorts events into cursor order and computes offsets relative to the first event", () => {
+  it("sorts events into cursor order and computes offsets from the initial checkpoint", () => {
     const eventsText = [
       eventLine({ timestamp: 102, type: "second" }),
       eventLine({ timestamp: 100, type: "first" }),
       eventLine({ timestamp: 100.5, type: "middle" }),
     ].join("\n");
-    const snapshotsText = snapshotLine();
+    const snapshotsText = snapshotLine({ eventCursor: 0, worldTime: 100 });
 
     const recording = loadRecordedRun({ runId: "label-only", eventsText, snapshotsText });
 
@@ -157,6 +160,19 @@ describe("loadRecordedRun", () => {
     expect(recording.entries.map((entry) => entry.cursor)).toEqual([1, 2, 3]);
     expect(recording.entries.map((entry) => entry.offsetMs)).toEqual([0, 500, 2_000]);
     expect(recording.spanMs).toBe(2_000);
+  });
+
+  it("keeps playback open through a terminal checkpoint after the last event", () => {
+    const recording = loadRecordedRun({
+      runId: "terminal-tail",
+      eventsText: eventLine({ timestamp: 100 }),
+      snapshotsText: [
+        snapshotLine({ eventCursor: 1, worldTime: 100 }),
+        snapshotLine({ eventCursor: 1, worldTime: 120 }),
+      ].join("\n"),
+    });
+
+    expect(recording.spanMs).toBe(20_000);
   });
 
   it("ignores blank lines between events", () => {
@@ -204,12 +220,32 @@ describe("loadRecordedRun", () => {
     expect(recording.entries[0]?.snapshot_after).toBeNull();
   });
 
-  it("throws a clear error for a recording with no events", () => {
-    expect(() => loadRecordedRun({
+  it("accepts a checkpoint-only recording", () => {
+    const recording = loadRecordedRun({
       runId: "empty-run",
       eventsText: "",
-      snapshotsText: snapshotLine(),
-    })).toThrow(/empty-run/);
+      snapshotsText: [
+        snapshotLine({ eventCursor: 0, worldTime: 1_000 }),
+        snapshotLine({ eventCursor: 0, worldTime: 1_100 }),
+      ].join("\n"),
+    });
+
+    expect(recording.entries).toEqual([]);
+    expect(recording.spanMs).toBe(100_000);
+  });
+
+  it("preserves each checkpoint's recorded reason", () => {
+    const terminal = JSON.parse(snapshotLine({ eventCursor: 0, worldTime: 1_000 })) as {
+      reason: string;
+    };
+    terminal.reason = "simulation_stopped";
+    const recording = loadRecordedRun({
+      runId: "terminal-reason",
+      eventsText: "",
+      snapshotsText: JSON.stringify(terminal),
+    });
+
+    expect(recording.checkpoints[0]?.reason).toBe("simulation_stopped");
   });
 
   it("throws a clear error for a recording with no snapshots", () => {
@@ -243,6 +279,37 @@ describe("loadRecordedRun", () => {
       expect(at0.event_cursor).toBe(0);
     });
 
+    it("does not borrow a later same-cursor checkpoint for an earlier event time", () => {
+      const initial = JSON.parse(snapshotLine({ eventCursor: 1, worldTime: 100 })) as Record<string, unknown>;
+      const later = JSON.parse(snapshotLine({ eventCursor: 1, worldTime: 130 })) as {
+        snapshot: WorldSnapshot;
+      };
+      later.snapshot.agents.push({
+        id: "future-agent",
+        name: "Future agent",
+        persona: "",
+        position: "warm_springs",
+        energy: 99,
+        materials: 99,
+        status: "alive",
+        last_mated_at: null,
+        offspring_count: 0,
+        died_at: null,
+        home_id: null,
+        is_hoarding: false,
+      });
+      const recording = loadRecordedRun({
+        runId: "same-cursor",
+        eventsText: eventLine({ timestamp: 100 }),
+        snapshotsText: [JSON.stringify(initial), JSON.stringify(later)].join("\n"),
+      });
+
+      const at110 = recording.snapshotAt(1, 110);
+
+      expect(at110.world_time).toBe(110);
+      expect(at110.agents).toEqual([]);
+    });
+
     it("returns defensive clones that do not alias the source snapshots", () => {
       const recording = loadRecordedRun({
         runId: "label",
@@ -267,6 +334,207 @@ describe("loadRecordedRun", () => {
       const second = recording.snapshotAt(0, 1_000);
       expect(second.agents).toHaveLength(0);
     });
+  });
+});
+
+describe("createRecordedReplayArtifactClient", () => {
+  it("serves exact recording-owned checkpoints and rejects an unrelated active run", async () => {
+    const recording = loadRecordedRun({
+      runId: "saved-route",
+      eventsText: [
+        eventLine({ type: "spatial_travel_started", timestamp: 100 }),
+        eventLine({ type: "spatial_travel_cancelled", timestamp: 110 }),
+      ].join("\n"),
+      snapshotsText: [
+        snapshotLine({ runId: "saved-route", eventCursor: 0, worldTime: 90 }),
+        // Same cursor as the first travel event, but captured later. A replay
+        // builder must inspect this real time, never `snapshotAt`'s restamp.
+        snapshotLine({ runId: "saved-route", eventCursor: 1, worldTime: 125 }),
+      ].join("\n"),
+    });
+    const client = createRecordedReplayArtifactClient(recording);
+    expect(client).not.toBeNull();
+
+    const artifacts = await client!.fetchForRun("saved-route");
+    expect(artifacts.runId).toBe("saved-route");
+    expect(artifacts.events.map((entry) => entry.cursor)).toEqual([1, 2]);
+    expect(artifacts.checkpoints.map((checkpoint) => ({
+      cursor: checkpoint.event_cursor,
+      time: checkpoint.world_time,
+      snapshotTime: checkpoint.snapshot.world_time,
+    }))).toEqual([
+      { cursor: 0, time: 90, snapshotTime: 90 },
+      { cursor: 1, time: 125, snapshotTime: 125 },
+    ]);
+    expect(recording.snapshotAt(1, 100).world_time).toBe(100);
+    await expect(client!.fetchForRun("different-active-run")).rejects.toThrow(/saved-route/);
+  });
+});
+
+describe("createRecordedCheckpointFeed", () => {
+  it("delivers exact trailing checkpoints only when their recorded time is reached", () => {
+    const terminal = JSON.parse(snapshotLine({ eventCursor: 1, worldTime: 120 })) as {
+      reason: string;
+      snapshot: WorldSnapshot;
+    };
+    terminal.reason = "simulation_stopped";
+    terminal.snapshot.agents.push({
+      id: "terminal-agent",
+      name: "Terminal agent",
+      persona: "",
+      position: "warm_springs",
+      energy: 73,
+      materials: 41,
+      status: "alive",
+      last_mated_at: null,
+      offspring_count: 0,
+      died_at: null,
+      home_id: null,
+      is_hoarding: false,
+    });
+    const recording = loadRecordedRun({
+      runId: "checkpoint-timeline",
+      eventsText: eventLine({ timestamp: 100 }),
+      snapshotsText: [
+        snapshotLine({ eventCursor: 1, worldTime: 100 }),
+        snapshotLine({ eventCursor: 1, worldTime: 105 }),
+        JSON.stringify(terminal),
+      ].join("\n"),
+    });
+    const feed = createRecordedCheckpointFeed(recording);
+    const received: Array<{
+      line: number;
+      time: number;
+      reason: string;
+      safety: string;
+      energy: number | undefined;
+    }> = [];
+    feed.subscribe((record) => received.push({
+      line: record.line,
+      time: record.checkpoint.world_time,
+      reason: record.checkpoint.reason,
+      safety: record.safety,
+      energy: record.checkpoint.snapshot.agents[0]?.energy,
+    }));
+    feed.start({ runId: recording.runId, sourceKey: "recorded:checkpoint-timeline" });
+
+    feed.advanceTo(104.999);
+    expect(received).toEqual([]);
+
+    feed.advanceTo(105);
+    expect(received).toEqual([{
+      line: 2,
+      time: 105,
+      reason: "world_tick",
+      safety: "safe-world-tick",
+      energy: undefined,
+    }]);
+
+    feed.advanceTo(120);
+    expect(received).toEqual([
+      {
+        line: 2,
+        time: 105,
+        reason: "world_tick",
+        safety: "safe-world-tick",
+        energy: undefined,
+      },
+      {
+        line: 3,
+        time: 120,
+        reason: "simulation_stopped",
+        safety: "safe-world-tick",
+        energy: 73,
+      },
+    ]);
+  });
+
+  it("catches up a terminal checkpoint when the observer subscribes after playback starts", () => {
+    const terminal = JSON.parse(snapshotLine({ eventCursor: 0, worldTime: 120 })) as {
+      reason: string;
+    };
+    terminal.reason = "run_stopped";
+    const recording = loadRecordedRun({
+      runId: "late-subscriber",
+      eventsText: "",
+      snapshotsText: [
+        snapshotLine({ eventCursor: 0, worldTime: 100 }),
+        JSON.stringify(terminal),
+      ].join("\n"),
+    });
+    const feed = createRecordedCheckpointFeed(recording);
+    const received: Array<{ time: number; reason: string; safety: string }> = [];
+    feed.subscribe((record) => received.push({
+      time: record.checkpoint.world_time,
+      reason: record.checkpoint.reason,
+      safety: record.safety,
+    }));
+
+    feed.advanceTo(120);
+    feed.start({ runId: recording.runId, sourceKey: "recorded:late-subscriber" });
+
+    expect(received).toEqual([{
+      time: 120,
+      reason: "run_stopped",
+      safety: "safe-world-tick",
+    }]);
+  });
+
+  it("keeps unrelated manual checkpoints outside the live-safe channel", () => {
+    const terminal = JSON.parse(snapshotLine({ eventCursor: 0, worldTime: 120 })) as {
+      reason: string;
+    };
+    terminal.reason = "manual_capture";
+    const recording = loadRecordedRun({
+      runId: "manual-checkpoint",
+      eventsText: "",
+      snapshotsText: [
+        snapshotLine({ eventCursor: 0, worldTime: 100 }),
+        JSON.stringify(terminal),
+      ].join("\n"),
+    });
+    const feed = createRecordedCheckpointFeed(recording);
+    const received: Array<{ reason: string; safety: string }> = [];
+    feed.subscribe((record) => received.push({
+      reason: record.checkpoint.reason,
+      safety: record.safety,
+    }));
+    feed.start({ runId: recording.runId, sourceKey: "recorded:manual-checkpoint" });
+    feed.advanceTo(120);
+
+    expect(received).toEqual([{ reason: "manual_capture", safety: "archive-manual" }]);
+  });
+});
+
+describe("createRecordedCheckpointFeedHub", () => {
+  it("gives a remounted session a fresh feed caught up to the recorded timeline", () => {
+    const terminal = JSON.parse(snapshotLine({ eventCursor: 0, worldTime: 120 })) as {
+      reason: string;
+    };
+    terminal.reason = "run_stopped";
+    const recording = loadRecordedRun({
+      runId: "strict-mode-remount",
+      eventsText: "",
+      snapshotsText: [
+        snapshotLine({ eventCursor: 0, worldTime: 100 }),
+        JSON.stringify(terminal),
+      ].join("\n"),
+    });
+    const hub = createRecordedCheckpointFeedHub(recording);
+    const probe = hub.createFeed();
+    probe.start({ runId: recording.runId, sourceKey: "recorded:strict-mode-remount" });
+    probe.dispose();
+
+    hub.advanceTo(120);
+    const survivor = hub.createFeed();
+    const received: number[] = [];
+    survivor.subscribe((record) => received.push(record.checkpoint.world_time));
+    survivor.start({ runId: recording.runId, sourceKey: "recorded:strict-mode-remount" });
+
+    expect(probe.diagnostics().disposed).toBe(true);
+    expect(survivor.diagnostics().disposed).toBe(false);
+    expect(received).toEqual([120]);
+    hub.dispose();
   });
 });
 
@@ -454,6 +722,7 @@ describe("createRecordedRunDriver", () => {
     return {
       runId: "seed-abc",
       entries,
+      checkpoints: [],
       firstSnapshot: snapshotFixture(),
       run: {
         schema: 1,
@@ -472,6 +741,7 @@ describe("createRecordedRunDriver", () => {
         timing: {},
         artifacts: { events: "recorded", usage: "recorded", snapshots: "recorded", memory_root: "recorded" },
       },
+      endWorldTime: last?.event.timestamp ?? 0,
       spanMs: last === undefined ? 0 : last.offsetMs,
       snapshotAt(cursor: number, worldTime: number): WorldSnapshot {
         snapshotAtCalls.push({ cursor, worldTime });
@@ -588,6 +858,75 @@ describe("createRecordedRunDriver", () => {
     expect(setSnapshotCalls).toHaveLength(1);
     expect(setSnapshotCalls[0]?.event_cursor).toBe(2);
     expect(recording.snapshotAtCalls).toEqual([{ cursor: 2, worldTime: entry(2, 50).event.timestamp }]);
+  });
+
+  it("does not replay evidence already represented by the initial checkpoint", () => {
+    const recording = loadRecordedRun({
+      runId: "bootstrap-cursor",
+      eventsText: [
+        eventLine({ timestamp: 100, type: "simulation_started" }),
+        eventLine({ timestamp: 105, type: "self_talk" }),
+      ].join("\n"),
+      snapshotsText: [
+        snapshotLine({ eventCursor: 1, worldTime: 100 }),
+        snapshotLine({ eventCursor: 2, worldTime: 105 }),
+      ].join("\n"),
+    });
+    const { bridge, dispatchCalls } = fakeBridge();
+    const fake = fakePlatform();
+    const driver = createRecordedRunDriver({ recording, bridge, scheduler: fake.platform });
+
+    driver.start();
+    fake.setNow(5_000);
+    fake.fireScheduled();
+
+    expect(dispatchCalls).toHaveLength(1);
+    expect((dispatchCalls[0] as { events: Array<{ cursor: number }> }).events.map(({ cursor }) => cursor)).toEqual([2]);
+  });
+
+  it("drives a trailing terminal checkpoint and completes at its original world time", () => {
+    const terminal = JSON.parse(snapshotLine({ eventCursor: 1, worldTime: 120 })) as {
+      reason: string;
+    };
+    terminal.reason = "simulation_stopped";
+    const recording = loadRecordedRun({
+      runId: "terminal-driver",
+      eventsText: eventLine({ timestamp: 100 }),
+      snapshotsText: [
+        snapshotLine({ eventCursor: 1, worldTime: 100 }),
+        JSON.stringify(terminal),
+      ].join("\n"),
+    });
+    const feed = createRecordedCheckpointFeed(recording);
+    const deliveredCheckpoints: Array<{ time: number; reason: string; safety: string }> = [];
+    feed.subscribe((record) => deliveredCheckpoints.push({
+      time: record.checkpoint.world_time,
+      reason: record.checkpoint.reason,
+      safety: record.safety,
+    }));
+    feed.start({ runId: recording.runId, sourceKey: "recorded:terminal-driver" });
+    const { bridge } = fakeBridge();
+    const fake = fakePlatform();
+    const onComplete = vi.fn();
+    const driver = createRecordedRunDriver({
+      recording,
+      bridge,
+      checkpointFeed: feed,
+      scheduler: fake.platform,
+      onComplete,
+    });
+
+    driver.start();
+    fake.setNow(20_000);
+    fake.fireScheduled();
+
+    expect(deliveredCheckpoints).toEqual([{
+      time: 120,
+      reason: "simulation_stopped",
+      safety: "safe-world-tick",
+    }]);
+    expect(onComplete).toHaveBeenCalledWith(120);
+    expect(fake.scheduledCount()).toBe(0);
   });
 
   it("stop() cancels a pending timer and start() is idempotent while running", () => {

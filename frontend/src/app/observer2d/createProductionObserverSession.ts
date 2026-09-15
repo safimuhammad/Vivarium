@@ -37,6 +37,7 @@ import {
   createProductionRegionMapRecipe,
   parseProductionRegionMapRecipe,
 } from "../../renderer2d/production/maps/ProductionRegionMapRecipe";
+import { navigationLayoutFingerprint } from "../../renderer2d/production/navigation/SpatialNavigationExport";
 import type {
   NirvanaGrowthPressure,
 } from "../../renderer2d/production/nirvana/NirvanaGrowthPolicy";
@@ -272,10 +273,14 @@ function recordSeed(seeds: Map<string, number>, run: RunMetadata): void {
 }
 
 function recipesFor(seed: number, snapshot: WorldSnapshot): readonly RegionMapRecipeV1[] {
-  return snapshot.regions.map((region) => createProductionRegionMapRecipe(
-    createRegionMapIdentity(seed, region, snapshot.regions),
-    exactNirvanaPressure(snapshot, region.name),
-  ));
+  return snapshot.regions.map((region) => {
+    const recipe = createProductionRegionMapRecipe(
+      createRegionMapIdentity(seed, region, snapshot.regions),
+      exactNirvanaPressure(snapshot, region.name),
+    );
+    assertSpatialRecipeIdentity(region, recipe);
+    return recipe;
+  });
 }
 
 function exactRecipesFor(
@@ -294,20 +299,28 @@ function exactRecipesFor(
     const identity = createRegionMapIdentity(runSeed, region, snapshot.regions);
     try {
       if (region.name !== "nirvana") {
-        return parseProductionRegionMapRecipe(
+        const restored = parseProductionRegionMapRecipe(
           serializeRegionMapRecipe(recipe),
           identity,
         );
+        assertSpatialRecipeIdentity(region, restored);
+        return restored;
       }
       parseProductionRegionMapRecipe(
         serializeRegionMapRecipe(recipe),
         identity,
+        // A supplied Live recipe can be from a later Nirvana growth tier than
+        // this Archive checkpoint. Validate that it is an authentic recipe for
+        // its own persisted geometry first; the archived snapshot below remains
+        // the sole authority for the recipe we recreate and display.
         inferPersistedNirvanaPressure(recipe),
       );
-      return createProductionRegionMapRecipe(
+      const recreated = createProductionRegionMapRecipe(
         identity,
         exactNirvanaPressure(snapshot, region.name),
       );
+      assertSpatialRecipeIdentity(region, recreated);
+      return recreated;
     } catch (error) {
       throw new Error(
         "Archive recipes must belong to the same run seed and snapshot",
@@ -322,6 +335,13 @@ function exactNirvanaPressure(
   regionId: string,
 ): NirvanaGrowthPressure | undefined {
   if (regionId !== "nirvana") return undefined;
+  const spatial = snapshot.regions.find((region) => region.name === regionId)?.spatial;
+  if (spatial !== undefined) {
+    return {
+      populationHighWater: spatial.initial_pressure.populationHighWater,
+      builtFootprintHighWater: spatial.initial_pressure.builtFootprintHighWater,
+    };
+  }
   const supplied = snapshot.region_pressure;
   if (supplied !== undefined) {
     const matches = supplied.filter(({ region }) => region === regionId);
@@ -336,6 +356,27 @@ function exactNirvanaPressure(
     builtFootprintHighWater: [...snapshot.homes, ...snapshot.ruins]
       .filter((home) => home.region === regionId).length,
   };
+}
+
+/**
+ * A spatial snapshot names the exact frozen recipe it was navigated against.
+ * The map cannot be regenerated from a current high-water mark or a visually
+ * similar recipe: either its shared exported hash matches, or setup fails.
+ */
+function assertSpatialRecipeIdentity(
+  region: WorldSnapshot["regions"][number],
+  recipe: RegionMapRecipeV1,
+): void {
+  const spatial = region.spatial;
+  if (spatial === undefined) return;
+  const fingerprint = navigationLayoutFingerprint(recipe);
+  if (
+    spatial.region_id !== recipe.regionId
+    || spatial.layout_fingerprint !== fingerprint
+    || spatial.map_id !== `${recipe.regionId}:${fingerprint}`
+  ) {
+    throw new Error("spatial snapshot map identity does not match the frozen production recipe");
+  }
 }
 
 function toNirvanaGrowthPressure(

@@ -27,6 +27,13 @@ import type {
  */
 export type ProductionHumanActorSnapshot = LayeredHumanSnapshot;
 
+/** One exact feet sample from the backend-owned spatial route clock. */
+export interface AuthoritativeMotionSample {
+  readonly position: Vec2;
+  /** Whether the recorded route is still active at this exact sample time. */
+  readonly traveling: boolean;
+}
+
 /**
  * Scene-graph-facing contract for one human actor instance.
  *
@@ -36,6 +43,15 @@ export type ProductionHumanActorSnapshot = LayeredHumanSnapshot;
  * graph.
  */
 export interface ProductionHumanActor {
+  /**
+   * Adopt backend-authoritative feet without staging a renderer route.
+   *
+   * This is deliberately separate from `stagePosition`: sampling cancels only
+   * presentation locomotion/reposition state and preserves lifecycle status,
+   * expression, held item, and stationary action. Callers use it once per
+   * frame for a spatial being; it never emits arrival or relocation signals.
+   */
+  sampleAuthoritativeMotion(sample: AuthoritativeMotionSample, nowMs: number): void;
   /**
    * Apply one prepared primitive command, mutating internal state and
    * advancing local bookkeeping (e.g. the blink schedule) to `nowMs`.

@@ -4,7 +4,11 @@ import rawC15 from "../../../tests/frontend-app/fixtures/chronicles/data/C15-arc
 import { makeEventEnvelope, makeRun, makeWorld } from "../test/fixtures";
 import type { ReplayArtifacts } from "./replayArtifactClient";
 import { parseSnapshotCheckpoint, type SnapshotCheckpoint } from "./replayArtifacts";
-import { createReplaySession, type ReplaySessionState } from "./replaySession";
+import {
+  createHistoricalReplayPresentationWindow,
+  createReplaySession,
+  type ReplaySessionState,
+} from "./replaySession";
 import type { EventEnvelopeEntry, SerializedEvent, WorldSnapshot } from "./schemas";
 import { createWorldStore } from "./store";
 
@@ -432,6 +436,33 @@ describe("ReplaySession", () => {
     session.reset();
     expect(session.getPresentationWindow()).toBeNull();
   });
+
+  it("builds a spatial card window from the latest checkpoint true at the card time, never a later same-cursor snapshot", () => {
+    const base = spatialReplaySnapshot("spatial-run", 0, 0, 20);
+    const laterSameCursor = spatialReplaySnapshot("spatial-run", 1, 25, 120);
+    const start = spatialReplayEntry("spatial_travel_started", 1, 10);
+    const stop = spatialReplayEntry("spatial_travel_cancelled", 2, 20);
+    const window = createHistoricalReplayPresentationWindow(makeArtifacts({
+      runId: "spatial-run",
+      events: [start, stop],
+      checkpoints: [
+        checkpointRecord(base, "recorded", 1),
+        checkpointRecord(laterSameCursor, "future", 2),
+      ],
+    }), 1);
+
+    expect(window).toMatchObject({
+      sourceKey: "archive:spatial-run:line-1:replay-0-1",
+      checkpointIndex: 0,
+      firstCursor: 0,
+      lastCursor: 1,
+      snapshot: { world_time: 0, event_cursor: 0 },
+      historical: { targetCursor: 1, targetWorldTime: 10 },
+    });
+    expect(window?.entries.map((entry) => entry.cursor)).toEqual([1]);
+    expect(window?.historical?.continuation.map((entry) => entry.cursor)).toEqual([2]);
+    expect(window?.snapshot.agents[0]?.spatial?.x).toBe(20);
+  });
 });
 
 function makeArtifacts(
@@ -497,6 +528,104 @@ function eventEntry(
       timestamp: overrides.timestamp ?? 13,
     },
     resolved,
+    snapshot_after: null,
+  };
+}
+
+function spatialReplaySnapshot(
+  runId: string,
+  eventCursor: number,
+  worldTime: number,
+  x: number,
+): WorldSnapshot {
+  const base = makeWorld({ run_id: runId, event_cursor: eventCursor, world_time: worldTime });
+  return {
+    ...base,
+    agents: [{
+      ...base.agents[0]!,
+      position: "nirvana",
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        x,
+        y: 40,
+        observed_at: worldTime,
+        at_landmark: null,
+        travel: null,
+      },
+    }],
+    regions: [{
+      ...base.regions[0]!,
+      name: "nirvana",
+      connections: [],
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        tile_size: 32,
+        landmarks: [{ id: "east-gate", name: "East Gate", x: 120, y: 40, affordances: ["travel"] }],
+        initial_pressure: { populationHighWater: 1, builtFootprintHighWater: 0 },
+      },
+    }],
+    homes: [],
+    ruins: [],
+    pending_proposals: [],
+    region_pressure: [{ region: "nirvana", population_high_water: 1, built_footprint_high_water: 0 }],
+  };
+}
+
+function spatialReplayEntry(
+  type: "spatial_travel_started" | "spatial_travel_cancelled",
+  cursor: number,
+  timestamp: number,
+): EventEnvelopeEntry {
+  const traveling = type === "spatial_travel_started";
+  const position = traveling ? { x: 20, y: 40 } : { x: 120, y: 40 };
+  const route = [{ x: 20, y: 40 }, { x: 120, y: 40 }];
+  return {
+    cursor,
+    event: {
+      type,
+      source: "agent_001",
+      scope: "local",
+      region: "nirvana",
+      target: null,
+      timestamp,
+      payload: {
+        message: "Aster follows the east path.",
+        agent_id: "agent_001",
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        travel_id: "journey-east",
+        destination_id: "east-gate",
+        route,
+        started_at: 10,
+        arrives_at: 20,
+        position,
+        spatial: {
+          version: 1,
+          region_id: "nirvana",
+          map_id: "nirvana:test-layout",
+          layout_fingerprint: "test-layout",
+          ...position,
+          observed_at: timestamp,
+          at_landmark: traveling ? null : "east-gate",
+          travel: traveling ? {
+            id: "journey-east",
+            destination_id: "east-gate",
+            route,
+            started_at: 10,
+            arrives_at: 20,
+          } : null,
+        },
+        ...(traveling ? {} : { reason: "stopped" }),
+      },
+    },
+    resolved: { actor_id: "agent_001", region: "nirvana" },
     snapshot_after: null,
   };
 }

@@ -236,7 +236,7 @@ function runtimeFixture(
     getSnapshot: vi.fn(() => snapshot),
     diagnostics: vi.fn(() => snapshot.diagnostics),
     select: vi.fn(), pause: vi.fn(), resume: vi.fn(), setSpeed: vi.fn(),
-    holdCurrentMoment: vi.fn(), viewMoment: vi.fn(), viewCursor: vi.fn(), retryRecovery: vi.fn(async () => undefined),
+    holdCurrentMoment: vi.fn(), viewMoment: vi.fn(), viewCursor: vi.fn(), replayCursor: vi.fn(async () => false), retryRecovery: vi.fn(async () => undefined),
     reconnectStream: vi.fn(), setCameraMode: vi.fn(), requestFocus: vi.fn(),
     observeRegion: vi.fn(), openArchiveCatalogue: vi.fn(async () => undefined),
     loadOlderArchive: vi.fn(async () => undefined),

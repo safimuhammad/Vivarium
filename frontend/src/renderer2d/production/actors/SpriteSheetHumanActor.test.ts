@@ -212,6 +212,28 @@ function installTintScratchMock(): { fillStyle: string | null; composite: Global
 }
 
 describe("SpriteSheetHumanActor locomotion", () => {
+  it("samples backend feet without manufacturing a route, arrival, or pose reset", () => {
+    const actor = makeActor();
+    actor.apply({ kind: "play-body", action: "work" }, 0);
+    actor.apply({ kind: "set-face", expression: "talk-1" }, 0);
+
+    actor.sampleAuthoritativeMotion({ position: { x: 48, y: 0 }, traveling: true }, 50);
+    expect(actor.snapshot()).toMatchObject({
+      position: { x: 48, y: 0 },
+      routeActive: true,
+      activeAction: "speaking",
+    });
+    expect(actor.nextDeadlineMs()).toBeGreaterThan(50);
+    expect(actor.advance(0.016, 66).map(({ kind }) => kind)).not.toContain("arrived");
+
+    actor.sampleAuthoritativeMotion({ position: { x: 64, y: 0 }, traveling: false }, 80);
+    expect(actor.snapshot()).toMatchObject({
+      position: { x: 64, y: 0 },
+      routeActive: false,
+      activeAction: "speaking",
+    });
+  });
+
   it("advances stride by distance, not time", () => {
     const actor = makeActor({ position: { x: 0, y: 0 }, facing: "south" });
     // 3 legs of 9px each (stride = 9px/frame); speed = 72px/s chosen so every
@@ -295,6 +317,23 @@ describe("SpriteSheetHumanActor locomotion", () => {
     expect(eastCalls[0]!.destinationY).toBe(-46);
     expect(eastCalls[0]!.destinationWidth).toBe(22);
     expect(eastCalls[0]!.destinationHeight).toBe(48);
+  });
+
+  it.each(characterIds())("uses the shared east-native side-frame mirror polarity for %s", (characterId) => {
+    const rect = beingChibiFrameRect("walk-side-1", characterId);
+    const eastCalls: DrawCall[] = [];
+    makeActor({ characterId, facing: "east" }).draw(recordingContext(eastCalls));
+    expect(eastCalls).toHaveLength(1);
+    expect(eastCalls[0]!.sourceX).toBe(rect.x);
+    expect(eastCalls[0]!.sourceY).toBe(rect.y);
+    expect(eastCalls[0]!.scaleX).toBe(1);
+
+    const westCalls: DrawCall[] = [];
+    makeActor({ characterId, facing: "west" }).draw(recordingContext(westCalls));
+    expect(westCalls).toHaveLength(1);
+    expect(westCalls[0]!.sourceX).toBe(rect.x);
+    expect(westCalls[0]!.sourceY).toBe(rect.y);
+    expect(westCalls[0]!.scaleX).toBe(-1);
   });
 
   it("returns a near deadline while walking and blink-time when idle", () => {
@@ -1175,6 +1214,39 @@ describe("SpriteSheetHumanActor pose grammar — talk alternation", () => {
     const sequences = ["agent_phase_a", "agent_phase_b", "agent_phase_c", "agent_phase_d"].map(framesFor);
     expect(new Set(sequences).size).toBeGreaterThan(1);
   });
+
+  it.each([
+    { label: "east", target: { x: 1_000, y: 0 }, axis: "x", direction: 1, frame: /^walk-side-/ },
+    { label: "north", target: { x: 0, y: -1_000 }, axis: "y", direction: -1, frame: /^walk-up-/ },
+  ] as const)("keeps the $label walking view aligned with its interpolated route while speaking", ({ target, axis, direction, frame }) => {
+    const actor = makeActor({
+      id: `agent_talking_walker_${axis}`,
+      position: { x: 0, y: 0 },
+      facing: "south",
+      reducedMotion: true,
+    });
+    actor.apply({ kind: "move", waypoints: [target], speedPixelsPerSecond: 48, gait: "walk" }, 0);
+    // Resolver "speak" commands are face-only, so a later speech command leaves
+    // this route live. The body must still use the travel direction's art row.
+    actor.apply({ kind: "set-face", expression: "talk-1" }, 0);
+
+    const initialDraws: DrawCall[] = [];
+    actor.draw(recordingContext(initialDraws));
+    let previousScreenPosition = axis === "x"
+      ? initialDraws[0]!.translateX
+      : initialDraws[0]!.translateY;
+    for (let nowMs = 200; nowMs <= 1_200; nowMs += 200) {
+      actor.advance(0.2, nowMs);
+      const snapshot = actor.snapshot();
+      const draws: DrawCall[] = [];
+      actor.draw(recordingContext(draws));
+      const screenPosition = axis === "x" ? draws[0]!.translateX : draws[0]!.translateY;
+      expect((screenPosition - previousScreenPosition) * direction).toBeGreaterThan(0);
+      expect(snapshot.routeActive).toBe(true);
+      expect(snapshot.layers.body.clipId).toMatch(frame);
+      previousScreenPosition = screenPosition;
+    }
+  });
 });
 
 describe("SpriteSheetHumanActor pose grammar — work alternation", () => {
@@ -1308,6 +1380,47 @@ describe("SpriteSheetHumanActor pose grammar — deterministic palette integrati
   it("never throws draw() when the leased bitmap lacks real pixel dimensions (graceful fallback)", () => {
     const actor = makeActor({ id: "agent_palette_fallback" });
     expect(() => actor.draw(recordingContext([]))).not.toThrow();
+  });
+});
+
+describe("SpriteSheetHumanActor styled visual identity", () => {
+  it("draws the identity accessory in the same transformed frame space as the body", () => {
+    const actor = makeActor({
+      id: "agent_styled_accessory",
+      facing: "west",
+      visualIdentity: {
+        characterId: "f1",
+        paletteVariant: "terracotta",
+        accessory: "satchel",
+      },
+    });
+    const draws: DrawCall[] = [];
+    const fills: FillRectCall[] = [];
+    actor.draw(recordingContext(draws, fills));
+
+    expect(draws).toHaveLength(1);
+    expect(draws[0]!.scaleX).toBeLessThan(0);
+    expect(fills.length).toBeGreaterThan(0);
+    // Accessory coordinates are feet-relative; adding the atlas feet y keeps
+    // every pixel in the garment band, below the face rows.
+    expect(fills.every((fill) => fill.y + BEING_CHIBI_GEOMETRY.feet.y >= 22)).toBe(true);
+    expect(fills.every((fill) => fill.alpha === 1)).toBe(true);
+  });
+
+  it("keeps one accessory pattern across pose and cardinal-direction changes", () => {
+    const identity = {
+      characterId: "m3" as const,
+      paletteVariant: "deep-teal" as const,
+      accessory: "scarf" as const,
+    };
+    for (const facing of ["north", "south", "east", "west"] as const) {
+      const actor = makeActor({ id: "agent_styled_motion", facing, visualIdentity: identity });
+      actor.apply({ kind: "play-body", action: "kneel" }, 0);
+      const fills: FillRectCall[] = [];
+      actor.draw(recordingContext([], fills));
+      expect(fills.length).toBeGreaterThan(0);
+      expect(fills.every((fill) => fill.y + BEING_CHIBI_GEOMETRY.feet.y >= 22)).toBe(true);
+    }
   });
 });
 

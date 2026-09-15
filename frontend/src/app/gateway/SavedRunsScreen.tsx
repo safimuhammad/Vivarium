@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { SavedBeingPortrait } from "./SavedBeingPortrait";
 import type { SavedRunSummary } from "./savedRunsClient";
@@ -29,6 +29,7 @@ interface StatusPresentation {
 }
 
 const MAX_PORTRAITS = 6;
+const RUNS_PER_PAGE = 12;
 
 const KNOWN_REGION_NAMES: Readonly<Record<string, string>> = Object.freeze({
   nirvana: "Nirvana",
@@ -48,6 +49,35 @@ export function SavedRunsScreen({
 }: SavedRunsScreenProps) {
   const idPrefix = useId();
   const headingId = `${idPrefix}-heading`;
+  const [currentPage, setCurrentPage] = useState(1);
+  const catalogueRef = useRef<HTMLElement | null>(null);
+  const catalogueHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const pageNavigationPendingRef = useRef(false);
+  const pageCount = Math.max(1, Math.ceil(runs.length / RUNS_PER_PAGE));
+  const visiblePage = Math.min(currentPage, pageCount);
+  const pageStart = (visiblePage - 1) * RUNS_PER_PAGE;
+  const visibleRuns = runs.slice(pageStart, pageStart + RUNS_PER_PAGE);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, pageCount));
+  }, [pageCount]);
+
+  useEffect(() => {
+    if (!pageNavigationPendingRef.current) return;
+    pageNavigationPendingRef.current = false;
+    catalogueHeadingRef.current?.focus({ preventScroll: true });
+    const catalogue = catalogueRef.current;
+    if (catalogue !== null && typeof catalogue.scrollIntoView === "function") {
+      catalogue.scrollIntoView({ block: "start" });
+    }
+  }, [visiblePage]);
+
+  const navigatePage = (page: number): void => {
+    const nextPage = Math.max(1, Math.min(pageCount, page));
+    if (nextPage === visiblePage) return;
+    pageNavigationPendingRef.current = true;
+    setCurrentPage(nextPage);
+  };
 
   return (
     <main className="saved-runs-screen" aria-labelledby={headingId}>
@@ -106,24 +136,57 @@ export function SavedRunsScreen({
             </button>
           </section>
         ) : (
-          <section className="saved-runs-screen__catalogue" aria-label="Saved run library">
+          <section
+            ref={catalogueRef}
+            className="saved-runs-screen__catalogue"
+            aria-label="Saved run library"
+          >
             <div className="saved-runs-screen__catalogue-intro">
-              <p className="saved-runs-screen__catalogue-kicker">Your local shelf</p>
+              <h2
+                ref={catalogueHeadingRef}
+                className="saved-runs-screen__catalogue-kicker"
+                tabIndex={-1}
+              >
+                Your local shelf
+              </h2>
               <p className="saved-runs-screen__catalogue-count">
                 {formatCount(runs.length, "saved run", "saved runs")}
               </p>
             </div>
             <div className="saved-runs-screen__grid">
-              {runs.map((run, index) => (
+              {visibleRuns.map((run, index) => (
                 <SavedRunCard
                   key={run.id}
                   run={run}
-                  slot={index + 1}
-                  idPrefix={`${idPrefix}-run-${index}`}
+                  slot={pageStart + index + 1}
+                  idPrefix={`${idPrefix}-run-${pageStart + index}`}
                   onWatch={onWatch}
                 />
               ))}
             </div>
+            <nav className="saved-runs-screen__pagination" aria-label="Saved runs pages">
+              <button
+                type="button"
+                className="saved-runs-screen__pagination-button"
+                onClick={() => navigatePage(visiblePage - 1)}
+                disabled={visiblePage === 1}
+                aria-label="Previous saved runs page"
+              >
+                Previous
+              </button>
+              <span className="saved-runs-screen__pagination-status" aria-live="polite">
+                Page {visiblePage} of {pageCount}
+              </span>
+              <button
+                type="button"
+                className="saved-runs-screen__pagination-button"
+                onClick={() => navigatePage(visiblePage + 1)}
+                disabled={visiblePage === pageCount}
+                aria-label="Next saved runs page"
+              >
+                Next
+              </button>
+            </nav>
           </section>
         )}
       </div>

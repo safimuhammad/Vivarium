@@ -339,6 +339,99 @@ async def test_native_generation_rejects_prompt_with_no_output_room(
     assert harness.stream_calls == []
 
 
+@pytest.mark.parametrize(
+    "malformed",
+    ["Unfinished private reasoning.", "Done.</think><tool_call><function=move></function>"],
+)
+async def test_native_retries_malformed_output_once_without_repairing_it(
+    monkeypatch: pytest.MonkeyPatch,
+    malformed: str,
+) -> None:
+    """A discarded response cannot leak text or calls; a fresh valid one may act."""
+    harness = _NativeHarness()
+    bindings = harness.bindings()
+
+    def generate(*args: Any, **kwargs: Any) -> Iterator[SimpleNamespace]:
+        harness.responses = [
+            SimpleNamespace(
+                text=malformed if not harness.stream_calls else "Ready.</think>I will wait.",
+                prompt_tokens=37,
+                generation_tokens=4,
+            )
+        ]
+        yield from harness.stream_generate(*args, **kwargs)
+
+    bindings.stream_generate = generate
+    monkeypatch.setattr(mlx_module, "_load_native_bindings", lambda: bindings)
+    monkeypatch.setenv("VIVARIUM_MLX_THINKING", "1")
+    decider = MlxDecider("local-model")
+    messages = [{"role": "user", "content": "You stand beside a grove."}]
+    try:
+        decision = await decider.decide(messages, [_MOVE_TOOL])
+    finally:
+        await decider.aclose()
+    assert decision.text == "I will wait."
+    assert decision.thinking == "Ready."
+    assert decision.tool_calls == []
+    assert decision.prompt_tokens == 74
+    assert decision.completion_tokens == 8
+    assert len(harness.stream_calls) == 2
+    assert harness.stream_calls[0]["prompt"] == harness.stream_calls[1]["prompt"]
+    assert messages == [{"role": "user", "content": "You stand beside a grove."}]
+
+
+async def test_native_format_retry_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repeated malformed output still fails closed after exactly two generations."""
+    harness = _NativeHarness(
+        [
+            SimpleNamespace(
+                text="Unfinished reasoning.",
+                prompt_tokens=37,
+                generation_tokens=4,
+            )
+        ]
+    )
+    monkeypatch.setattr(mlx_module, "_load_native_bindings", lambda: harness.bindings())
+    monkeypatch.setenv("VIVARIUM_MLX_THINKING", "1")
+    decider = MlxDecider("local-model")
+    try:
+        with pytest.raises(MlxResponseError, match="thinking envelope"):
+            await decider.decide([], [_MOVE_TOOL])
+    finally:
+        await decider.aclose()
+    assert len(harness.stream_calls) == 2
+
+
+def test_native_cancellation_between_format_attempts_stops_generation() -> None:
+    """A retry cannot start after shutdown cancels the first malformed answer."""
+    harness = _NativeHarness(
+        [SimpleNamespace(text="Unfinished reasoning.", prompt_tokens=37, generation_tokens=4)]
+    )
+    cancelled = threading.Event()
+
+    def generate(*args: Any, **kwargs: Any) -> Iterator[SimpleNamespace]:
+        try:
+            yield from harness.stream_generate(*args, **kwargs)
+        finally:
+            cancelled.set()
+
+    bindings = mlx_module._NativeBindings(
+        snapshot_download=harness.snapshot_download,
+        load=harness.load,
+        stream_generate=generate,
+        make_sampler=harness.make_sampler,
+        make_logits_processors=harness.make_logits_processors,
+        clear_cache=harness.clear_cache,
+    )
+    backend = mlx_module._NativeMlxBackend(bindings, enable_thinking=True)
+    try:
+        with pytest.raises(RuntimeError, match="cancelled"):
+            backend.decide("local-model", [], [_MOVE_TOOL], cancelled)
+    finally:
+        backend.close()
+    assert len(harness.stream_calls) == 1
+
+
 async def test_missing_cached_snapshot_has_actionable_offline_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

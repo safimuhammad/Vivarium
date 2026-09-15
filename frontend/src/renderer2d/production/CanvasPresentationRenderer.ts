@@ -1,3 +1,4 @@
+import { bridgeDepthScene, bridgeRailSlices, drawBridgeBase, drawBridgeRail } from "./depth/BridgeDepth";
 import {
   createGuardedObserverRendererPort,
   type ObserverRendererCallbacks,
@@ -76,7 +77,9 @@ import {
   type IslandPoint,
   type MaskRect,
 } from "./world/islandMask";
-import { computeBridgeSpans, type BridgeSpan } from "./world/islandBridges";
+import { computeBridgeSpans } from "./world/islandBridges";
+import { drawAtlasBridge } from "./world/AtlasBridgePainter";
+import { ATLAS_BRIDGE_MATERIALS_ID } from "./world/AtlasBridgeAssets";
 import {
   atlasDayFraction,
   resolveAtlasLight,
@@ -121,6 +124,13 @@ import type {
   TerrainRole,
 } from "./assets/productionManifest";
 import { productionAtlasIdsForRegion } from "./assets/ProductionRegionAssets";
+import { DEPTH_SCENERY_ATLAS_ID } from "./depth/DepthSceneryAssets";
+import {
+  depthSceneryPlacements,
+  depthSceneryReplacements,
+  drawDepthSceneryProp,
+  drawDepthSceneryShadows,
+} from "./depth/DepthScenery";
 import type {
   RegionMapRecipeV1,
   RegionPresentationProfile,
@@ -836,9 +846,14 @@ export async function createCanvasPresentationRenderer(
   /** Per-region map insets, built once from the region's own rasterised canvases and keyed by the
    * island signature they were projected into. Bounded by the region count: one entry per region,
    * dropped with its island when the region leaves the world. */
+  type AtlasSymbolDepthMode = "none" | "baked" | "live";
   const atlasSymbolLayers = new Map<
     string,
-    Readonly<{ signature: string; layer: MapSymbolLayer | null }>
+    Readonly<{
+      signature: string;
+      layer: MapSymbolLayer | null;
+      depthMode: AtlasSymbolDepthMode;
+    }>
   >();
   /** The packed archipelago layout, memoized on its own inputs (extents + adjacency + fills). */
   let atlasLayout: Readonly<{ signature: string; sheet: RegionSheet }> | null = null;
@@ -1339,6 +1354,12 @@ export async function createCanvasPresentationRenderer(
     const ownedScenery = scenery;
     const ownedContinuationMatte = continuationMatte;
     if (exactPreparation !== null) {
+      const bridge = bridgeDepthScene(target.recipe);
+      const depthSource = leases.get(DEPTH_SCENERY_ATLAS_ID)?.value;
+      const depthReplacements = depthSource === undefined ? null : depthSceneryReplacements(target.recipe);
+      // Focused scenery is sorted live with beings. Background island snapshots bake the
+      // same replacements, so changing focus does not grow or remove a second tree.
+      const bakeDepthScenery = ownerFactoryOverride !== undefined;
       const cacheIdentity = exactPreparation.cacheIdentity;
       let transferred = false;
       let preparationDisposed = false;
@@ -1383,6 +1404,29 @@ export async function createCanvasPresentationRenderer(
                 : operation.layer === "scenery"
                   ? ownedScenery.context
                   : ownedContinuationMatte.context;
+              // The raised pilot is painted once live with depth-sorted rails. Keeping its flat
+              // native deck in the cache would leave a second bridge visible below the ramp.
+              if (bridge?.replacedOperationIds.has(operation.stableId)) return;
+              if (operation.layer === "scenery" && depthReplacements !== null && depthSource !== undefined) {
+                const baseKey = operation.stableId.startsWith("grounding:")
+                  ? operation.stableId.slice("grounding:".length) : operation.stableId;
+                const replacement = depthReplacements.get(baseKey);
+                if (replacement !== undefined) {
+                  if (baseKey === operation.stableId) {
+                    symbolRects.push({ ...replacement.bounds,
+                      x: replacement.bounds.x - descriptor.worldBounds.x,
+                      y: replacement.bounds.y - descriptor.worldBounds.y });
+                    if (bakeDepthScenery) {
+                      destination.save();
+                      destination.translate(-descriptor.worldBounds.x, -descriptor.worldBounds.y);
+                      drawDepthSceneryShadows(destination, [replacement]);
+                      drawDepthSceneryProp(destination, depthSource, replacement, []);
+                      destination.restore();
+                    }
+                  }
+                  return;
+                }
+              }
               if (operation.layer === "scenery") {
                 symbolRects.push({
                   x: Math.round(operation.destination.x - descriptor.worldBounds.x),
@@ -1410,6 +1454,18 @@ export async function createCanvasPresentationRenderer(
               throw new Error("Exact static-scene provider returned an invalid work receipt.");
             }
             if (!result.done) return null;
+            if (bridge !== null) {
+              symbolRects.push({ ...bridge.bounds,
+                x: bridge.bounds.x - descriptor.worldBounds.x,
+                y: bridge.bounds.y - descriptor.worldBounds.y });
+              if (bakeDepthScenery) {
+                ownedScenery.context.save();
+                ownedScenery.context.translate(-descriptor.worldBounds.x, -descriptor.worldBounds.y);
+                drawBridgeBase(ownedScenery.context, bridge);
+                for (const rail of bridgeRailSlices(bridge)) drawBridgeRail(ownedScenery.context, bridge, rail.feetY);
+                ownedScenery.context.restore();
+              }
+            }
             const continuationPattern = context.createPattern(
               ownedContinuationMatte.canvas,
               "repeat",
@@ -1893,6 +1949,7 @@ export async function createCanvasPresentationRenderer(
         [completed.terrain.canvas, completed.scenery.canvas],
         completed.descriptor.worldBounds.width,
         completed.descriptor.worldBounds.height,
+        "baked",
       );
       const { bitmap, owner } = mergeSnapshotBitmap(build.regionId, completed, frame);
       // `snapshotCache.set` disposes the PRIOR owner (if any) via the cache's `onEvicted`
@@ -2241,16 +2298,82 @@ export async function createCanvasPresentationRenderer(
    * inset, and the map falls back to the region's real 1:1 art clipped to the coastline, exactly as
    * it behaved before this layer existed.
    */
+  const drawLiveDepthMapReplacements = (
+    regionId: string,
+    layer: MapSymbolLayer,
+    plotWidthPx: number,
+    plotHeightPx: number,
+    plotOriginX: number,
+    plotOriginY: number,
+  ): boolean => {
+    const source = atlasLeases.get(DEPTH_SCENERY_ATLAS_ID)?.value;
+    const recipe = recipes.get(regionId);
+    if (recipe === undefined) return false;
+    const placements = source === undefined ? [] : depthSceneryPlacements(recipe);
+    const bridge = bridgeDepthScene(recipe);
+    if (placements.length === 0 && bridge === null) return false;
+    const candidate = layer.canvas as unknown as {
+      getContext?: (contextId: "2d") => CanvasRenderingContext2D | null;
+    };
+    if (typeof candidate.getContext !== "function") return false;
+    let target: CanvasRenderingContext2D | null;
+    try {
+      target = candidate.getContext("2d");
+    } catch {
+      return false;
+    }
+    if (target === null) return false;
+
+    // `buildRegionMapInset` rasterises the whole plot into the fitted map box. Keep the same
+    // plot-local projection for generated props, including the descriptor origin used by exact
+    // authored caches, so the replacement remains on its original symbol footprint. Transform the
+    // drawing context rather than only scaling bounds: depth shadows contain fixed world-unit
+    // radii which must shrink with the map inset along with the prop.
+    const scaleX = layer.sourceWidth / Math.max(1, plotWidthPx);
+    const scaleY = layer.sourceHeight / Math.max(1, plotHeightPx);
+    // The focused static cache intentionally leaves these pixels to the live depth pass. Add them
+    // once to the atlas inset's own retained raster so every frame remains a single map blit.
+    target.save();
+    target.translate(-plotOriginX, -plotOriginY);
+    target.scale(scaleX, scaleY);
+    if (source !== undefined) {
+      drawDepthSceneryShadows(target, placements);
+      for (const placement of placements) drawDepthSceneryProp(target, source, placement, []);
+    }
+    if (bridge !== null) {
+      drawBridgeBase(target, bridge);
+      for (const rail of bridgeRailSlices(bridge)) drawBridgeRail(target, bridge, rail.feetY);
+    }
+    target.restore();
+    return true;
+  };
+
   const ensureAtlasSymbolLayer = (
     regionId: string,
     content: readonly CanvasImageSource[],
     plotWidthPx: number,
     plotHeightPx: number,
+    depthMode: AtlasSymbolDepthMode = "none",
+    plotOriginX = 0,
+    plotOriginY = 0,
   ): MapSymbolLayer | null => {
     const island = atlasIslands.get(regionId);
     if (island === undefined) return null;
     const cached = atlasSymbolLayers.get(regionId);
-    if (cached !== undefined && cached.signature === island.signature) return cached.layer;
+    if (cached !== undefined && cached.signature === island.signature) {
+      if (depthMode === "live" && cached.depthMode === "none" && cached.layer !== null
+        && drawLiveDepthMapReplacements(
+          regionId,
+          cached.layer,
+          plotWidthPx,
+          plotHeightPx,
+          plotOriginX,
+          plotOriginY,
+        )) {
+        atlasSymbolLayers.set(regionId, { ...cached, depthMode: "live" });
+      }
+      return cached.layer;
+    }
     if (content.length === 0) return null;
     if (cached !== undefined) releaseAtlasRaster(cached.layer);
     const layer = buildRegionMapInset({
@@ -2263,7 +2386,22 @@ export async function createCanvasPresentationRenderer(
       shoreDistance: (localX, localY) => maskDistanceAtLocal(island.mask, localX, localY),
       surface: atlasSurface,
     });
-    atlasSymbolLayers.set(regionId, { signature: island.signature, layer });
+    const realizedDepthMode = layer !== null && depthMode === "live"
+      && drawLiveDepthMapReplacements(
+        regionId,
+        layer,
+        plotWidthPx,
+        plotHeightPx,
+        plotOriginX,
+        plotOriginY,
+      )
+      ? "live"
+      : layer === null ? "none" : depthMode;
+    atlasSymbolLayers.set(regionId, {
+      signature: island.signature,
+      layer,
+      depthMode: realizedDepthMode,
+    });
     return layer;
   };
 
@@ -2293,15 +2431,11 @@ export async function createCanvasPresentationRenderer(
     return (cover - zoom) / (cover * 0.15);
   };
 
-  /** How strongly map symbols read at the current zoom: full while the world is in frame, easing
-   * to nothing well before the region fills it -- a map symbol becomes a tree. */
-  const atlasSymbolOpacity = (zoom: number): number => {
-    const cover = atlasCoverZoom();
-    if (cover === null) return 0;
-    if (zoom <= cover * 0.5) return 1;
-    if (zoom >= cover * 0.95) return 0;
-    return (cover * 0.95 - zoom) / (cover * 0.45);
-  };
+  /** Raw region coordinates do not match the Atlas's coast-fitted map inset. */
+  const atlasOwnsRegionContent = (zoom: number): boolean => (
+    worldSheetSnapshotsEnabled && activeSheetLocalRects !== null
+      && (worldViewScope === "world" || atlasStrength(zoom) > 0.01)
+  );
 
   /**
    * Draws a region's map inset over its island: the region's whole rendered content stretched into
@@ -2319,12 +2453,24 @@ export async function createCanvasPresentationRenderer(
     content: readonly CanvasImageSource[],
     rect: Rect,
     zoom: number,
+    depthMode: AtlasSymbolDepthMode = "none",
+    plotOriginX = 0,
+    plotOriginY = 0,
   ): void => {
-    const opacity = atlasSymbolOpacity(zoom);
+    // Match the live depth gate so bridges and trees remain represented throughout descent.
+    const opacity = atlasStrength(zoom);
     if (opacity <= 0.01) return;
     const island = atlasIslands.get(regionId);
     if (island === undefined) return;
-    const layer = ensureAtlasSymbolLayer(regionId, content, rect.width, rect.height);
+    const layer = ensureAtlasSymbolLayer(
+      regionId,
+      content,
+      rect.width,
+      rect.height,
+      depthMode,
+      plotOriginX,
+      plotOriginY,
+    );
     if (layer === null) return;
     // The fit is plot-local; the plot itself may be drawn at any size on the sheet.
     const scaleX = rect.width / Math.max(1, island.mask.cols * island.mask.cell);
@@ -2494,115 +2640,6 @@ export async function createCanvasPresentationRenderer(
     context.globalAlpha = 1;
   };
 
-  /** One crossing: plank deck or stone causeway, with piers under a long span, stone footings
-   * where it meets land, and -- when a being is on it -- that being, with a warm halo at night. */
-  const drawBridgeSpan = (
-    context: CanvasRenderingContext2D,
-    span: BridgeSpan,
-    unit: number,
-  ): void => {
-    const dx = span.b.x - span.a.x;
-    const dy = span.b.y - span.a.y;
-    const length = Math.max(1, Math.hypot(dx, dy));
-    const ux = dx / length;
-    const uy = dy / length;
-    const nx = -uy;
-    const ny = ux;
-    const causeway = span.kind === "causeway";
-    const width = Math.max(3, (causeway ? 21 : 13) * unit);
-    const half = width / 2;
-    const deck = tintedHex(causeway ? "#a09786" : "#966c40", atlasLight);
-    const deckLit = tintedHex(causeway ? "#c2baa9" : "#c09059", atlasLight);
-    const rail = tintedHex(causeway ? "#6c6459" : "#5a3f28", atlasLight);
-
-    const quad = (offsetX: number, offsetY: number): void => {
-      context.beginPath();
-      context.moveTo(span.a.x + nx * half + offsetX, span.a.y + ny * half + offsetY);
-      context.lineTo(span.b.x + nx * half + offsetX, span.b.y + ny * half + offsetY);
-      context.lineTo(span.b.x - nx * half + offsetX, span.b.y - ny * half + offsetY);
-      context.lineTo(span.a.x - nx * half + offsetX, span.a.y - ny * half + offsetY);
-      context.closePath();
-      context.fill();
-    };
-
-    context.save();
-    // shadow on the water
-    context.globalAlpha = 0.4;
-    context.fillStyle = "#04202b";
-    quad(5 * unit, 7 * unit);
-    context.globalAlpha = 1;
-
-    // piers under a long span -- what makes a crossing read as BUILT rather than drawn
-    const pierEvery = 190 * unit;
-    if (length > pierEvery * 2) {
-      const piers = Math.max(1, Math.round(length / pierEvery) - 1);
-      for (let index = 1; index <= piers; index += 1) {
-        const t = index / (piers + 1);
-        const px = span.a.x + dx * t;
-        const py = span.a.y + dy * t;
-        context.fillStyle = tintedHex("#403c36", atlasLight);
-        context.fillRect(
-          Math.round(px - width * 0.7),
-          Math.round(py - width * 0.3),
-          Math.round(width * 1.4),
-          Math.round(width * 1.5),
-        );
-        context.fillStyle = tintedHex("#6a635a", atlasLight);
-        context.fillRect(
-          Math.round(px - width * 0.7),
-          Math.round(py - width * 0.3),
-          Math.round(width * 1.4),
-          Math.max(1, Math.round(3 * unit)),
-        );
-      }
-    }
-
-    context.fillStyle = deck;
-    quad(0, 0);
-
-    // plank ticks across the deck
-    context.strokeStyle = rail;
-    context.lineWidth = Math.max(1, 1.2 * unit);
-    const plankStep = Math.max(3 * unit, (causeway ? 11 : 7) * unit);
-    for (let along = 0; along < length; along += plankStep) {
-      const px = span.a.x + ux * along;
-      const py = span.a.y + uy * along;
-      context.beginPath();
-      context.moveTo(px + nx * half, py + ny * half);
-      context.lineTo(px - nx * half, py - ny * half);
-      context.stroke();
-    }
-    // rails / parapet
-    context.lineWidth = Math.max(2, 2.6 * unit);
-    for (const side of [1, -1]) {
-      context.beginPath();
-      context.moveTo(span.a.x + nx * side * half, span.a.y + ny * side * half);
-      context.lineTo(span.b.x + nx * side * half, span.b.y + ny * side * half);
-      context.stroke();
-    }
-    context.strokeStyle = deckLit;
-    context.lineWidth = Math.max(1, 1.2 * unit);
-    context.beginPath();
-    context.moveTo(span.a.x + nx * (half - unit), span.a.y + ny * (half - unit));
-    context.lineTo(span.b.x + nx * (half - unit), span.b.y + ny * (half - unit));
-    context.stroke();
-
-    // stone footings, so a bridge LANDS on the island instead of touching it
-    for (const end of [span.a, span.b]) {
-      const footing = Math.round(width * 1.6);
-      context.fillStyle = tintedHex("#635d53", atlasLight);
-      context.fillRect(Math.round(end.x - footing / 2), Math.round(end.y - footing / 2), footing, footing);
-      context.fillStyle = tintedHex("#8b8478", atlasLight);
-      context.fillRect(
-        Math.round(end.x - footing / 2),
-        Math.round(end.y - footing / 2),
-        footing,
-        Math.max(1, Math.round(4 * unit)),
-      );
-    }
-    context.restore();
-  };
-
   /** Traces a circle into the current path, preferring `ellipse` and falling back to a polyline
    * (a Canvas2D surface that lacks both is degraded enough that a missing ring is the least of
    * its problems, so the fallback is deliberately cheap). */
@@ -2769,7 +2806,14 @@ export async function createCanvasPresentationRenderer(
       // layer; the inset then covers every land cell on top of it -- and OVER the dressing, whose
       // inland relief and value mottle exist to texture a monotone kit and simply fog real terrain.
       // The inset fades out across the shore band, so the beach and coast rim light still read.
-      drawMapSymbols(context, regionId, snapshot === null ? [] : [snapshot.source], rect, zoom);
+      drawMapSymbols(
+        context,
+        regionId,
+        snapshot === null ? [] : [snapshot.source],
+        rect,
+        zoom,
+        "baked",
+      );
       context.restore();
       if (strength > 0.01) {
         context.globalAlpha = strength;
@@ -2817,6 +2861,9 @@ export async function createCanvasPresentationRenderer(
         cache === null ? [] : [cache.terrain.canvas, cache.scenery.canvas],
         focusedRect,
         zoom,
+        "live",
+        cache?.descriptor.worldBounds.x ?? 0,
+        cache?.descriptor.worldBounds.y ?? 0,
       );
       context.restore();
       context.globalAlpha = strength;
@@ -2837,17 +2884,19 @@ export async function createCanvasPresentationRenderer(
       return island.coast.map((point) => ({ x: rect.x + point.x, y: rect.y + point.y }));
     };
     for (const span of computeBridgeSpans(coastFor, regionAdjacencyFromFrame(frame))) {
-      drawBridgeSpan(context, span, unit);
+      drawAtlasBridge(context, span, atlasLeases.get(ATLAS_BRIDGE_MATERIALS_ID)?.value ?? null, {
+        tint: atlasLight.landTint,
+        tintAlpha: atlasLight.landTintA,
+      });
     }
 
     // life marks
-    // Marks stand in for the regions the observer is NOT inside. The focused region draws its own
-    // beings and shelters live (the scene graph), so marking them again would double every hut and
-    // every life on exactly one island.
+    // Every island uses land-anchored marks while the Atlas owns the scene. The focused region's
+    // raw actors/homes are omitted too: its original coordinates do not match the fitted inset.
     const islandRefs = new Map<string, AtlasIslandRef>();
     for (const [regionId, island] of atlasIslands) {
       const rect = localRects[regionId];
-      if (rect === undefined || regionId === visibleRegionId) continue;
+      if (rect === undefined || (regionId === visibleRegionId && !atlasOwnsRegionContent(zoom))) continue;
       islandRefs.set(regionId, { regionId, mask: island.mask, originX: rect.x, originY: rect.y });
     }
     const marks = placeAtlasMarks(islandRefs, {
@@ -3158,7 +3207,7 @@ export async function createCanvasPresentationRenderer(
         },
       );
       context.save();
-      for (const offset of offsets) {
+      for (const [offsetIndex, offset] of offsets.entries()) {
         context.setTransform(
           cameraSnapshot.zoom,
           0,
@@ -3183,9 +3232,10 @@ export async function createCanvasPresentationRenderer(
           originY: Math.round(rasterOrigin.y + offset.y * cameraSnapshot.zoom),
           width: canvas.width,
           height: canvas.height,
+          depthSceneryVisible: true,
           insets: { ...safeFrameInsets },
           overlayTarget,
-        });
+        }, { continueFrame: offsetIndex > 0 });
       }
       context.restore();
     } else {
@@ -3278,6 +3328,12 @@ export async function createCanvasPresentationRenderer(
         originY: rasterOrigin.y,
         width: canvas.width,
         height: canvas.height,
+        // The Atlas map inset owns generated depth scenery while its island is on screen. Keep
+        // the live region-space pass for normal detail and for the final descent where the inset
+        // has faded away; otherwise props rendered in the focused region frame can float outside
+        // the island silhouette into the sheet's sea.
+        depthSceneryVisible: !atlasOwnsRegionContent(cameraSnapshot.zoom),
+        regionContentVisible: !atlasOwnsRegionContent(cameraSnapshot.zoom),
         insets: { ...safeFrameInsets },
         overlayTarget,
       });
@@ -3286,7 +3342,7 @@ export async function createCanvasPresentationRenderer(
       // region keeps its sense of place -- but a being who steps off one edge must still
       // be VISIBLE arriving on the other. One extra beings-only pass per seam actually in
       // view does exactly that, and nothing else on the canvas is duplicated.
-      if (cache !== null && graph.drawSeamActors !== undefined) {
+      if (cache !== null && graph.drawSeamActors !== undefined && !atlasOwnsRegionContent(cameraSnapshot.zoom)) {
         for (const offset of visibleSeamActorOffsets(
           cache.descriptor,
           visibleWorldRect,
@@ -5120,6 +5176,34 @@ export async function createCanvasPresentationRenderer(
   };
 
   /**
+   * Handles an explicit viewer request to observe a region on the world sheet.
+   *
+   * A cache swap by itself preserves the old sheet-space camera point when the local frame is
+   * rebased, which can leave the requested region off-screen and let focus-follow switch back to
+   * the region the camera still sees. When the requested region differs from that geometric focus,
+   * reuse the existing viewer descent so the camera and live-region adoption share one guarded path.
+   * Invalid and not-ready requests still funnel through {@link beginObserveRegion}; renderers without
+   * world-sheet navigation retain their legacy observe-only behavior.
+   */
+  const observeRegionFromViewer = (regionId: string): void => {
+    if (!worldSheetSnapshotsEnabled || activeSheetLocalRects?.[regionId] === undefined) {
+      beginObserveRegion(regionId);
+      return;
+    }
+    // A second explicit pick supersedes an in-flight viewer descent. The camera's new fly-to
+    // replaces the old one; clearing the renderer's landing witness first prevents the stale
+    // request from blocking `descendIntoRegion` on its pending-descent guard.
+    if (pendingDescent !== null && pendingDescent.regionId !== regionId) pendingDescent = null;
+    const currentFocusRegionId = focusedRegionId ?? visibleRegionId;
+    if (currentFocusRegionId === regionId) {
+      beginObserveRegion(regionId);
+      return;
+    }
+    if (worldViewScope !== "world") setWorldViewScope("world");
+    descendIntoRegion(regionId, frameDriver.now());
+  };
+
+  /**
    * The bounds a moment anchor points the camera at, if the world can show them.
    *
    * Ladder, most specific first: the being or structure the moment was about, then the region it
@@ -5519,7 +5603,7 @@ export async function createCanvasPresentationRenderer(
     },
     observeRegion(regionId): void {
       clearPendingMomentTravel();
-      beginObserveRegion(regionId);
+      observeRegionFromViewer(regionId);
     },
     setSafeFrame(insets): void {
       if (disposed) return;
@@ -5733,6 +5817,8 @@ export async function createCanvasPresentationRenderer(
     // already inert for descending -- but without this it still hit-tested, selected the region it
     // landed on, and popped the Selection drawer over a third of the frame. One gesture, one thing.
     if (pendingDescent !== null) return;
+    // Hidden regional hit boxes must not remain selectable in the Atlas's ocean.
+    if (atlasOwnsRegionContent(renderZoom ?? camera.snapshot().zoom)) return;
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const targets = hitTargets(graph);

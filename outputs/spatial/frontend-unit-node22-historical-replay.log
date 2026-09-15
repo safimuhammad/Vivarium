@@ -1,0 +1,57 @@
+
+> vivarium-frontend@0.1.0 test:unit
+> vitest run
+
+
+ RUN  v4.1.9 /Users/safi/Desktop/work/Vivarium/frontend
+
+stderr | src/app/observer2d/chronicleStream/ChronicleKillfeed.test.tsx > ChronicleKillfeed > leaves a repeated spatial replay to its world clock even when the source key is reused
+The current testing environment is not configured to support act(...)
+
+stderr | src/app/observer2d/chronicleStream/ChronicleKillfeed.test.tsx > ChronicleKillfeed > leaves a repeated spatial replay to its world clock even when the source key is reused
+The current testing environment is not configured to support act(...)
+
+stderr | src/app/observer2d/chronicleStream/ChronicleKillfeed.test.tsx > ChronicleKillfeed > leaves a repeated spatial replay to its world clock even when the source key is reused
+The current testing environment is not configured to support act(...)
+
+stderr | src/app/observer2d/chronicleStream/ChronicleKillfeed.test.tsx > ChronicleKillfeed > leaves a repeated spatial replay to its world clock even when the source key is reused
+The current testing environment is not configured to support act(...)
+
+ ❯ src/app/observer2d/chronicleStream/ChronicleKillfeed.test.tsx (41 tests | 1 failed) 480ms
+     × leaves a repeated spatial replay to its world clock even when the source key is reused 22ms
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/app/observer2d/chronicleStream/ChronicleKillfeed.test.tsx > ChronicleKillfeed > leaves a repeated spatial replay to its world clock even when the source key is reused
+AssertionError: expected [ <li …(4)>…(5)</li> ] to have a length of 2 but got 1
+
+- Expected
++ Received
+
+- 2
++ 1
+
+ ❯ src/app/observer2d/chronicleStream/ChronicleKillfeed.test.tsx:693:21
+    691|     expect(props.onViewCursor).toHaveBeenCalledWith(1);
+    692|     // Only the authoritative replacement stream may remove the later …
+    693|     expect(cards()).toHaveLength(2);
+       |                     ^
+    694|   });
+    695|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 254 passed (255)
+      Tests  1 failed | 4212 passed | 1 skipped (4214)
+   Start at  18:44:31
+   Duration  157.44s (transform 12.61s, setup 0ms, import 35.80s, tests 469.49s, environment 172.64s)
+

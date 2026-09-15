@@ -9,10 +9,18 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
+let originalScrollIntoView: PropertyDescriptor | undefined;
+let scrollIntoViewMock: ReturnType<typeof vi.fn> | undefined;
 
 beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
+  originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+  scrollIntoViewMock = vi.fn();
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollIntoViewMock,
+  });
 });
 
 afterEach(async () => {
@@ -20,6 +28,10 @@ afterEach(async () => {
   root = null;
   container?.remove();
   container = null;
+  if (originalScrollIntoView === undefined) Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  else Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
+  originalScrollIntoView = undefined;
+  scrollIntoViewMock = undefined;
   vi.restoreAllMocks();
 });
 
@@ -116,6 +128,105 @@ describe("SavedRunsScreen", () => {
     expect(container?.querySelector("[role='alert']")).not.toBeNull();
     expect(text()).toContain("Local catalogue offline");
     expect(text()).toContain("Try again");
+  });
+
+  it("pages 512 saved runs while keeping the total count and visible portraits bounded", async () => {
+    const runs = Array.from({ length: 512 }, (_, index) => savedRun({
+      id: `run-page-${index + 1}`,
+      name: `Page Run ${index + 1}`,
+      agent_count: 6,
+      agents: Array.from({ length: 6 }, (_, agentIndex) => ({
+        id: `page-${index + 1}-agent-${agentIndex + 1}`,
+        name: `Being ${agentIndex + 1}`,
+        persona: null,
+        region: null,
+        status: "alive",
+      })),
+    }));
+    const onWatch = vi.fn();
+    await mount(<SavedRunsScreen runs={runs} loading={false} error={null}
+      onBack={vi.fn()} onRefresh={vi.fn()} onWatch={onWatch} />);
+
+    expect(text()).toContain("512 saved runs");
+    expect(text()).toContain("Page 1 of 43");
+    expect(container?.querySelectorAll(".saved-run-card")).toHaveLength(12);
+    expect(container?.querySelectorAll(".saved-run-card__portrait")).toHaveLength(72);
+    expect(text()).toContain("Page Run 1");
+    expect(text()).not.toContain("Page Run 13");
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+    const catalogueHeading = container?.querySelector<HTMLHeadingElement>(
+      ".saved-runs-screen__catalogue-kicker",
+    );
+    expect(catalogueHeading?.tabIndex).toBe(-1);
+
+    await act(async () => container?.querySelector<HTMLButtonElement>(
+      "button[aria-label='Next saved runs page']",
+    )?.click());
+    expect(text()).toContain("Page 2 of 43");
+    expect(text()).toContain("Page Run 13");
+    expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
+    expect(scrollIntoViewMock).toHaveBeenLastCalledWith({ block: "start" });
+    expect(document.activeElement).toBe(catalogueHeading);
+    expect(Array.from(container?.querySelectorAll(".saved-run-card h2") ?? [])
+      .map((heading) => heading.textContent)).not.toContain("Page Run 1");
+    expect(container?.querySelector<HTMLButtonElement>(
+      "button[aria-label='Previous saved runs page']",
+    )?.disabled).toBe(false);
+
+    for (let page = 3; page <= 43; page += 1) {
+      await act(async () => container?.querySelector<HTMLButtonElement>(
+        "button[aria-label='Next saved runs page']",
+      )?.click());
+      expect(text()).toContain(`Page ${page} of 43`);
+      expect(container?.querySelectorAll(".saved-run-card__portrait").length).toBeLessThanOrEqual(72);
+    }
+    expect(text()).toContain("Page Run 512");
+    expect(container?.querySelectorAll(".saved-run-card")).toHaveLength(8);
+    expect(container?.querySelectorAll(".saved-run-card__portrait")).toHaveLength(48);
+    expect(container?.querySelector<HTMLButtonElement>(
+      "button[aria-label='Next saved runs page']",
+    )?.disabled).toBe(true);
+
+    const navigationScrolls = scrollIntoViewMock?.mock.calls.length ?? 0;
+    await act(async () => root?.render(<SavedRunsScreen runs={runs} loading={false} error={null}
+      onBack={vi.fn()} onRefresh={vi.fn()} onWatch={onWatch} />));
+    expect(scrollIntoViewMock).toHaveBeenCalledTimes(navigationScrolls);
+
+    await act(async () => container?.querySelector<HTMLButtonElement>(
+      "button[aria-label='Watch replay for Page Run 512']",
+    )?.click());
+    expect(onWatch).toHaveBeenCalledWith(runs[511]);
+  });
+
+  it("clamps the current page when refreshed data shrinks", async () => {
+    const runs = Array.from({ length: 25 }, (_, index) => savedRun({
+      id: `run-shrink-${index + 1}`,
+      name: `Shrink Run ${index + 1}`,
+    }));
+    root = createRoot(container as HTMLDivElement);
+    await act(async () => root?.render(<SavedRunsScreen runs={runs} loading={false} error={null}
+      onBack={vi.fn()} onRefresh={vi.fn()} onWatch={vi.fn()} />));
+    await act(async () => container?.querySelector<HTMLButtonElement>(
+      "button[aria-label='Next saved runs page']",
+    )?.click());
+    await act(async () => container?.querySelector<HTMLButtonElement>(
+      "button[aria-label='Next saved runs page']",
+    )?.click());
+    expect(text()).toContain("Page 3 of 3");
+
+    const refreshedRuns = runs.slice(0, 13);
+    await act(async () => root?.render(<SavedRunsScreen runs={refreshedRuns} loading={false} error={null}
+      onBack={vi.fn()} onRefresh={vi.fn()} onWatch={vi.fn()} />));
+    expect(text()).toContain("Page 2 of 2");
+    expect(text()).toContain("Shrink Run 13");
+    expect(text()).not.toContain("Page 3 of 3");
+    expect(scrollIntoViewMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => root?.render(<SavedRunsScreen runs={refreshedRuns.slice(0, 1)} loading={false} error={null}
+      onBack={vi.fn()} onRefresh={vi.fn()} onWatch={vi.fn()} />));
+    expect(text()).toContain("Page 1 of 1");
+    expect(text()).toContain("Shrink Run 1");
+    expect(scrollIntoViewMock).toHaveBeenCalledTimes(2);
   });
 });
 

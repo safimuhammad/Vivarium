@@ -3,8 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import type { AgentSnapshot, HomeSnapshot, RegionSnapshot } from "../../../app/schemas";
+import { tileCenter } from "../../map/regionMap";
 import { createRegionMapIdentity } from "../maps/RegionMapIdentity";
 import { createRegionMapRecipe } from "../maps/RegionMapRecipe";
+import { navigationLayoutFingerprint } from "../navigation/SpatialNavigationExport";
 import {
   STANDING_HUMAN_VISUAL_ENVELOPE,
   feetAnchoredVisualRect,
@@ -61,6 +63,40 @@ describe("PlacementLedger", () => {
       homes: [sourceHome],
       agents: [{ ...sourceAgent, position: "beta" }],
     })).toBe(false);
+  });
+
+  it("uses the backend-owned Nirvana home plot, origin, and door without assigning a replacement", () => {
+    const nirvana = makeRegion("nirvana", []);
+    const nirvanaRecipe = createRegionMapRecipe(createRegionMapIdentity(91, nirvana, [nirvana]));
+    const plot = nirvanaRecipe.shelterPlots[7]!;
+    const origin = tileCenter(plot.tile);
+    const door = tileCenter(plot.door);
+    const supplied: HomeSnapshot = {
+      ...home(0, "nirvana"),
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: `nirvana:${navigationLayoutFingerprint(nirvanaRecipe)}`,
+        plot_id: plot.id,
+        x: origin.x,
+        y: origin.y,
+        door,
+      },
+    };
+
+    const ledger = PlacementLedger.reconstruct([nirvanaRecipe], { homes: [supplied], agents: [] });
+    expect(ledger.snapshot().homes.get(supplied.home_id)).toEqual({
+      regionId: "nirvana",
+      plotId: plot.id,
+      origin,
+      door,
+    });
+    expect(ledger.hasEquivalentCheckpointPlacement({ homes: [supplied], agents: [] })).toBe(true);
+    expect(() => ledger.placeHome({
+      ...supplied,
+      home_id: "home_reserved_plot",
+      owner_id: "agent_reserved_plot",
+    })).toThrow(/already reserved authoritative shelter plot/);
   });
 
   it("reconstructs checkpoint homes and agents deterministically regardless of array order", () => {

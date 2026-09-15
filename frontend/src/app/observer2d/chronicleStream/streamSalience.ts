@@ -22,7 +22,7 @@
  * decides how much *height and weight* a card earns, never whether it appears.
  */
 
-import type { PresentedEventType } from "../../../presentation/eventPayloads";
+import type { StreamEventType } from "./streamEvent";
 
 /**
  * Base salience per event type, 0..100 — what a watcher would be sorry to miss.
@@ -30,7 +30,7 @@ import type { PresentedEventType } from "../../../presentation/eventPayloads";
  * Used only to decide which minority of cards earns the taller "notable"
  * treatment. It is deliberately not a filter.
  */
-export const BASE_SALIENCE: Readonly<Record<PresentedEventType, number>> = Object.freeze({
+export const BASE_SALIENCE: Readonly<Record<StreamEventType, number>> = Object.freeze({
   agent_died: 100,
   agent_born: 96,
   simulation_started: 92,
@@ -59,6 +59,9 @@ export const BASE_SALIENCE: Readonly<Record<PresentedEventType, number>> = Objec
   agent_entered_region: 16,
   agent_left_region: 14,
   resource_changed: 12,
+  spatial_travel_started: 24,
+  spatial_travel_cancelled: 22,
+  spatial_travel_arrived: 25,
 });
 
 /** At or above this base salience a card earns the taller treatment. */
@@ -67,11 +70,14 @@ export const NOTABLE_FLOOR = 60;
 /** Whether the world advanced, went wrong, or brought something new to light. */
 export type CardPosture = "progress" | "rupture" | "arrival";
 
-export const CARD_POSTURE: Readonly<Record<PresentedEventType, CardPosture>> = Object.freeze({
+export const CARD_POSTURE: Readonly<Record<StreamEventType, CardPosture>> = Object.freeze({
   // the world advancing
   simulation_started: "progress",
   agent_entered_region: "progress",
   agent_left_region: "progress",
+  spatial_travel_started: "progress",
+  spatial_travel_cancelled: "progress",
+  spatial_travel_arrived: "progress",
   speak: "progress",
   self_talk: "progress",
   resource_changed: "progress",
@@ -201,7 +207,7 @@ const pairKey = (left: string, right: string): string => [left, right].sort().jo
  * annunciation (a strike, a harvest, an utterance) rather than a transition.
  */
 export function stateChangesFor(
-  type: PresentedEventType,
+  type: StreamEventType,
   context: StreamStateContext,
 ): readonly StreamStateChange[] {
   const where = context.regionLabel === null ? "" : ` at ${context.regionLabel}`;

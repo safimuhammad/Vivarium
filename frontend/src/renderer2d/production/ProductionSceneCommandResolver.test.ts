@@ -684,6 +684,54 @@ describe("ProductionSceneCommandResolver", () => {
     ]);
   });
 
+  it("keeps a spatial being's stationary expression but never emits choreography feet commands", () => {
+    const resolver = createProductionSceneCommandResolver({ getPlacement: () => placement() });
+    const base = namedFrame(scene({
+      actorIntents: [
+        { actorId: "briar", kind: "move", target: { x: 256, y: 160 }, marker: "walk" },
+        { actorId: "briar", kind: "speak", target: null, marker: "line" },
+      ],
+    }), {
+      staging: [{
+        id: "m-spatial:flash",
+        kind: "flash-step",
+        beingId: "briar",
+        regionId: "nirvana",
+        to: { x: 256, y: 160 },
+      }],
+    }, 4);
+    const spatialFrame: PresentedObserverFrame = {
+      ...base,
+      world: {
+        ...base.world,
+        agents: base.world.agents.map((record) => record.value.id !== "briar" ? record : {
+          ...record,
+          value: {
+            ...record.value,
+            position: "nirvana",
+            spatial: {
+              version: 1,
+              region_id: "nirvana",
+              map_id: "nirvana:test-layout",
+              layout_fingerprint: "test-layout",
+              x: 64,
+              y: 64,
+              observed_at: 10,
+              at_landmark: null,
+              travel: null,
+            },
+          },
+        }),
+      },
+    };
+
+    const commands = resolver(spatialFrame)?.commands.filter((command) =>
+      command.kind === "actor" && command.actorId === "briar") ?? [];
+    expect(commands.map((command) => command.kind === "actor" ? command.command : null)).toEqual([
+      { kind: "set-face", expression: "talk-1" },
+    ]);
+  });
+
   it("steps before it turns, exactly as the scene lane repositions before it moves", () => {
     // The order is load-bearing, not cosmetic: the graph applies each command as
     // it validates it, so a turn resolved before the step would aim the being

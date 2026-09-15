@@ -29,12 +29,15 @@ import {
   NIRVANA_ATLAS_PROFILE,
   createNirvanaProductionManifest,
 } from "./nirvana/NirvanaAssetProfile";
+import { createNirvanaStaticScenePlan, NIRVANA_STATIC_SCENE_PROVIDER } from "./nirvana/NirvanaStaticSceneProvider";
 import { channelFrameIdFor, nirvanaTerrainOverlayFrameIds } from "./nirvana/NirvanaAtlas";
 import {
   createNirvanaInitialRegionForRecipe,
   createNirvanaRegionMapRecipe,
 } from "./nirvana/NirvanaRegionMapRecipe";
-import { NIRVANA_STATIC_SCENE_PROVIDER } from "./nirvana/NirvanaStaticSceneProvider";
+import { depthSceneryPlacements } from "./depth/DepthScenery";
+import { DEPTH_SCENERY_ATLAS_ID, withDepthSceneryManifest } from "./depth/DepthSceneryAssets";
+import { ATLAS_BRIDGE_MATERIALS_ID, withAtlasBridgeManifest } from "./world/AtlasBridgeAssets";
 import type { PlacementLedger } from "./placement/PlacementLedger";
 import { feetAnchoredVisualRect } from "./productionGeometry";
 import {
@@ -80,9 +83,11 @@ const recipes = regions.map((value) => createRegionMapRecipe(createRegionMapIden
 const CONTINUATION_PATTERN_TILE_COUNT = 8 * 8;
 
 let contexts = new WeakMap<HTMLCanvasElement, RecordingContext>();
+let canvasesWithContexts: HTMLCanvasElement[] = [];
 
 beforeEach(() => {
   contexts = new WeakMap<HTMLCanvasElement, RecordingContext>();
+  canvasesWithContexts = [];
   vi.restoreAllMocks();
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function getContext(
     this: HTMLCanvasElement,
@@ -91,6 +96,7 @@ beforeEach(() => {
     if (!context) {
       context = new RecordingContext();
       contexts.set(this, context);
+      canvasesWithContexts.push(this);
     }
     return context as unknown as CanvasRenderingContext2D;
   });
@@ -1337,6 +1343,89 @@ describe("CanvasPresentationRenderer", () => {
     fixture.renderer.dispose();
   });
 
+  it("omits a depth-replaced authored root from the focused static cache while leasing generated scenery", async () => {
+    const recipe = exactNirvanaRecipe();
+    const manifest = withDepthSceneryManifest(createNirvanaProductionManifest(PRODUCTION_ASSET_MANIFEST));
+    const replacement = depthSceneryPlacements(recipe)[0];
+    expect(replacement).toBeDefined();
+
+    // Resolve the native operation directly from the trusted provider so the assertion compares
+    // the exact source and destination that would have been cached before depth replacement.
+    const nativeLeases = new Map([
+      [NIRVANA_ATLAS_PROFILE.terrainAtlasId, lease(NIRVANA_ATLAS_PROFILE.terrainAtlasId)],
+      [NIRVANA_ATLAS_PROFILE.sceneryAtlasId, lease(NIRVANA_ATLAS_PROFILE.sceneryAtlasId)],
+    ]);
+    const nativePlan = createNirvanaStaticScenePlan(recipe, nativeLeases);
+    const originalStableId = `scenery:${replacement!.id}`;
+    const original = nativePlan.operations.find(({ stableId }) => stableId === originalStableId);
+    expect(original).toBeDefined();
+    expect(original!.layer).toBe("scenery");
+    const input = frame({ revision: 1, sceneRegion: "nirvana" });
+    const descriptor = NIRVANA_STATIC_SCENE_PROVIDER.describe(recipe, {
+      frame: input,
+      priorDescriptor: null,
+    });
+    const originalDraw = [
+      original!.source.x,
+      original!.source.y,
+      original!.source.width,
+      original!.source.height,
+      Math.round(original!.destination.x - descriptor.worldBounds.x),
+      Math.round(original!.destination.y - descriptor.worldBounds.y),
+      original!.destination.width,
+      original!.destination.height,
+    ];
+
+    const fixture = await harness({
+      recipes: [recipe],
+      manifest,
+      staticSceneProviders: new Map([["nirvana-v2", NIRVANA_STATIC_SCENE_PROVIDER]]),
+    });
+    fixture.renderer.updatePresentation(input);
+    await settle();
+
+    const sceneryCanvas = fixture.cacheCanvases.find((canvas) => canvas.dataset.cache === "scenery");
+    expect(sceneryCanvas).toBeDefined();
+    const draws = contexts.get(sceneryCanvas!)!.drawImageCalls;
+    expect(fixture.pool.acquire.mock.calls.map(([id]) => id)).toContain(DEPTH_SCENERY_ATLAS_ID);
+    expect(draws.some(([source, ...args]) => (
+      (source as { label?: string }).label === NIRVANA_ATLAS_PROFILE.sceneryAtlasId
+      && JSON.stringify(args) === JSON.stringify(originalDraw)
+    ))).toBe(false);
+    // Focused caches leave the replacement to the live depth pass; the generated source must not
+    // be baked into this cache and then drawn a second time by the graph.
+    expect(draws.some(([source]) => (
+      (source as { label?: string }).label === DEPTH_SCENERY_ATLAS_ID
+    ))).toBe(false);
+    fixture.renderer.dispose();
+  });
+
+  it("withholds the flat pilot bridge and grounding duplicates from the live scenery cache", async () => {
+    const recipe = exactNirvanaRecipe();
+    const nativeLeases = new Map([
+      [NIRVANA_ATLAS_PROFILE.terrainAtlasId, lease(NIRVANA_ATLAS_PROFILE.terrainAtlasId)],
+      [NIRVANA_ATLAS_PROFILE.sceneryAtlasId, lease(NIRVANA_ATLAS_PROFILE.sceneryAtlasId)],
+    ]);
+    const nativePlan = createNirvanaStaticScenePlan(recipe, nativeLeases);
+    const pilot = nativePlan.operations.filter(({ stableId }) => stableId.includes(":north-channel-bridge:"));
+    expect(pilot.length).toBeGreaterThan(10);
+    const fixture = await harness({ recipes: [recipe],
+      manifest: createNirvanaProductionManifest(PRODUCTION_ASSET_MANIFEST),
+      staticSceneProviders: new Map([["nirvana-v2", NIRVANA_STATIC_SCENE_PROVIDER]]),
+    });
+    fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "nirvana" }));
+    await settle();
+    const cache = fixture.cacheCanvases.find((canvas) => canvas.dataset.cache === "scenery")!;
+    const draws = contexts.get(cache)!.drawImageCalls;
+    for (const operation of pilot) {
+      const expected = [operation.source.x, operation.source.y, operation.source.width, operation.source.height,
+        operation.destination.x, operation.destination.y, operation.destination.width, operation.destination.height];
+      expect(draws.some(([source, ...args]) => (source as { label?: string }).label === operation.atlasId
+        && JSON.stringify(args) === JSON.stringify(expected))).toBe(false);
+    }
+    fixture.renderer.dispose();
+  });
+
   it("renders native scenic landmarks before unclustered 32px scenery and hides cluster collision proxies", async () => {
     const fixture = await harness();
     const recipe = recipes.find(({ regionId }) => regionId === "worn")!;
@@ -2443,6 +2532,39 @@ describe("CanvasPresentationRenderer", () => {
   });
 
   describe("Z3 world-sheet LOD (worldSheetSnapshots)", () => {
+    it("uses the leased bridge texture for actual connected regions in the Atlas foreground", async () => {
+      const fixture = await harness({
+        worldSheetSnapshots: true,
+        manifest: withAtlasBridgeManifest(PRODUCTION_ASSET_MANIFEST),
+      });
+      fixture.renderer.resize(800, 600);
+      const input = frame({ revision: 1, sceneRegion: "worn" });
+      const connected = {
+        ...input,
+        world: {
+          ...input.world,
+          regions: input.world.regions.map((record) => ({
+            ...record,
+            value: { ...record.value, connections: [record.value.name === "worn" ? "spring" : "worn"] },
+          })),
+        },
+      };
+      fixture.renderer.updatePresentation(connected);
+      await settle();
+      fixture.driver.fire(16);
+      fixture.renderer.exitToWorldView?.();
+      let nowMs = 16;
+      for (let step = 0; step < 60 && fixture.debug().worldNavigation.ascending; step += 1) {
+        nowMs += 120;
+        fixture.driver.fire(nowMs);
+        await settle();
+      }
+      fixture.driver.fire(nowMs + 16);
+      const draws = contexts.get(fixture.canvas)!.drawImageCalls;
+      expect(draws.some(([source]) => (source as { label?: string }).label === ATLAS_BRIDGE_MATERIALS_ID)).toBe(true);
+      fixture.renderer.dispose();
+    });
+
     it("leaves the render byte-for-byte unchanged when worldSheetSnapshots is left at its default (off)", async () => {
       // `worldSheetSnapshots` defaults to false so every OTHER test in this file -- none of which
       // pass it -- keeps exercising the exact pre-Z3 single-region render. This is the explicit
@@ -2464,6 +2586,87 @@ describe("CanvasPresentationRenderer", () => {
       // compositing. Excludes the pre-existing continuation-pattern fill (also large, but always
       // painted with a `CanvasPattern` fillStyle, tracked separately in `patternFillRectCalls`).
       expect(nonPatternFillRects(context).some(isLargeFillRect)).toBe(false);
+      fixture.renderer.dispose();
+    });
+
+    it("adds leased depth replacements to the focused Atlas map inset while preserving the fallback", async () => {
+      const recipe = exactNirvanaRecipe();
+      const staticSceneProviders = new Map([["nirvana-v2", NIRVANA_STATIC_SCENE_PROVIDER]]);
+
+      const renderWorldMap = async (manifest: ProductionAssetManifest): Promise<unknown[][]> => {
+        const firstCanvas = canvasesWithContexts.length;
+        const fixture = await harness({
+          worldSheetSnapshots: true,
+          recipes: [recipe],
+          manifest,
+          staticSceneProviders,
+        });
+        fixture.renderer.resize(800, 600);
+        fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "nirvana" }));
+        await settle();
+        let nowMs = 16;
+        fixture.driver.fire(nowMs);
+        await settle();
+
+        fixture.renderer.exitToWorldView?.();
+        for (let step = 0; step < 60 && fixture.debug().worldNavigation.ascending; step += 1) {
+          nowMs += 120;
+          fixture.driver.fire(nowMs);
+          await settle();
+        }
+        expect(fixture.debug().worldNavigation.scope).toBe("world");
+        fixture.driver.fire(nowMs + 16);
+        await settle();
+
+        const cacheCanvases = new Set(fixture.cacheCanvases);
+        const mapCalls = canvasesWithContexts
+          .slice(firstCanvas)
+          .filter((candidate) => candidate !== fixture.canvas && !cacheCanvases.has(candidate))
+          .flatMap((candidate) => contexts.get(candidate)?.drawImageCalls ?? []);
+        fixture.renderer.dispose();
+        return mapCalls;
+      };
+
+      const fallbackCalls = await renderWorldMap(
+        createNirvanaProductionManifest(PRODUCTION_ASSET_MANIFEST),
+      );
+      const depthCalls = await renderWorldMap(
+        withDepthSceneryManifest(createNirvanaProductionManifest(PRODUCTION_ASSET_MANIFEST)),
+      );
+      const sourceLabel = (call: unknown[]): string | undefined => (
+        (call[0] as { label?: string; dataset?: { cache?: string } } | undefined)?.label
+        ?? (call[0] as { dataset?: { cache?: string } } | undefined)?.dataset?.cache
+      );
+
+      expect(fallbackCalls.some((call) => sourceLabel(call) === "scenery")).toBe(true);
+      expect(fallbackCalls.some((call) => sourceLabel(call) === DEPTH_SCENERY_ATLAS_ID)).toBe(false);
+      expect(depthCalls.some((call) => sourceLabel(call) === DEPTH_SCENERY_ATLAS_ID)).toBe(true);
+    });
+
+    it("hides the live region-space depth pass only while the Atlas inset is visible", async () => {
+      const fixture = await harness({ worldSheetSnapshots: true });
+      fixture.renderer.resize(800, 600);
+      fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "worn" }));
+      await settle();
+      fixture.driver.fire(16);
+      expect(fixture.graph.draw.mock.calls.at(-1)?.[1]).toMatchObject({
+        depthSceneryVisible: true,
+        regionContentVisible: true,
+      });
+
+      fixture.renderer.exitToWorldView?.();
+      let nowMs = 16;
+      for (let step = 0; step < 60 && fixture.debug().worldNavigation.ascending; step += 1) {
+        nowMs += 120;
+        fixture.driver.fire(nowMs);
+        await settle();
+      }
+      expect(fixture.debug().worldNavigation.scope).toBe("world");
+      expect(fixture.graph.draw.mock.calls.at(-1)?.[1]).toMatchObject({
+        depthSceneryVisible: false,
+        regionContentVisible: false,
+      });
+
       fixture.renderer.dispose();
     });
 
@@ -2805,6 +3008,28 @@ describe("CanvasPresentationRenderer", () => {
       fixture.renderer.dispose();
     });
 
+    it("holds the explicitly viewed region when the first typed event arrives after returning to Auto", async () => {
+      const fixture = await insideWorn();
+      fixture.renderer.setCameraMode("free");
+      fixture.renderer.setCameraMode("story");
+      fixture.driver.fire(32);
+      fixture.renderer.updatePresentation(frame({
+        revision: 2,
+        sceneRegion: "spring",
+        eventType: "resource_changed",
+      }));
+      await settle();
+      fixture.driver.fire(48);
+      await settle();
+
+      expect(fixture.debug()).toMatchObject({
+        visibleRegionId: "worn",
+        loadingRegionId: null,
+        camera: { mode: "story" },
+      });
+      fixture.renderer.dispose();
+    });
+
     it("still lets the VIEWER move between regions -- the restriction is on the director", async () => {
       // Every viewer path between regions arrives here: the Atlas island click and the World
       // drawer's pick, the `[`/`]` keys, a Chronicle card's travel, and a follow pursuit whose
@@ -3111,13 +3336,9 @@ describe("CanvasPresentationRenderer", () => {
       fixture.renderer.dispose();
     });
 
-    it("keeps selectAt's pick tolerance in WORLD px, so a far-offshore click at sheet zoom selects nothing while a click on a being still does", async () => {
-      // The old tolerance was 44 CSS px converted to world space via `/ zoom`, so at world/sheet
-      // zoom (well below 1) it ballooned -- a click tens of world-px off a being, which reads as
-      // open sea, could still resolve to it. Proven here by picking an offshore distance strictly
-      // between the fixed 44 world-px tolerance and what the OLD zoom-scaled tolerance would have
-      // allowed at this fixture's actual sheet zoom: the old code would have selected it, the fixed
-      // code must not.
+    it("does not select hidden regional hit targets over the Atlas sea", async () => {
+      // Raw regional coordinates do not match the fitted island inset. Even a direct hit must
+      // remain inert while those bodies are represented by land-anchored Atlas marks instead.
       const onSelectionChange = vi.fn();
       const fixture = await harness({
         worldSheetSnapshots: true,
@@ -3140,28 +3361,13 @@ describe("CanvasPresentationRenderer", () => {
         toJSON: () => ({}),
       });
 
-      // Mirrors `SELECTION_PICK_TOLERANCE_WORLD_PX` in CanvasPresentationRenderer.ts (not exported).
-      const SELECTION_PICK_TOLERANCE_WORLD_PX = 44;
       const debug = fixture.debug();
       const origin = debug.renderRasterOrigin!;
       const zoom = debug.camera.zoom;
-      // Sanity: this is genuinely a sub-1 sheet zoom, so the old `44 / zoom` tolerance was strictly
-      // larger than the new fixed one -- otherwise this test would not distinguish the two.
-      expect(zoom).toBeLessThan(1);
-      const oldWorldTolerance = 44 / zoom;
-      expect(oldWorldTolerance).toBeGreaterThan(SELECTION_PICK_TOLERANCE_WORLD_PX);
-      const offshoreDistance = (SELECTION_PICK_TOLERANCE_WORLD_PX + oldWorldTolerance) / 2;
-      const clickWorld = (x: number, y: number): void => {
-        fixture.renderer.selectAt?.({ x: origin.x + x * zoom, y: origin.y + y * zoom });
-      };
-
-      // Distance-to-edge of the 8x8 target centred on the origin is (x - 4) along this axis.
-      clickWorld(offshoreDistance + 4, 0);
+      expect(fixture.graph.draw.mock.calls.at(-1)?.[1]).toMatchObject({ regionContentVisible: false });
+      fixture.renderer.selectAt?.({ x: origin.x, y: origin.y });
+      fixture.renderer.selectAt?.({ x: origin.x + 60 * zoom, y: origin.y });
       expect(onSelectionChange).not.toHaveBeenCalled();
-
-      // The being itself still selects at the same sheet zoom.
-      clickWorld(0, 0);
-      expect(onSelectionChange).toHaveBeenLastCalledWith({ kind: "agent", id: "shore-dweller" });
       fixture.renderer.dispose();
     });
 
@@ -3224,6 +3430,96 @@ describe("CanvasPresentationRenderer", () => {
       expect(after.camera.center.x).toBeLessThanOrEqual(springRect.x + springRect.width);
       expect(after.camera.center.y).toBeGreaterThanOrEqual(springRect.y);
       expect(after.camera.center.y).toBeLessThanOrEqual(springRect.y + springRect.height);
+      fixture.renderer.dispose();
+    });
+
+    it.each([false, true])(
+      "flies to a directly selected region and keeps it mounted after a region-scope switch (reduced=%s)",
+      async (reducedMotion) => {
+        const fixture = await harness({ worldSheetSnapshots: true, reducedMotion });
+        fixture.renderer.resize(800, 600);
+        fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "worn" }));
+        await settle();
+        fixture.driver.fire(16);
+        fixture.renderer.setCameraMode("free");
+        expect(fixture.debug().worldNavigation.scope).toBe("region");
+
+        fixture.renderer.observeRegion("spring");
+
+        // A direct World-drawer selection is a viewer navigation request. It must launch the same
+        // descent as an island click; a cache swap plus local-frame rebase alone leaves the camera
+        // over the old island and lets focus-follow mount it again.
+        expect(fixture.debug().camera.flying).toBe(!reducedMotion);
+
+        let nowMs = 16;
+        for (let step = 0; step < 60; step += 1) {
+          nowMs += 120;
+          fixture.driver.fire(nowMs);
+          await settle();
+          const progress = fixture.debug();
+          if (progress.visibleRegionId === "spring"
+            && progress.worldNavigation.frameOriginRegionId === "spring"
+            && !progress.camera.flying
+            && progress.loadingRegionId === null) break;
+        }
+
+        const arrived = fixture.debug();
+        expect(arrived.visibleRegionId).toBe("spring");
+        expect(arrived.worldNavigation.frameOriginRegionId).toBe("spring");
+        expect(arrived.worldNavigation.focusedRegionId).toBe("spring");
+        expect(arrived.camera.flying).toBe(false);
+        const bounds = arrived.camera.worldBounds!;
+        expect(arrived.camera.center.x).toBeGreaterThanOrEqual(bounds.x);
+        expect(arrived.camera.center.x).toBeLessThanOrEqual(bounds.x + bounds.width);
+        expect(arrived.camera.center.y).toBeGreaterThanOrEqual(bounds.y);
+        expect(arrived.camera.center.y).toBeLessThanOrEqual(bounds.y + bounds.height);
+        fixture.renderer.dispose();
+      },
+    );
+
+    it("lets the latest direct region pick supersede an earlier descent", async () => {
+      const quickPickRegions = [
+        region("worn", "a once-heavenly landscape, now thinning and picked-over"),
+        region("spring", "hot spring lakes"),
+        region("third", "a quiet meadow"),
+      ];
+      const quickPickRecipes = quickPickRegions.map((value) => (
+        createRegionMapRecipe(createRegionMapIdentity(71, value, quickPickRegions))
+      ));
+      const fixture = await harness({ worldSheetSnapshots: true, recipes: quickPickRecipes });
+      fixture.renderer.resize(800, 600);
+      fixture.renderer.updatePresentation(frame({ revision: 1, sceneRegion: "worn" }));
+      await settle();
+      fixture.driver.fire(16);
+      fixture.renderer.setCameraMode("free");
+
+      fixture.renderer.observeRegion("spring");
+      expect(fixture.debug().worldNavigation.descendingIntoRegionId).toBe("spring");
+
+      // The second Atlas/World pick is the viewer's current intent. It must replace both the
+      // pending landing witness and the camera flight, rather than being dropped by the first
+      // descent's guard.
+      fixture.renderer.observeRegion("third");
+      expect(fixture.debug().worldNavigation.descendingIntoRegionId).toBe("third");
+
+      let nowMs = 16;
+      for (let step = 0; step < 60; step += 1) {
+        nowMs += 120;
+        fixture.driver.fire(nowMs);
+        await settle();
+        const progress = fixture.debug();
+        if (progress.visibleRegionId === "third"
+          && progress.worldNavigation.frameOriginRegionId === "third"
+          && progress.worldNavigation.descendingIntoRegionId === null
+          && !progress.camera.flying
+          && progress.loadingRegionId === null) break;
+      }
+
+      const arrived = fixture.debug();
+      expect(arrived.visibleRegionId).toBe("third");
+      expect(arrived.worldNavigation.frameOriginRegionId).toBe("third");
+      expect(arrived.worldNavigation.descendingIntoRegionId).toBeNull();
+      expect(arrived.camera.flying).toBe(false);
       fixture.renderer.dispose();
     });
 
@@ -3888,8 +4184,13 @@ describe("CanvasPresentationRenderer", () => {
       .reduce((total, chunk) => total + chunk.landmarks
         .reduce((subtotal, landmark) => subtotal + landmark.visuals.length, 0), 0);
     const sceneryCount = chunks.reduce((total, chunk) => total + chunk.scenery.length, 0);
+    // This seed's 230 tall props now carry one native foot-edge grounding blit each.
+    const groundingAccentCount = 230;
+    // Each native pilot bridge piece and its grounding accent now belongs to the live depth pass.
+    const deferredBridgeDraws = chunks.reduce((total, chunk) => total + chunk.scenery
+      .filter(({ id }) => /^(bridge|post|pier):north-channel-bridge:/.test(id)).length * 2, 0);
     const expectedDraws = 96 * 96 + overlayCount + channelCount + roadCount
-      + landmarkCount + sceneryCount + CONTINUATION_PATTERN_TILE_COUNT;
+      + landmarkCount + sceneryCount + groundingAccentCount + CONTINUATION_PATTERN_TILE_COUNT - deferredBridgeDraws;
     const atlasCommitScheduler = new FakeAtlasCommitScheduler();
     const fixture = await harness({
       atlasCommitScheduler,
@@ -5769,6 +6070,49 @@ describe("CanvasPresentationRenderer", () => {
     fixture.renderer.dispose();
   });
 
+  it("keeps Follow attached while an authoritative recorded migration changes regions", async () => {
+    const fixture = await harness();
+    const selected = { kind: "agent", id: "agent-a" } as const;
+    fixture.graph.debugValue.hitTargets = [{
+      selection: selected,
+      worldBounds: { x: 80, y: 70, width: 24, height: 32 },
+      feetY: 102,
+      selectionKey: "agent:agent-a",
+    }];
+    fixture.renderer.updatePresentation(frame({
+      revision: 1,
+      sceneRegion: "worn",
+      selection: selected,
+    }));
+    await settle();
+    fixture.renderer.setCameraMode("follow");
+
+    const base = frame({
+      revision: 2,
+      sceneRegion: "worn",
+      selection: selected,
+    });
+    const entered: PresentedObserverFrame = {
+      ...base,
+      world: {
+        ...base.world,
+        agents: base.world.agents.map((record) => ({
+          ...record,
+          value: { ...record.value, position: "spring" },
+        })),
+      },
+    };
+    fixture.renderer.updatePresentation(entered);
+    await settle();
+
+    expect(fixture.debug()).toMatchObject({
+      visibleRegionId: "spring",
+      camera: { mode: "follow", followEntityId: "agent:agent-a" },
+    });
+    expect(fixture.graph.frames.at(-1)?.world.agents[0]?.value.position).toBe("spring");
+    fixture.renderer.dispose();
+  });
+
   it("does not echo an identical observer selection more than once", async () => {
     const onSelectionChange = vi.fn();
     const fixture = await harness({ callbacks: { onSelectionChange } });
@@ -6638,7 +6982,7 @@ function fakeGraph() {
       ignoredCommandIds: [],
     })),
     sceneSignals: vi.fn((afterSerial = 0) => graph.sceneSignalValue.filter(({ serial }) => serial > afterSerial)),
-    draw: vi.fn((context: CanvasRenderingContext2D) => {
+    draw: vi.fn((context: CanvasRenderingContext2D, _view?: unknown) => {
       (context as unknown as RecordingContext).trace.push("graph:draw");
     }),
     nextDeadlineMs: vi.fn(() => graph.deadline),
@@ -6984,6 +7328,8 @@ class RecordingContext {
   }
   strokeRect(): void {}
   translate(): void {}
+  rotate(): void {}
+  transform(): void {}
   scale(): void {}
   setTransform(...args: unknown[]): void { this.setTransformCalls.push(args); }
   beginPath(): void {}
@@ -6996,6 +7342,7 @@ class RecordingContext {
   // only enough surface for that code not to throw when exercised under test.
   moveTo(): void {}
   lineTo(): void {}
+  quadraticCurveTo(): void {}
   closePath(): void {}
   fill(): void {}
   clip(): void {}

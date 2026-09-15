@@ -429,9 +429,9 @@
       "cellHeight": 48,
       "columns": 5,
       "rows": 28,
-      "compressedBytes": 13136,
+      "compressedBytes": 13269,
       "decodedBytes": 591360,
-      "sha256": "119e71437fcf626aa28f866565f2fa3a0a433aa3016f62bc9c6e018122052d27"
+      "sha256": "bb9ff63d872687cbc157555b3e898626440d60cc287213d45e6ecec25d018fde"
     },
     {
       "id": "worn-heartland-terrain",
@@ -1728,11 +1728,11 @@
   },
   "currentUiCompressedBytes": 0,
   "currentUiDecodedBytes": 0,
-  "coreArtCompressedBytes": 390010,
+  "coreArtCompressedBytes": 390143,
   "coreArtDecodedBytes": 26674688,
   "coreMetadataCompressedBytes": 21682,
   "coreMetadataDecodedBytes": 21682,
-  "coreCompressedBytes": 411692,
+  "coreCompressedBytes": 411825,
   "exactCoreDecodedBytes": 26696370,
   "regionArtCompressedBytes": {
     "worn-heartland": 136870,
@@ -1770,11 +1770,11 @@
     "worn-heartland": 140729
   },
   "activeCompressedBytes": {
-    "ash-waste": 515726,
-    "dry-scrub": 514193,
-    "neutral-temperate": 517502,
-    "spring-terraces": 517971,
-    "worn-heartland": 552421
+    "ash-waste": 515859,
+    "dry-scrub": 514326,
+    "neutral-temperate": 517635,
+    "spring-terraces": 518104,
+    "worn-heartland": 552554
   },
   "exactPeakActiveDecodedBytes": {
     "ash-waste": 30984581,

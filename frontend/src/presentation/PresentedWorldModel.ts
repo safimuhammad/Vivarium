@@ -13,7 +13,12 @@ import {
   type ProjectedWorldState,
   type ProjectionResult,
 } from "./PresentedEventProjector";
-import { parsePresentedEvent, type TypedPresentedEvent } from "./eventPayloads";
+import {
+  parsePresentedEvent,
+  parseSpatialTravelEvent,
+  type TypedPresentedEvent,
+  type TypedSpatialTravelEvent,
+} from "./eventPayloads";
 
 export interface ProjectionBatchResult extends ProjectionResult {
   readonly firstCursor: number;
@@ -79,17 +84,19 @@ export class PresentedWorldModel {
     if (this.disposed) return inertBatch(this.state);
     validateEvidenceCursors(entries, this.state.projectedThroughCursor);
     const ownedEntries = structuredClone(entries) as EventEnvelopeEntry[];
-    const parsed = ownedEntries.map(parsePresentedEvent);
+    const parsed = ownedEntries.map(parseProjectableEvent);
     let draft = this.state;
     const appliedFields: string[] = [];
     const unresolvedFields: string[] = [];
 
     for (const event of parsed) {
-      if (!event.known) {
+      if (event.kind === "unknown") {
         draft = { ...draft, projectedThroughCursor: event.entry.cursor };
         continue;
       }
-      const result = this.projector.project(draft, event.evidence);
+      const result = event.kind === "spatial"
+        ? this.projector.projectSpatial(draft, event.evidence)
+        : this.projector.project(draft, event.evidence);
       draft = result.state;
       appendUnique(appliedFields, result.appliedFields);
       appendUnique(unresolvedFields, result.unresolvedFields);
@@ -147,11 +154,13 @@ export class PresentedWorldModel {
     let draft = prepareExactState(snapshot, exactIdentity);
     const retained = this.evidenceSuffix.filter((entry) => entry.cursor > snapshot.event_cursor);
     for (const entry of retained) {
-      const parsed = parsePresentedEvent(entry);
-      if (!parsed.known) {
+      const parsed = parseProjectableEvent(entry);
+      if (parsed.kind === "unknown") {
         draft = { ...draft, projectedThroughCursor: entry.cursor };
       } else {
-        draft = this.projector.project(draft, parsed.evidence).state;
+        draft = (parsed.kind === "spatial"
+          ? this.projector.projectSpatial(draft, parsed.evidence)
+          : this.projector.project(draft, parsed.evidence)).state;
       }
     }
     draft = freezeProjectedState(draft);
@@ -253,6 +262,20 @@ export class PresentedWorldModel {
   dispose(): void {
     this.disposed = true;
   }
+}
+
+type ProjectableEvent =
+  | Readonly<{ kind: "visual"; evidence: TypedPresentedEvent }>
+  | Readonly<{ kind: "spatial"; evidence: TypedSpatialTravelEvent }>
+  | Readonly<{ kind: "unknown"; entry: EventEnvelopeEntry }>;
+
+function parseProjectableEvent(entry: EventEnvelopeEntry): ProjectableEvent {
+  const spatial = parseSpatialTravelEvent(entry);
+  if (spatial !== null) return Object.freeze({ kind: "spatial", evidence: spatial });
+  const parsed = parsePresentedEvent(entry);
+  return parsed.known
+    ? Object.freeze({ kind: "visual", evidence: parsed.evidence })
+    : Object.freeze({ kind: "unknown", entry: parsed.entry });
 }
 
 function prepareExactState(snapshot: WorldSnapshot, identity: FrameIdentity): ProjectedWorldState {

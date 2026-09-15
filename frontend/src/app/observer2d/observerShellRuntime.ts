@@ -5,6 +5,7 @@ import {
   type ReplayPresentationWindow,
 } from "../replayArtifactClient";
 import {
+  createHistoricalReplayPresentationWindow,
   createReplaySession,
   type ReplaySession,
 } from "../replaySession";
@@ -141,6 +142,12 @@ export interface ObserverShellRuntime {
    * moment or says, on the frame, that it cannot.
    */
   viewCursor(cursor: number): void;
+  /**
+   * Restores an authoritative spatial card into an isolated historical archive
+   * session. Returns false when the bounded recording cannot prove that state,
+   * so callers can retain ordinary Chronicle focus behavior.
+   */
+  replayCursor(cursor: number): Promise<boolean>;
   retryRecovery(): Promise<void>;
   reconnectStream(): void;
   setCameraMode(mode: CameraMode): void;
@@ -250,6 +257,10 @@ export function createObserverShellRuntime(
   let catalogueRunId: string | null = null;
   let catalogueArtifacts: ReplayArtifacts | null = null;
   let cataloguePageRequest: InFlightCataloguePage | null = null;
+  // Assigned before fetching a Chronicle card's artifacts. It represents the
+  // latest navigation intent, so an older slow card can never bind after a
+  // newer card or a Return to Live.
+  let replayRequestGeneration = 0;
   let selectedArchiveCheckpointIdentity: SelectedArchiveCheckpointIdentity | null = null;
   let rebindingToLive = false;
   let liveSourceKey: string | null = null;
@@ -374,8 +385,9 @@ export function createObserverShellRuntime(
     window: ReplayPresentationWindow,
     selectedKey: ObserverArchiveCheckpointKey | null = null,
     selectedIdentity: SelectedArchiveCheckpointIdentity | null = null,
+    requestIsCurrent?: () => boolean,
   ): Promise<void> => {
-    if (disposed || binding === null) return;
+    if (disposed || binding === null || requestIsCurrent?.() === false) return;
     const liveFrame = live.session.getFrame();
     const acceptedLiveIdentity = Object.freeze({
       runId: liveFrame.runId,
@@ -414,7 +426,7 @@ export function createObserverShellRuntime(
       await next.session.ready;
     } catch {
       next?.dispose();
-      if (!disposed && request === archiveGeneration) {
+      if (!disposed && request === archiveGeneration && requestIsCurrent?.() !== false) {
         archiveState = retainedArchive === null
           ? Object.freeze({ status: "error" })
           : retainedArchiveState;
@@ -428,6 +440,7 @@ export function createObserverShellRuntime(
       || request !== archiveGeneration
       || binding === null
       || archive !== retainedArchive
+      || requestIsCurrent?.() === false
     ) {
       next.dispose();
       return;
@@ -452,6 +465,11 @@ export function createObserverShellRuntime(
       publishLocalState();
       return;
     }
+    // A card request fetches its retained artifacts asynchronously. A watcher
+    // can pause, change speed, or hold the current view in the same click turn
+    // before this fresh archive owner is ready. Carry those controls across
+    // before binding so its route clock starts with the viewer's actual choice.
+    copyViewerControls(selectedSession(binding.getFrame()), next.session);
     const archiveFrame = next.session.getFrame();
     archive = { bundle: next, sourceKey: archiveFrame.sourceKey };
     selectedArchiveCheckpointIdentity = selectedIdentity;
@@ -474,6 +492,7 @@ export function createObserverShellRuntime(
     liveIdentity = Object.freeze({ runId: frame.runId, sourceKey: frame.sourceKey });
     registerLiveSource(frame);
     if (!changed) return;
+    replayRequestGeneration += 1;
     cameraMode = "story";
     observedRegionId = null;
     focusRequest = null;
@@ -594,6 +613,56 @@ export function createObserverShellRuntime(
     viewCursor(cursor): void {
       currentControls(binding, archive, live)?.viewCursor(cursor);
     },
+    async replayCursor(cursor): Promise<boolean> {
+      if (!Number.isSafeInteger(cursor) || cursor < 0 || disposed || binding === null) {
+        return false;
+      }
+      const request = replayRequestGeneration + 1;
+      replayRequestGeneration = request;
+      const superseded = (): boolean => disposed || replayRequestGeneration !== request;
+      const liveFrame = live.session.getFrame();
+      const acceptedLiveIdentity = Object.freeze({
+        runId: liveFrame.runId,
+        sourceKey: liveFrame.sourceKey,
+      });
+      let artifacts = catalogueArtifacts;
+      if (artifacts === null || catalogueRunId !== acceptedLiveIdentity.runId) {
+        try {
+          artifacts = await replayClient.fetchForRun(acceptedLiveIdentity.runId);
+        } catch {
+          // A newer card or Return to Live already owns the viewer's intent.
+          // Report this as handled so the stale click cannot fall through to a
+          // moment focus against whichever world happens to be selected now.
+          return superseded();
+        }
+      }
+      if (superseded()) return true;
+      if (
+        live.session.getFrame().runId !== acceptedLiveIdentity.runId
+        || live.session.getFrame().sourceKey !== acceptedLiveIdentity.sourceKey
+      ) return true;
+      if (
+        (artifacts.runId !== undefined && artifacts.runId !== acceptedLiveIdentity.runId)
+        || artifacts.checkpoints.some((checkpoint) => checkpoint.run_id !== acceptedLiveIdentity.runId)
+      ) return false;
+      const window = createHistoricalReplayPresentationWindow(artifacts, cursor);
+      if (window === null || window.snapshot.run_id !== acceptedLiveIdentity.runId) return false;
+      if (superseded()) return true;
+      // Keep the exact source around for archive return/re-entry, but do not
+      // surface an Archive loading/error state for a card that later falls back.
+      if (catalogueArtifacts === null || catalogueRunId !== acceptedLiveIdentity.runId) {
+        catalogueArtifacts = artifacts;
+        catalogueRunId = acceptedLiveIdentity.runId;
+      }
+      await enterArchiveWindow(
+        window,
+        null,
+        null,
+        () => !disposed && replayRequestGeneration === request,
+      );
+      if (superseded()) return true;
+      return archive?.sourceKey === window.sourceKey;
+    },
     retryRecovery(): Promise<void> {
       if (binding === null || disposed) return Promise.resolve();
       return selectedSession(binding.getFrame()).retryRecovery();
@@ -697,6 +766,7 @@ export function createObserverShellRuntime(
       return promise;
     },
     async enterArchiveCheckpoint(key): Promise<void> {
+      replayRequestGeneration += 1;
       if (
         disposed
         || catalogueArtifacts === null
@@ -725,8 +795,13 @@ export function createObserverShellRuntime(
       }
       await enterArchiveWindow(window, key, selectedIdentity);
     },
-    enterArchive: enterArchiveWindow,
+    enterArchive(window): Promise<void> {
+      replayRequestGeneration += 1;
+      return enterArchiveWindow(window);
+    },
     returnToLive(): void {
+      // Even before an archive binds, this cancels a slow card request.
+      replayRequestGeneration += 1;
       if (disposed || binding === null || archive === null) return;
       archiveGeneration += 1;
       selectedArchiveCheckpointIdentity = null;
@@ -754,6 +829,7 @@ export function createObserverShellRuntime(
       disposed = true;
       lifecycleGeneration += 1;
       archiveGeneration += 1;
+      replayRequestGeneration += 1;
       catalogueGeneration += 1;
       catalogueRunId = null;
       catalogueArtifacts = null;
@@ -908,6 +984,17 @@ function createSelectedSpatialBridge(): SelectedSpatialBridge {
       selected = released;
     },
   });
+}
+
+function copyViewerControls(
+  from: PresentationSession,
+  to: PresentationSession,
+): void {
+  const source = from.diagnostics();
+  const controls = to.controls();
+  controls.setSpeed(source.speed);
+  if (source.held) controls.holdCurrentMoment(true);
+  if (source.paused) controls.pause();
 }
 
 function currentControls(

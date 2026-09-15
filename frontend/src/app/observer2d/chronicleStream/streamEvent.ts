@@ -7,7 +7,7 @@
  * here is fixture-specific: the only inputs are an envelope entry, a name
  * registry, and the feed clock.
  *
- * The shared vocabulary (`EVENT_LEGIBILITY_MAP`, `OVERLAY_FAMILY_ACCENT`,
+ * The shared vocabulary (`OVERLAY_FAMILY_ACCENT`,
  * `identityHue`) is read, never redefined, so a card and the world's own overlay
  * mark for the same event carry the same glyph in the same accent.
  */
@@ -15,7 +15,6 @@
 import type { EventEnvelopeEntry } from "../../schemas";
 import { getEventVisualMetadata, type EventVisualMetadata } from "../../../events/eventVisualCatalog";
 import {
-  EVENT_LEGIBILITY_MAP,
   overlayMappingFor,
   type OverlayFamily,
   type OverlayGlyph,
@@ -23,7 +22,13 @@ import {
   type OverlayMappingEntry,
   type OverlayTier,
 } from "../../../presentation/eventLegibilityMap";
-import type { PresentedEventType } from "../../../presentation/eventPayloads";
+import {
+  isSpatialTravelEvent,
+  parseSpatialTravelEvent,
+  type PresentedEventType,
+  type SpatialTravelEventType,
+  type SpatialTravelPayload,
+} from "../../../presentation/eventPayloads";
 import {
   safePublicCopy,
   safePublicEntityName,
@@ -43,12 +48,50 @@ import {
   type StreamStateChange,
 } from "./streamSalience";
 
+/** Event types the Chronicle can narrate from valid world evidence. */
+export type StreamEventType = PresentedEventType | SpatialTravelEventType;
+
+/**
+ * Navigation events are intentionally Chronicle-local vocabulary. They are
+ * authoritative world state, not presentation choreography, so adding them to
+ * the overlay catalog would make the renderer fabricate a mark for every
+ * sampled step. The Chronicle only needs a compact, readable card.
+ */
+const SPATIAL_TRAVEL_MAPPINGS: Readonly<Record<SpatialTravelEventType, OverlayMappingEntry>> =
+  Object.freeze({
+    spatial_travel_started: {
+      kind: "mark", glyph: "outward", family: "world", tier: "murmur", anchor: "actor",
+    },
+    spatial_travel_cancelled: {
+      kind: "mark", glyph: "halt", family: "world", tier: "murmur", anchor: "actor",
+    },
+    spatial_travel_arrived: {
+      kind: "mark", glyph: "inward", family: "world", tier: "murmur", anchor: "actor",
+    },
+  });
+
+const SPATIAL_TRAVEL_CATALOG: Readonly<Record<SpatialTravelEventType, EventVisualMetadata>> =
+  Object.freeze({
+    spatial_travel_started: {
+      glyph: "GO", iconKey: "footstep", iconLabel: "Journey started", medallionLabel: "Walk",
+      priority: "ambient", accent: "#6fc7bd", salient: false,
+    },
+    spatial_travel_cancelled: {
+      glyph: "ST", iconKey: "footstep", iconLabel: "At rest", medallionLabel: "Rest",
+      priority: "ambient", accent: "#6fc7bd", salient: false,
+    },
+    spatial_travel_arrived: {
+      glyph: "AR", iconKey: "footstep", iconLabel: "Journey arrived", medallionLabel: "Arrive",
+      priority: "ambient", accent: "#6fc7bd", salient: false,
+    },
+  });
+
 /** One resolved event, ready to render as a card and to replay into presence. */
 export interface StreamEvent {
   /** Stable identity: the run's source key plus the event's own cursor. */
   readonly id: string;
   readonly cursor: number;
-  readonly type: PresentedEventType;
+  readonly type: StreamEventType;
   readonly mapping: OverlayMappingEntry;
   readonly catalog: EventVisualMetadata;
   /** Silhouette after the one presentation promotion: targeted speech whispers. */
@@ -69,6 +112,8 @@ export interface StreamEvent {
   readonly regionId: string | null;
   readonly regionLabel: string | null;
   readonly homeId: string | null;
+  /** The exported landmark name when this is an authoritative spatial journey. */
+  readonly spatialDestinationLabel?: string | null;
   readonly narration: Narration;
   /** Every being the event is about, actor first, de-duplicated. */
   readonly participants: readonly string[];
@@ -165,6 +210,10 @@ function actorIdFor(
       return readString(payload, "killer_id") ?? readString(payload, "victim_id");
     case "agent_born":
       return readString(payload, "child_id") ?? readString(payload, "initiator_id");
+    case "spatial_travel_started":
+    case "spatial_travel_cancelled":
+    case "spatial_travel_arrived":
+      return readString(payload, "agent_id") ?? resolvedActor;
     case "home_collapsed":
       return readString(payload, "owner_id");
     case "simulation_started":
@@ -245,9 +294,13 @@ function participantsFor(
  * The one presentation promotion the legibility map defers to the resolver: a
  * same-region targeted line is a whisper, a broadcast is speech.
  */
-function kindFor(type: PresentedEventType, targetId: string | null): OverlayKind {
+function kindFor(
+  type: StreamEventType,
+  targetId: string | null,
+  mapping: OverlayMappingEntry,
+): OverlayKind {
   if (type === "speak" && targetId !== null) return "whisper";
-  return EVENT_LEGIBILITY_MAP[type].kind;
+  return mapping.kind;
 }
 
 function glyphFor(kind: OverlayKind, mapped: OverlayGlyph | null): OverlayGlyph {
@@ -289,6 +342,47 @@ export interface StreamEventContext {
    * paths, and both denylisted and id-shaped strings.
    */
   readonly deniedIds: EntityIdDenylist;
+  /** Resolves a frozen navigation-map landmark without inventing a label from its id. */
+  readonly landmarkNameFor?: (regionId: string, mapId: string, landmarkId: string) => string | null;
+  /** Earlier recorded presence for legacy thoughts that did not record their location. */
+  readonly thoughtRegionFor?: (actorId: string) => string | null;
+}
+
+interface StreamVisualPresentation {
+  readonly type: StreamEventType;
+  readonly mapping: OverlayMappingEntry;
+  readonly catalog: EventVisualMetadata;
+  readonly spatialPayload?: SpatialTravelPayload;
+}
+
+/**
+ * Chooses a visual vocabulary only after validating the atomic spatial event.
+ * Unknown future envelopes remain silent, while malformed navigation records
+ * cannot enter the Chronicle as a plausible-but-wrong journey.
+ */
+function visualPresentationFor(entry: EventEnvelopeEntry): StreamVisualPresentation | null {
+  const canonicalMapping = overlayMappingFor(entry.event.type);
+  const canonicalCatalog = getEventVisualMetadata(entry.event.type);
+  if (canonicalMapping !== undefined && canonicalCatalog !== undefined) {
+    return Object.freeze({
+      type: entry.event.type as PresentedEventType,
+      mapping: canonicalMapping,
+      catalog: canonicalCatalog,
+    });
+  }
+  if (!isSpatialTravelEvent(entry)) return null;
+  try {
+    const parsed = parseSpatialTravelEvent(entry);
+    if (parsed === null) return null;
+    return Object.freeze({
+      type: parsed.type,
+      mapping: SPATIAL_TRAVEL_MAPPINGS[parsed.type],
+      catalog: SPATIAL_TRAVEL_CATALOG[parsed.type],
+      spatialPayload: parsed.payload,
+    });
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -305,25 +399,35 @@ export function toStreamEvent(
   entry: EventEnvelopeEntry,
   context: StreamEventContext,
 ): StreamEvent | null {
-  const type = entry.event.type;
-  const mapping = overlayMappingFor(type);
-  const catalog = getEventVisualMetadata(type);
-  if (mapping === undefined || catalog === undefined) return null;
+  const presentation = visualPresentationFor(entry);
+  if (presentation === null) return null;
+  const { type, mapping, catalog } = presentation;
 
   rememberNamesFrom(entry, context.names);
 
-  const presented = type as PresentedEventType;
   const payload = entry.event.payload;
   const actorId = actorIdFor(type, payload, entry.resolved.actor_id ?? null);
   const targetId = targetIdFor(type, payload, entry.resolved.target_id ?? null, actorId);
   const regionId = entry.resolved.region
     ?? entry.event.region
-    ?? readString(payload, "region");
+    ?? readString(payload, "region")
+    ?? (type === "self_talk" && actorId !== null ? context.thoughtRegionFor?.(actorId) ?? null : null);
   const homeId = entry.resolved.home_id ?? readString(payload, "home_id");
-  const kind = kindFor(presented, targetId);
+  const kind = kindFor(type, targetId, mapping);
   const regionLabel = regionLabelOf(regionId);
   const nameOf = (id: string): string =>
     safePublicEntityName(context.deniedIds, context.names.nameOf(id));
+  const spatialDestinationLabel = presentation.spatialPayload === undefined
+    ? null
+    : safePublicCopy(
+      context.landmarkNameFor?.(
+        presentation.spatialPayload.region_id,
+        presentation.spatialPayload.map_id,
+        presentation.spatialPayload.destination_id,
+      ) ?? "",
+      "",
+      context.deniedIds,
+    ) || null;
 
   const narrated = narrateStreamEvent({
     type,
@@ -332,6 +436,7 @@ export function toStreamEvent(
     targetName: targetId === null ? null : nameOf(targetId),
     regionLabel,
     nameOf,
+    spatialDestinationName: spatialDestinationLabel,
   });
   const narration: Narration = Object.freeze({
     verb: narrated.verb,
@@ -344,11 +449,11 @@ export function toStreamEvent(
       : safePublicCopy(narrated.quote, "", context.deniedIds) || null,
   });
 
-  const baseSalience = BASE_SALIENCE[presented] ?? 30;
+  const baseSalience = BASE_SALIENCE[type] ?? 30;
   return Object.freeze({
     id: `${context.sourceKey}:${entry.cursor}`,
     cursor: entry.cursor,
-    type: presented,
+    type,
     mapping,
     catalog,
     kind,
@@ -356,7 +461,7 @@ export function toStreamEvent(
     family: mapping.family,
     tier: mapping.tier,
     accent: OVERLAY_FAMILY_ACCENT[mapping.family],
-    posture: CARD_POSTURE[presented] ?? "progress",
+    posture: CARD_POSTURE[type] ?? "progress",
     notable: mapping.tier === "knell"
       || mapping.tier === "strike"
       || baseSalience >= NOTABLE_FLOOR,
@@ -369,10 +474,11 @@ export function toStreamEvent(
     regionId: regionId ?? null,
     regionLabel,
     homeId,
+    spatialDestinationLabel,
     narration,
     participants: participantsFor(type, payload, actorId, targetId),
     baseSalience,
-    stateChange: stateChangesFor(presented, {
+    stateChange: stateChangesFor(type, {
       actorId,
       targetId,
       homeId,

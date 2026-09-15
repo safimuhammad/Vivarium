@@ -199,6 +199,18 @@ describe("NirvanaWestPainter", () => {
     expect(plan.operations.some((operation) => operation.stableId === "flat:prop-tailings-1")).toBe(false);
   });
 
+  it("grounds a standing prop before its sprite while leaving flat evidence untouched", () => {
+    const scene = fixtureScene();
+    const plan = createNirvanaWestPaintPlan(scene, fixtureRecipe(), dummyAssets(), "fixture-depth");
+    const accent = plan.operations.find((operation) => operation.stableId === "grounding:prop:prop-snag-1");
+    const spriteIndex = plan.operations.findIndex((operation) => operation.stableId === "prop:prop-snag-1");
+    const flatAccent = plan.operations.find((operation) => operation.stableId === "grounding:flat:prop-railspur-1");
+    expect(accent).toMatchObject({ layer: "scenery", pivotY: 45 });
+    expect(accent).toBeDefined();
+    expect(plan.operations.indexOf(accent!)).toBeLessThan(spriteIndex);
+    expect(flatAccent).toBeUndefined();
+  });
+
   it("draws emberwisp after every other scenery operation, including flat ground evidence", () => {
     const scene = fixtureScene();
     const plan = createNirvanaWestPaintPlan(scene, fixtureRecipe(), dummyAssets(), "fixture-wisp");

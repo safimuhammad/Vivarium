@@ -26,7 +26,7 @@ import {
   type HumanAppearance,
 } from "./appearance";
 import { decideAssetFallback } from "../failurePolicy";
-import type { ProductionHumanActor } from "./ProductionHumanActor";
+import type { AuthoritativeMotionSample, ProductionHumanActor } from "./ProductionHumanActor";
 
 /**
  * `HumanBodyAction` minus the locomotion/orientation-internal states, plus
@@ -199,6 +199,8 @@ const FADED_REPOSITION_REASONS = new Set<HumanRepositionReason>([
   "fallback",
   "conversation-flash",
 ]);
+/** A backend route owns no local waypoint queue, but still needs regular redraws. */
+const AUTHORITATIVE_MOTION_DEADLINE_MS = 1_000 / 60;
 const SKIN_FILTERS: Readonly<Record<HumanAppearance["skinRamp"], string>> = Object.freeze({
   porcelain: "sepia(0.08) saturate(0.72) brightness(1.12)",
   warm: "sepia(0.18) saturate(0.92) brightness(1.04)",
@@ -409,6 +411,8 @@ export class LayeredHumanActor implements ProductionHumanActor {
   #route: Vec2[] = [];
   #routeIndex = 0;
   #speedPixelsPerSecond = 0;
+  /** True while exact backend route samples, not renderer choreography, own the feet. */
+  #authoritativeMotion = false;
   #gait: "walk" | "run" = "walk";
   #distanceTravelled = 0;
   #stridePhase = 0;
@@ -451,6 +455,49 @@ export class LayeredHumanActor implements ProductionHumanActor {
     this.#nextBlinkMs = this.#newBlinkDeadline(0);
   }
 
+  /**
+   * Adopt an exact backend route sample without building a renderer route.
+   *
+   * Lifecycle state, expression, held item, and stationary body clips remain
+   * intact. Only renderer-owned locomotion and fallback relocation are
+   * cleared, so no staged arrival or flash-step can occur between samples.
+   */
+  sampleAuthoritativeMotion(sample: AuthoritativeMotionSample, nowMs: number): void {
+    if (this.#disposed || this.#terminal) return;
+    if (!finitePoint(sample.position) || typeof sample.traveling !== "boolean") {
+      throw new TypeError("Authoritative human motion sample must contain finite feet and a traveling flag.");
+    }
+    if (!Number.isFinite(nowMs) || nowMs < this.#lastNowMs) {
+      throw new RangeError("Authoritative human motion time must be finite and monotonic.");
+    }
+    const prior = copyMutablePoint(this.#position);
+    this.#lastNowMs = nowMs;
+    this.#settleBlinkSchedule();
+    this.#supersedeFallbackReposition();
+    this.#position = copyMutablePoint(sample.position);
+    this.#visualOffset = { x: 0, y: 0 };
+    this.#route = [];
+    this.#routeIndex = 0;
+    this.#speedPixelsPerSecond = 0;
+    this.#pendingFacing = null;
+    const travelled = Math.hypot(sample.position.x - prior.x, sample.position.y - prior.y);
+    if (travelled > EPSILON) {
+      this.#distanceTravelled += travelled;
+      this.#stridePhase = this.#distanceTravelled / (this.#currentBodyClip().strideLength ?? 1);
+      if (sample.traveling) this.#facing = directionFor(prior, sample.position, this.#facing);
+    }
+    // These four states can only have been created by presentation locomotion.
+    // Keep work/reach/hurt and every durable status as the snapshot supplied it.
+    if (this.#bodyAction === "walk" || this.#bodyAction === "run"
+      || this.#bodyAction === "turn" || this.#bodyAction === "stop") {
+      this.#bodyAction = "idle";
+      this.#bodyElapsedMs = 0;
+      this.#emittedTemporalMarkers.clear();
+    }
+    this.#queuedSignals = this.#queuedSignals.filter(({ kind }) => kind !== "arrived" && kind !== "repositioned");
+    this.#authoritativeMotion = sample.traveling && this.#status === "alive";
+  }
+
   /** Atomically adopt a prepared scene position and return an idempotent transient-state rollback. */
   stagePosition(position: Vec2): (() => void) | null {
     if (this.#disposed || this.#terminal) return null;
@@ -462,6 +509,7 @@ export class LayeredHumanActor implements ProductionHumanActor {
       route: this.#route.map(copyMutablePoint),
       routeIndex: this.#routeIndex,
       speedPixelsPerSecond: this.#speedPixelsPerSecond,
+      authoritativeMotion: this.#authoritativeMotion,
       pendingFacing: this.#pendingFacing,
       bodyAction: this.#bodyAction,
       bodyElapsedMs: this.#bodyElapsedMs,
@@ -477,6 +525,7 @@ export class LayeredHumanActor implements ProductionHumanActor {
     this.#route = [];
     this.#routeIndex = 0;
     this.#speedPixelsPerSecond = 0;
+    this.#authoritativeMotion = false;
     this.#pendingFacing = null;
     this.#beginBodyAction("idle");
     let available = true;
@@ -489,6 +538,7 @@ export class LayeredHumanActor implements ProductionHumanActor {
       this.#route = checkpoint.route;
       this.#routeIndex = checkpoint.routeIndex;
       this.#speedPixelsPerSecond = checkpoint.speedPixelsPerSecond;
+      this.#authoritativeMotion = checkpoint.authoritativeMotion;
       this.#pendingFacing = checkpoint.pendingFacing;
       this.#bodyAction = checkpoint.bodyAction;
       this.#bodyElapsedMs = checkpoint.bodyElapsedMs;
@@ -539,6 +589,7 @@ export class LayeredHumanActor implements ProductionHumanActor {
       route: this.#route.map(copyMutablePoint),
       routeIndex: this.#routeIndex,
       speedPixelsPerSecond: this.#speedPixelsPerSecond,
+      authoritativeMotion: this.#authoritativeMotion,
       gait: this.#gait,
       distanceTravelled: this.#distanceTravelled,
       stridePhase: this.#stridePhase,
@@ -571,6 +622,7 @@ export class LayeredHumanActor implements ProductionHumanActor {
       this.#route = checkpoint.route;
       this.#routeIndex = checkpoint.routeIndex;
       this.#speedPixelsPerSecond = checkpoint.speedPixelsPerSecond;
+      this.#authoritativeMotion = checkpoint.authoritativeMotion;
       this.#gait = checkpoint.gait;
       this.#distanceTravelled = checkpoint.distanceTravelled;
       this.#stridePhase = checkpoint.stridePhase;
@@ -601,6 +653,8 @@ export class LayeredHumanActor implements ProductionHumanActor {
     }
     this.#lastNowMs = nowMs;
     this.#settleBlinkSchedule();
+    if (command.kind === "move" || command.kind === "orient" || command.kind === "reposition"
+      || command.kind === "set-offset") this.#authoritativeMotion = false;
     if (this.#status === "paralyzed"
       && (command.kind === "move" || command.kind === "orient" || command.kind === "play-body")) {
       return;
@@ -855,8 +909,8 @@ export class LayeredHumanActor implements ProductionHumanActor {
       terminal: this.#terminal,
       routeActive: !this.#terminal
         && this.#status === "alive"
-        && this.#speedPixelsPerSecond > 0
-        && this.#routeIndex < this.#route.length,
+        && (this.#authoritativeMotion || (this.#speedPixelsPerSecond > 0
+          && this.#routeIndex < this.#route.length)),
       opacity: this.#opacity,
       reposition: this.#reposition === null ? null : {
         phase: this.#reposition.phase,
@@ -887,13 +941,21 @@ export class LayeredHumanActor implements ProductionHumanActor {
       case "hurt-fall":
         return "hurt";
       default:
-        return null;
+        return this.#authoritativeMotion ? "moving" : null;
     }
   }
 
   nextDeadlineMs(): number | null {
     if (this.#disposed || this.#terminal) return null;
     let deadline: number | null = null;
+
+    if (this.#authoritativeMotion) {
+      deadline = minimumFutureDeadline(
+        deadline,
+        this.#lastNowMs + AUTHORITATIVE_MOTION_DEADLINE_MS,
+        this.#lastNowMs,
+      );
+    }
 
     if (this.#reposition !== null) {
       const remaining = Math.max(0, FALLBACK_FADE_PHASE_MS - this.#reposition.elapsedMs);

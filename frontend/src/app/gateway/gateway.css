@@ -95,6 +95,18 @@
 
 /* ---------------------------------------------------------------- landing */
 
+.gateway--landing {
+  --muted: rgb(237 228 210 / 74%);
+  --quiet: rgb(237 228 210 / 60%);
+  background-color: #06231f;
+  background-image:
+    linear-gradient(105deg, rgb(5 24 21 / 90%) 5%, rgb(5 24 21 / 76%) 45%, rgb(3 24 20 / 48%) 100%),
+    url("../assets/quiet-vivarium-tree.webp");
+  background-size: cover;
+  background-position: center, center 58%;
+  background-repeat: no-repeat;
+}
+
 .landing {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
@@ -172,6 +184,16 @@
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.landing-note-retry {
+  display: block;
+  margin-top: 8px;
+  color: var(--gold);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
 .landing-ways {
@@ -1183,6 +1205,13 @@
 }
 
 @media (max-width: 960px) {
+  .gateway--landing {
+    background-image:
+      linear-gradient(180deg, rgb(5 24 21 / 66%), rgb(5 24 21 / 62%) 48%, rgb(3 24 20 / 86%)),
+      url("../assets/quiet-vivarium-tree.webp");
+    background-position: center;
+  }
+
   .landing {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1198,5 +1227,11 @@
 
   .go-live {
     width: 100%;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .gateway--landing {
+    background-image: none;
   }
 }

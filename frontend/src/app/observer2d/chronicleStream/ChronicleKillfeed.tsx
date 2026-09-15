@@ -108,6 +108,10 @@ export interface ChronicleKillfeedProps {
   readonly onSpeedChange: (speed: 0.5 | 1 | 1.5 | 2) => void;
   /** Navigates the world to the moment that carries this cursor. */
   readonly onViewCursor: (cursor: number) => void;
+  /** A restored archive owns its own playhead; do not apply the prior feed seek again. */
+  readonly historicalSourceKey?: string | null;
+  /** Returns the world, as well as its feed, to the current observation. */
+  readonly onReturnLive?: () => void;
   /** Selects and frames one being on the world. */
   readonly onFocusBeing: (beingId: string) => void;
   readonly onOpenArchive: (gap: { readonly firstCursor: number; readonly lastCursor: number }) => void;
@@ -424,6 +428,13 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
   const [localFilter, setLocalFilter] = useState<ChronicleFeedFilter>("world");
   const [autoScrollPaused, setAutoScrollPaused] = useState(false);
   const readerRef = useRef<HTMLDivElement | null>(null);
+  const historicalSourceKey = props.historicalSourceKey ?? null;
+  const historical = historicalSourceKey !== null;
+  useEffect(() => {
+    setSeek(null);
+    setDetailId(null);
+    setAutoScrollPaused(false);
+  }, [historicalSourceKey]);
   const followBeingId = props.followingBeingId === undefined
     ? localFollowBeingId
     : props.followingBeingId;
@@ -500,6 +511,7 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
 
   const goLive = (): void => {
     setSeek(null);
+    if (historical) props.onReturnLive?.();
   };
   const chooseFilter = (next: ChronicleFeedFilter): void => {
     if (props.filter === undefined) setLocalFilter(next);
@@ -517,7 +529,15 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
     // beat so the viewer sees the event arrive; doing that to the leading edge
     // would drop the feed 900ms behind live and hang a "Behind live" banner over
     // a viewer who only asked to look at what is happening now.
-    if (event.id !== leadingEdge?.id) {
+    if (historical && (
+      event.type === "spatial_travel_started"
+      || event.type === "spatial_travel_cancelled"
+      || event.type === "spatial_travel_arrived"
+    )) {
+      // Replaying the same card can reuse its source key. Its fresh world
+      // session supplies the clock, so never install a second local offset.
+      setSeek(null);
+    } else if (event.id !== leadingEdge?.id) {
       setSeek({ toMs: Math.max(stream.floorMs, event.atMs - PREROLL_MS), atMs: stream.clockMs });
     }
     props.onViewCursor(event.cursor);
@@ -538,10 +558,14 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
     ? null
     : beingNow(followBeingId, presence, (id) => stream.buffer.nameOf(id));
 
+  // Retention can replace old cards without changing the row count. Follow
+  // the actual boundaries, including when switching between equal-size views.
+  const firstVisibleId = filtered[0]?.id ?? null;
+  const lastVisibleId = filtered.at(-1)?.id ?? null;
   useLayoutEffect(() => {
     const reader = readerRef.current;
     if (reader !== null && !autoScrollPaused) reader.scrollTop = reader.scrollHeight;
-  }, [autoScrollPaused, filtered.length, filter]);
+  }, [autoScrollPaused, filtered.length, filter, firstVisibleId, lastVisibleId, followBeingId]);
 
   return (
     <section
@@ -590,7 +614,16 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
 
       <div className="chronicle-killfeed__bottom">
 
-      {playhead.atLive ? null : (
+      {historical ? (
+        <div className="chronicle-killfeed__behind" role="status">
+          <span className="chronicle-killfeed__behind-dot" aria-hidden="true" />
+          <b>Recorded moment</b>
+          <span>{props.paused ? "Playback paused" : "Replaying the recorded world"}</span>
+          <button type="button" aria-label="Return to current view" onClick={goLive}>
+            Return to current view
+          </button>
+        </div>
+      ) : playhead.atLive ? null : (
         <div className="chronicle-killfeed__behind" role="status">
           <span className="chronicle-killfeed__behind-dot" aria-hidden="true" />
           <b>Behind live</b>
@@ -663,7 +696,7 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
       </ol>
       </div>
 
-      {quietMs !== null && quietMs > 6_000 && playhead.atLive && filter === "world" ? (
+      {!historical && quietMs !== null && quietMs > 6_000 && playhead.atLive && filter === "world" ? (
         <p className="chronicle-killfeed__still">still for {formatFeedTime(quietMs)}</p>
       ) : null}
 
@@ -730,16 +763,16 @@ export function ChronicleKillfeed(props: ChronicleKillfeedProps): JSX.Element {
         <button
           type="button"
           className={`chronicle-killfeed__live${
-            playhead.atLive && livenessState === "live" ? " is-on" : ""
+            !historical && playhead.atLive && livenessState === "live" ? " is-on" : ""
           } is-${livenessState}`}
-          aria-pressed={playhead.atLive}
-          aria-label={playhead.atLive
+          aria-pressed={!historical && playhead.atLive}
+          aria-label={historical ? "Return from recorded history" : playhead.atLive
             ? `${livenessLabel}. ${livenessDetail}`
             : "Return to live"}
           title={livenessDetail}
           onClick={goLive}
         >
-          <i aria-hidden="true" />{playhead.atLive ? livenessLabel : "Live"}
+          <i aria-hidden="true" />{historical ? "Replay" : playhead.atLive ? livenessLabel : "Live"}
         </button>
         {props.liveness?.retryable === true && props.onReconnect !== undefined ? (
           <button type="button" aria-label="Reconnect now" onClick={props.onReconnect}>
@@ -798,7 +831,7 @@ interface QuotePresentation {
 interface TravelRoute {
   readonly from: string;
   readonly to: string;
-  readonly state: "departed" | "arrived";
+  readonly state: "departed" | "walking" | "stopped" | "arrived";
 }
 
 interface LifecycleNotice {
@@ -816,6 +849,9 @@ function grammarFor(event: StreamEvent): ChronicleCardGrammar {
     case "mating_proposal_timeout": return "proposal";
     case "agent_left_region":
     case "agent_entered_region": return "travel";
+    case "spatial_travel_started":
+    case "spatial_travel_cancelled":
+    case "spatial_travel_arrived": return "travel";
     case "resource_changed":
     case "resource_transferred":
     case "ruins_scavenged": return "resource";
@@ -843,7 +879,11 @@ function grammarLabel(grammar: ChronicleCardGrammar, event: StreamEvent): string
     case "speech": return event.targetId === null ? "Speech" : "Directed speech";
     case "private-thought": return "Private thought";
     case "proposal": return "Proposal";
-    case "travel": return event.type === "agent_entered_region" ? "Arrival" : "Travel";
+    case "travel":
+      if (event.type === "agent_entered_region" || event.type === "spatial_travel_arrived") {
+        return "Arrival";
+      }
+      return event.type === "spatial_travel_cancelled" ? "At rest" : "Travel";
     case "resource": return "Resource fact";
     case "interaction": return "Interaction";
     case "shelter": return event.type === "home_built" ? "Shelter built" : "Shelter";
@@ -890,6 +930,21 @@ function quotePresentationFor(event: StreamEvent): QuotePresentation | null {
 }
 
 function travelRouteFor(event: StreamEvent): TravelRoute | null {
+  if (event.type === "spatial_travel_started"
+    || event.type === "spatial_travel_cancelled"
+    || event.type === "spatial_travel_arrived") {
+    const destination = spatialDestinationFor(event);
+    if (destination === null) return null;
+    return Object.freeze({
+      from: event.regionLabel ?? "Nirvana",
+      to: destination,
+      state: event.type === "spatial_travel_started"
+        ? "walking"
+        : event.type === "spatial_travel_cancelled"
+          ? "stopped"
+          : "arrived",
+    });
+  }
   if (event.type !== "agent_left_region" && event.type !== "agent_entered_region") return null;
   const from = stringPayload(event, "from_region");
   const to = stringPayload(event, "to_region");
@@ -899,6 +954,15 @@ function travelRouteFor(event: StreamEvent): TravelRoute | null {
     to: titleCase(to),
     state: event.type === "agent_entered_region" ? "arrived" : "departed",
   });
+}
+
+/** Destination ids are backend keys; display only the bounded anchor form. */
+function spatialDestinationFor(event: StreamEvent): string | null {
+  if (typeof event.spatialDestinationLabel === "string") return event.spatialDestinationLabel;
+  const destinationId = stringPayload(event, "destination_id");
+  return destinationId !== null && /^[a-z][a-z0-9_-]{0,79}$/iu.test(destinationId)
+    ? titleCase(destinationId)
+    : null;
 }
 
 function resourceFactFor(event: StreamEvent): string | null {
@@ -1071,7 +1135,7 @@ function KillfeedCard(props: KillfeedCardProps): JSX.Element {
       {route === null ? null : (
         <p className="chronicle-killfeed__travel-route" data-travel-route>
           <span>{route.from}</span><b aria-hidden="true">→</b><span>{route.to}</span>
-          <small>{route.state}</small>
+          <small>{route.state === "stopped" ? "at rest" : route.state}</small>
         </p>
       )}
       {resourceFact === null ? null : (

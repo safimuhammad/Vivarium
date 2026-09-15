@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { SavedBeingPortrait } from "../gateway/SavedBeingPortrait";
 import type { SelectionView } from "./publicViewModels";
 
 export interface SelectionInspectorProps {
@@ -45,8 +46,14 @@ export function SelectionInspector({
           </div>
         ) : (
           <article className="selection-inspector__subject">
-            <span className="observer-kicker">{view.subtitle}</span>
-            <h3>{view.title}</h3>
+            <div className="selection-inspector__subject-heading"
+              style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+              {view.kind === "agent" && <SavedBeingPortrait id={view.key} />}
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <span className="observer-kicker">{view.subtitle}</span>
+                <h3>{view.title}</h3>
+              </div>
+            </div>
             {view.qualifier !== null && <p>{view.qualifier}</p>}
             <div className="selection-inspector__observer-actions">
               <button type="button" aria-label={`Focus ${view.title}`}

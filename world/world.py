@@ -23,6 +23,7 @@ is reserved for genuine infrastructure misuse should it become necessary.
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 from typing import Any
 
 from core.constants import (
@@ -38,8 +39,34 @@ from .agents import AgentState, AgentStatus
 from .homes import Home, HomeStatus, max_integrity
 from .pressure import RegionPressureHighWater
 from .regions import Region, ResourceTypes
+from .spatial import (
+    SpatialNavigationError,
+    SpatialNavigationEvent,
+    SpatialPoint,
+    SpatialTravelOutcome,
+    SpatialWorld,
+)
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class RegionalTravelHandoff:
+    """The exact, already-committed handoff between two authored map gates.
+
+    The runner turns this state transition into paired observable regional
+    lifecycle events.  Keeping the coordinates here avoids recomputing them
+    after the source map has released the agent.
+    """
+
+    agent_id: str
+    source_region: str
+    destination_region: str
+    source_position: SpatialPoint
+    destination_position: SpatialPoint
+    source_map_id: str
+    destination_map_id: str
+    travel_id: str
 
 
 class WorldState:
@@ -57,6 +84,8 @@ class WorldState:
         pending_proposal_targets: Map of initiator id -> list of target ids it
             has outstanding proposals to.
         homes: Map of home id -> :class:`~world.homes.Home` (Layer 1).
+        spatial: Optional first map-backed position, navigation, and home-placement
+            state. ``None`` preserves legacy region-only worlds.
         context: The :class:`~core.rng.SimContext` bundling the seam.
         rng: The injected :class:`random.Random`; route all randomness here.
         clock: The injected clock callable (seconds); prefer :meth:`now`.
@@ -76,6 +105,7 @@ class WorldState:
         rng: random.Random | None = None,
         clock: Clock | None = None,
         run_settings: RunSettings | None = None,
+        spatial: SpatialWorld | None = None,
     ) -> None:
         """Initialise the world.
 
@@ -90,6 +120,9 @@ class WorldState:
             run_settings: Per-run world rules (mating proposal lifetime, offspring
                 ceiling, reflection cadence). ``None`` uses
                 :data:`~core.run_settings.DEFAULT_RUN_SETTINGS`.
+            spatial: Optional real-coordinate navigation state for one initial
+                region. Legacy worlds leave this as ``None`` and retain their
+                region-only behavior.
         """
         regions = regions or []
         agents = agents or []
@@ -99,6 +132,11 @@ class WorldState:
         self.pending_proposals: dict[tuple[str, str], dict[str, Any]] = {}
         self.pending_proposal_targets: dict[str, list[str]] = {}
         self.homes: dict[str, Home] = {home.home_id: home for home in homes}
+        # ``spatial`` was the public single-map seam during the Nirvana pilot.
+        # Keep its readable/writable compatibility alias below, while the registry
+        # becomes the authoritative lookup for worlds with more than one map.
+        self.spatial_by_region: dict[str, SpatialWorld] = {}
+        self._legacy_spatial: SpatialWorld | None = None
         self._region_pressure: dict[str, RegionPressureHighWater] = {
             region_name: RegionPressureHighWater(
                 region=region_name,
@@ -118,6 +156,8 @@ class WorldState:
         self.run_settings: RunSettings = (
             run_settings if run_settings is not None else DEFAULT_RUN_SETTINGS
         )
+        if spatial is not None:
+            self.attach_spatial(spatial)
 
     def now(self) -> float:
         """Return the current time from the injected clock.
@@ -128,6 +168,277 @@ class WorldState:
             runs stay reproducible under a fake clock.
         """
         return self.context.now()
+
+    @property
+    def spatial(self) -> SpatialWorld | None:
+        """Return the legacy primary spatial map, when one has been attached.
+
+        New code must use :meth:`spatial_for_region` or
+        :meth:`spatial_for_agent`; this alias exists for archived single-map
+        worlds and fixtures that assigned ``world.spatial`` directly.
+        """
+        return self._legacy_spatial
+
+    @spatial.setter
+    def spatial(self, spatial: SpatialWorld | None) -> None:
+        """Apply historical direct-assignment semantics to the map registry.
+
+        Direct assignment predates the registry and is used by focused spatial
+        fixtures after they prepare their own positions.  It consequently does
+        not spawn agents or validate the world-region relation; production
+        attachment continues to go through :meth:`attach_spatial`.
+        """
+        previous = self._legacy_spatial
+        if previous is not None:
+            self.spatial_by_region.pop(previous.region_id, None)
+        self._legacy_spatial = spatial
+        if spatial is not None:
+            self.spatial_by_region[spatial.region_id] = spatial
+
+    def spatial_for_region(self, region_id: str) -> SpatialWorld | None:
+        """Return the exported map that authoritatively owns one region, if any."""
+        return self.spatial_by_region.get(region_id)
+
+    def spatial_for_agent(self, agent_id: str) -> SpatialWorld | None:
+        """Return an agent's active map only while it has a physical position there."""
+        agent = self.get_agent(agent_id)
+        if agent is None:
+            return None
+        spatial = self.spatial_for_region(agent.current_position)
+        return spatial if spatial is not None and spatial.has_agent(agent_id) else None
+
+    def spatial_worlds(self) -> tuple[SpatialWorld, ...]:
+        """Return every attached map in deterministic region-id order."""
+        return tuple(self.spatial_by_region[name] for name in sorted(self.spatial_by_region))
+
+    def attach_spatial(self, spatial: SpatialWorld) -> None:
+        """Attach one exported map and place existing regional state on it.
+
+        This is intentionally a startup/reconnect integration hook, not a
+        process-resume mechanism.  It gives existing founders their deterministic
+        legal anchors and maps pre-existing regional homes to unique production
+        shelter plots before agents, tools, or snapshots can observe the world.
+
+        Args:
+            spatial: Validated map state for one existing world region.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If the map names a region absent from this world.
+        """
+        if spatial.region_id not in self.regions:
+            raise ValueError(f"Spatial region {spatial.region_id!r} does not exist in this world.")
+        existing = self.spatial_by_region.get(spatial.region_id)
+        if existing is not None and existing is not spatial:
+            raise ValueError(f"A spatial map is already attached for {spatial.region_id!r}.")
+        self.spatial_by_region[spatial.region_id] = spatial
+        if self._legacy_spatial is None or spatial.region_id == "nirvana":
+            self._legacy_spatial = spatial
+        for agent in self.agents.values():
+            if agent.current_position == spatial.region_id:
+                spatial.spawn(agent.id, now=self.now())
+        for home in sorted(self.homes.values(), key=lambda item: item.home_id):
+            if home.region == spatial.region_id:
+                spatial.assign_home(home.home_id, self.now())
+
+    def attach_spatials(self, spatials: tuple[SpatialWorld, ...]) -> None:
+        """Attach a prevalidated set of maps without accepting duplicate regions.
+
+        Args:
+            spatials: Every map being added to this world at startup.
+
+        Raises:
+            ValueError: If a map names an unknown or duplicate region.
+        """
+        region_ids = [spatial.region_id for spatial in spatials]
+        if len(region_ids) != len(set(region_ids)):
+            raise ValueError("Cannot attach duplicate spatial regions.")
+        unknown = sorted(set(region_ids) - set(self.regions))
+        if unknown:
+            raise ValueError(f"Spatial maps name unknown world regions: {unknown}.")
+        incoming = {spatial.region_id: spatial for spatial in spatials}
+        collisions = sorted(
+            region_id
+            for region_id, spatial in incoming.items()
+            if (existing := self.spatial_by_region.get(region_id)) is not None
+            and existing is not spatial
+        )
+        if collisions:
+            raise ValueError(f"Spatial maps are already attached for: {collisions}.")
+        for spatial in spatials:
+            self.attach_spatial(spatial)
+
+    def begin_region_travel(
+        self,
+        agent_id: str,
+        destination_region: str,
+        *,
+        move_energy_cost: float,
+    ) -> SpatialTravelOutcome:
+        """Start a paid local walk to the exact departure gate for one region edge.
+
+        The agent remains logically in its source region until the navigator sees
+        the route arrive at that gate.  Both gate sides are validated before any
+        route or energy mutation, so malformed mapped links never silently fall
+        back to legacy relocation or leave a half-started journey.
+        A new timed journey must leave energy above the paralysis threshold;
+        unlike immediate legacy relocation, its walk still has to take place.
+
+        Args:
+            agent_id: Being choosing the connected destination region.
+            destination_region: Adjacent target region.
+            move_energy_cost: Energy charged exactly once for a newly accepted
+                regional journey.
+
+        Returns:
+            The local route outcome.  Repeating the same regional intent returns
+            ``"already_traveling"`` and does not charge again.
+
+        Raises:
+            SpatialNavigationError: If mapped preconditions, gates, route, or
+                usable energy are invalid.
+        """
+        agent = self.get_agent(agent_id)
+        if agent is None:
+            raise SpatialNavigationError(f"Agent {agent_id!r} does not exist.")
+        if agent.status is not AgentStatus.ALIVE:
+            raise SpatialNavigationError(f"Cannot begin a journey while {agent.status.value}.")
+        if move_energy_cost <= 0:
+            raise SpatialNavigationError("move_energy_cost must be positive.")
+        source_region = agent.current_position
+        source = self.spatial_for_agent(agent_id)
+        destination = self.spatial_for_region(destination_region)
+        if source is None or destination is None:
+            raise SpatialNavigationError(
+                "Timed regional travel requires authored maps for both connected regions."
+            )
+        source_world_region = self.get_region(source_region)
+        if source_world_region is None or destination_region not in source_world_region.connections:
+            raise SpatialNavigationError(
+                f"Region {destination_region!r} is not connected to {source_region!r}."
+            )
+        departure = source.departure_gate(destination_region)
+        arrival = destination.arrival_gate(source_region)
+        if departure is None or arrival is None:
+            raise SpatialNavigationError(
+                f"No matched authored gate connects {source_region!r} to {destination_region!r}."
+            )
+        if destination.has_agent(agent_id):
+            raise SpatialNavigationError(
+                f"Agent {agent_id!r} already has a stale position in {destination_region!r}."
+            )
+        existing = source.active_travel(agent_id)
+        repeats_existing_journey = (
+            existing is not None
+            and existing.destination_id == departure.landmark_id
+            and existing.destination_region == destination_region
+        )
+        if (
+            not repeats_existing_journey
+            and agent.current_energy - move_energy_cost <= PARALYSIS_ENERGY_THRESHOLD
+        ):
+            raise SpatialNavigationError(
+                f"Energy {agent.current_energy:g} must leave more than "
+                f"{PARALYSIS_ENERGY_THRESHOLD:g} after the move cost of "
+                f"{move_energy_cost:g} to stay able to walk."
+            )
+        outcome = source.begin_travel(
+            agent_id,
+            departure.landmark_id,
+            self.now(),
+            destination_region=destination_region,
+        )
+        if outcome.status == "started":
+            self.modify_agent_energy(agent_id, -move_energy_cost)
+        return outcome
+
+    def complete_region_travel(
+        self,
+        source: SpatialWorld,
+        transition: SpatialNavigationEvent,
+    ) -> RegionalTravelHandoff:
+        """Atomically place an arrived regional traveller at the matched entrance.
+
+        Args:
+            source: Source map whose navigator finalized ``transition``.
+            transition: A completed local route carrying a destination region.
+
+        Returns:
+            Immutable committed coordinates for the paired lifecycle events.
+
+        Raises:
+            SpatialNavigationError: If an impossible stale or malformed handoff is
+                observed.  No map or logical-region mutation occurs before all
+                checks have passed.
+        """
+        travel = transition.travel
+        destination_region = travel.destination_region
+        if transition.kind != "travel_arrived" or destination_region is None:
+            raise SpatialNavigationError("Transition is not an arrived regional journey.")
+        agent = self.get_agent(transition.agent_id)
+        if agent is None:
+            raise SpatialNavigationError(f"Agent {transition.agent_id!r} no longer exists.")
+        if agent.current_position != source.region_id:
+            raise SpatialNavigationError(
+                f"Agent {transition.agent_id!r} is no longer in {source.region_id!r}."
+            )
+        if self.spatial_for_region(source.region_id) is not source or not source.has_agent(
+            agent.id
+        ):
+            raise SpatialNavigationError("Regional journey source position is stale.")
+        destination = self.spatial_for_region(destination_region)
+        if destination is None:
+            raise SpatialNavigationError(
+                f"Destination region {destination_region!r} no longer has an authored map."
+            )
+        departure = source.departure_gate(destination_region)
+        arrival = destination.arrival_gate(source.region_id)
+        if departure is None or arrival is None:
+            raise SpatialNavigationError("Regional journey no longer has matched authored gates.")
+        if transition.position.distance_to(departure.point()) > 0.000_001:
+            raise SpatialNavigationError("Regional journey did not arrive at its departure gate.")
+        if destination.has_agent(agent.id):
+            raise SpatialNavigationError(
+                "Regional journey would duplicate an active destination agent."
+            )
+        destination_point = arrival.point()
+        if not destination.is_walkable(destination_point.x, destination_point.y):
+            raise SpatialNavigationError("Regional journey entrance is no longer walkable.")
+
+        # Every possible failure has been checked above.  These three simple
+        # mutations therefore form one all-or-nothing in-memory handoff.
+        source.remove_agent(agent.id)
+        destination.place_at(agent.id, destination_point, transition.timestamp)
+        agent.current_position = destination_region
+        self._bump_population_pressure(destination_region)
+        return RegionalTravelHandoff(
+            agent_id=agent.id,
+            source_region=source.region_id,
+            destination_region=destination_region,
+            source_position=transition.position,
+            destination_position=destination_point,
+            source_map_id=source.map_id,
+            destination_map_id=destination.map_id,
+            travel_id=travel.id,
+        )
+
+    def can_place_home(self, region: str) -> bool:
+        """Return whether a home can occupy the specified region right now.
+
+        Legacy regions have no finite map-plot capacity.  Mapped regions delegate
+        to their spatial map, which rejects plots that are occupied or would cover a
+        current agent coordinate.
+
+        Args:
+            region: Region where a new home would stand.
+
+        Returns:
+            ``True`` when the home can be created without inventing a placement.
+        """
+        spatial = self.spatial_for_region(region)
+        return spatial is None or spatial.can_assign_home(self.now())
 
     # ---- get methods ----
 
@@ -214,6 +525,12 @@ class WorldState:
             exists (no overwrite).
         """
         if agent.id not in self.agents:
+            spatial = self.spatial_for_region(agent.current_position)
+            if spatial is not None:
+                try:
+                    spatial.spawn(agent.id, now=self.now())
+                except SpatialNavigationError:
+                    return False
             self.agents[agent.id] = agent
             self._bump_population_pressure(agent.current_position)
             return True
@@ -231,6 +548,8 @@ class WorldState:
             ``True`` if removed; ``False`` if the agent was not present.
         """
         if agent.id in self.agents:
+            for spatial in self.spatial_worlds():
+                spatial.remove_agent(agent.id)
             del self.agents[agent.id]
             return True
         return False
@@ -261,6 +580,14 @@ class WorldState:
                 )
                 return False
             if destination in current_region.connections:
+                # A mapped edge must travel through its authored gates.  This
+                # legacy primitive remains available only where neither endpoint
+                # has a map, preserving older entirely region-only worlds.
+                if (
+                    self.spatial_for_region(current_pos) is not None
+                    or self.spatial_for_region(destination) is not None
+                ):
+                    return False
                 self.agents[agent_id].current_position = destination
                 self._bump_population_pressure(destination)
                 return True
@@ -280,6 +607,14 @@ class WorldState:
         """
         if agent_id in self.agents:
             self.agents[agent_id].status = status
+            spatial = self.spatial_for_agent(agent_id)
+            if spatial is not None and status is not AgentStatus.ALIVE:
+                spatial.cancel_travel(
+                    agent_id,
+                    self.now(),
+                    reason=f"status:{status.value}",
+                    queue_event=True,
+                )
             return True
         return False
 
@@ -314,6 +649,7 @@ class WorldState:
         if agent.status is AgentStatus.DEAD:
             # Death is terminal: never change a dead agent's energy or status.
             return True
+        status_before = agent.status
         agent.current_energy = max(agent.current_energy + amount, 0.0)
         if agent.current_energy <= PARALYSIS_ENERGY_THRESHOLD and agent.status is AgentStatus.ALIVE:
             agent.status = AgentStatus.PARALYZED
@@ -322,6 +658,18 @@ class WorldState:
             and agent.status is AgentStatus.PARALYZED
         ):
             agent.status = AgentStatus.ALIVE
+        spatial = self.spatial_for_agent(agent_id)
+        if (
+            spatial is not None
+            and status_before is AgentStatus.ALIVE
+            and agent.status is AgentStatus.PARALYZED
+        ):
+            spatial.cancel_travel(
+                agent_id,
+                self.now(),
+                reason="status:paralyzed",
+                queue_event=True,
+            )
         return True
 
     def modify_agent_materials(self, agent_id: str, amount: float) -> bool:
@@ -380,6 +728,14 @@ class WorldState:
         """
         if agent_id not in self.agents:
             return False
+        spatial = self.spatial_for_agent(agent_id)
+        if spatial is not None:
+            spatial.cancel_travel(
+                agent_id,
+                self.now(),
+                reason="status:dead",
+                queue_event=True,
+            )
         self.agents[agent_id].status = AgentStatus.DEAD
         # Stamp time-of-death so the world-tick can decay the corpse later.
         self.agents[agent_id].died_at = self.now()
@@ -663,11 +1019,17 @@ class WorldState:
             integrity: Initial integrity (typically :data:`HOME_MAX_INTEGRITY`).
 
         Returns:
-            ``True`` if stored; ``False`` if a home with ``home_id`` already exists
-            (no overwrite).
+            ``True`` if stored; ``False`` if a home with ``home_id`` already exists,
+            or if a mapped region has no unoccupied legal shelter plot (no
+            overwrite or invented placement).
         """
         if home_id in self.homes:
             return False
+        spatial = self.spatial_for_region(region)
+        if spatial is not None:
+            if not spatial.can_assign_home(self.now()):
+                return False
+            spatial.assign_home(home_id, self.now())
         self.homes[home_id] = Home(
             home_id=home_id,
             owner_id=owner_id,
@@ -690,7 +1052,11 @@ class WorldState:
         Returns:
             ``True`` if it existed and was removed; ``False`` otherwise.
         """
-        if home_id in self.homes:
+        home = self.homes.get(home_id)
+        if home is not None:
+            spatial = self.spatial_for_region(home.region)
+            if spatial is not None:
+                spatial.release_home(home_id)
             del self.homes[home_id]
             return True
         return False

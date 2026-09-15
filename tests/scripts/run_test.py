@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import time
 from pathlib import Path
 from typing import cast
@@ -20,6 +21,7 @@ import pytest
 import scripts.run as run_module
 from agents.decider import Decision, SerializingDecider, ToolCall
 from agents.runtime import Agent
+from bus.event_bus import EventBus
 from core.constants import (
     COMPACTION_TRIGGER_TOKENS,
     HOME_UPKEEP_MATERIALS_PER_SECOND,
@@ -39,13 +41,270 @@ from scripts.run import (
     resolve_default_model,
     run_simulation,
 )
-from tests.conftest import MockDecider
+from tests.conftest import FakeClock, MockDecider
+from tools.builtin import SPATIAL_BUILTIN_TOOLS
 from world.agents import AgentState, AgentStatus
+from world.regions import Region
+from world.spatial import SpatialWorld
+from world.world import WorldState
 
 
 def _fake_factory(_agent_id: str) -> VectorStore:
     """Return a fresh in-memory vector store (no chromadb, deterministic)."""
     return FakeVectorStore(FakeEmbeddingFunction())
+
+
+def _exported_navigation_fixture() -> dict[str, object]:
+    """Return a minimal validated local-export response for bootstrap tests."""
+    return {
+        "version": 1,
+        "region_id": "nirvana",
+        "map_id": "nirvana:bootstrap-test",
+        "layout_fingerprint": "bootstrap-test",
+        "tile_size": 32,
+        "width": 3,
+        "height": 1,
+        "topology": "bounded",
+        "walkable": [[1, 1, 1]],
+        "landmarks": [
+            {
+                "id": "energy-1",
+                "name": "Energy grove",
+                "x": 80,
+                "y": 16,
+                "affordances": ["energy"],
+            }
+        ],
+        "spawn_points": [{"x": 16, "y": 16}, {"x": 48, "y": 16}],
+        "initial_pressure": {"populationHighWater": 2, "builtFootprintHighWater": 0},
+        "home_plots": [],
+    }
+
+
+def test_build_simulation_exports_and_attaches_every_run_specific_map(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The build path freezes full topology and pressure through the local exporter."""
+    seen: dict[str, object] = {}
+
+    def fake_export(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        input_path = Path(command[command.index("--input") + 1])
+        output_path = Path(command[command.index("--output") + 1])
+        data = json.loads(input_path.read_text(encoding="utf-8"))
+        seen["input"] = data
+        maps = [
+            {
+                **_exported_navigation_fixture(),
+                "region_id": region["name"],
+                "map_id": f"{region['name']}:bootstrap-test",
+                "initial_pressure": data["initial_pressures"][region["name"]],
+            }
+            for region in data["regions"]
+        ]
+        output_path.write_text(json.dumps({"version": 2, "regions": maps}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_export)
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=41,
+        model="mock",
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=MockDecider([Decision()]),
+        vector_store_factory=_fake_factory,
+    )
+
+    export_input = seen["input"]
+    assert isinstance(export_input, dict)
+    assert export_input["seed"] == 41
+    assert [region["name"] for region in export_input["regions"]] == [
+        "nirvana",
+        "nirvana_east",
+        "nirvana_west",
+        "warm_springs",
+    ]
+    assert export_input["initial_pressures"]["nirvana"] == {
+        "populationHighWater": 2,
+        "builtFootprintHighWater": 0,
+    }
+    assert sim.world.spatial is not None
+    assert sim.world.spatial.map_id == "nirvana:bootstrap-test"
+    assert sim.world.spatial.has_agent("wanderer_003")
+    assert sim.world.spatial.has_agent("wanderer_004")
+    assert set(SPATIAL_BUILTIN_TOOLS) <= set(sim.agents[0].tool_registry.list_tools())
+    assert (sim.run_context.run_dir / "spatial-navigation-input.json").is_file()
+    assert (sim.run_context.run_dir / "spatial-navigation-v2.json").is_file()
+    assert len(sim.world.spatial_worlds()) == 4
+    assert all(sim.world.spatial_for_agent(agent.agent_id) is not None for agent in sim.agents)
+
+
+def test_build_simulation_attaches_spatial_tools_to_a_generic_region(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A world without Nirvana still exports its own physical map and walking tools."""
+    region = Region("alpha", "A legacy place.", [], 1.0, 1.0, 100.0, 100.0, 500.0, 500.0)
+    agent = AgentState("legacy_001", "Legacy", "", "alpha", 100.0, 50.0, AgentStatus.ALIVE)
+    world = WorldState([region], [agent])
+
+    def generic_export(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        output_path = Path(command[command.index("--output") + 1])
+        exported = {
+            **_exported_navigation_fixture(),
+            "region_id": "alpha",
+            "map_id": "alpha:bootstrap-test",
+        }
+        output_path.write_text(json.dumps({"version": 2, "regions": [exported]}), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", generic_export)
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=41,
+        model="mock",
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=MockDecider([Decision()]),
+        vector_store_factory=_fake_factory,
+        world=world,
+    )
+
+    assert sim.world.spatial_for_agent(agent.id) is not None
+    assert set(SPATIAL_BUILTIN_TOOLS) <= set(sim.agents[0].tool_registry.list_tools())
+
+
+def test_build_simulation_explains_a_missing_local_node_exporter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Map assembly names the local runtime prerequisite instead of hanging or masking it."""
+
+    def missing_node(_command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("node")
+
+    monkeypatch.setattr(subprocess, "run", missing_node)
+
+    with pytest.raises(RuntimeError, match=r"requires local Node\.js on PATH"):
+        build_simulation(
+            "config/world.yaml",
+            seed=41,
+            model="mock",
+            memory_root=tmp_path / "mem",
+            run_dir=tmp_path / "runs",
+            decider=MockDecider([Decision()]),
+            vector_store_factory=_fake_factory,
+        )
+
+
+def test_build_simulation_bounds_a_stalled_local_map_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stuck Vite SSR subprocess fails after the declared finite startup bound."""
+    seen: dict[str, object] = {}
+
+    def stalled_export(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen["timeout"] = kwargs["timeout"]
+        raise subprocess.TimeoutExpired(command, cast(float, kwargs["timeout"]))
+
+    monkeypatch.setattr(subprocess, "run", stalled_export)
+
+    with pytest.raises(RuntimeError, match="timed out after 30 seconds"):
+        build_simulation(
+            "config/world.yaml",
+            seed=41,
+            model="mock",
+            memory_root=tmp_path / "mem",
+            run_dir=tmp_path / "runs",
+            decider=MockDecider([Decision()]),
+            vector_store_factory=_fake_factory,
+        )
+    assert seen["timeout"] == 30.0
+
+
+async def test_spatial_navigator_publishes_due_arrivals_without_waiting_for_ecology_tick() -> None:
+    """The fast navigator emits one durable arrival using the shared event payload."""
+    clock = FakeClock(start=10.0)
+    region = Region("nirvana", "A shared valley.", [], 1.0, 1.0, 100.0, 100.0, 500.0, 500.0)
+    agent = AgentState("founder_001", "Founder", "", "nirvana", 100.0, 50.0, AgentStatus.ALIVE)
+    spatial = SpatialWorld.from_mapping(_exported_navigation_fixture())
+    world = WorldState([region], [agent], clock=clock, spatial=spatial)
+    bus = EventBus(world)
+    assert bus.subscribe(agent.id)
+    assert spatial.begin_travel(agent.id, "energy-1", clock(), speed=32.0).travel is not None
+
+    clock.advance(2.0)
+    await run_module._advance_spatial_navigator(world, bus)
+
+    events = bus.get_events(agent.id)
+    assert [event.type for event in events] == ["spatial_travel_arrived"]
+    payload = events[0].payload
+    assert payload["agent_id"] == agent.id
+    assert payload["travel_id"] == "nirvana:founder_001:travel:1"
+    assert payload["position"] == {"x": 80.0, "y": 16.0}
+    assert payload["spatial"]["travel"] is None
+    await run_module._advance_spatial_navigator(world, bus)
+    assert bus.get_events(agent.id) == []
+
+
+async def test_run_shutdown_freezes_active_spatial_travel_and_writes_a_final_snapshot(
+    tmp_path: Path,
+) -> None:
+    """Stopping a run leaves no live route for a later observer clock to advance."""
+    clock = FakeClock(start=10.0)
+    region = Region("nirvana", "A shared valley.", [], 1.0, 1.0, 100.0, 100.0, 500.0, 500.0)
+    agent = AgentState("founder_001", "Founder", "", "nirvana", 100.0, 50.0, AgentStatus.ALIVE)
+    spatial = SpatialWorld.from_mapping(_exported_navigation_fixture())
+    world = WorldState([region], [agent], clock=clock, spatial=spatial)
+    sim = build_simulation(
+        "config/world.yaml",
+        seed=41,
+        model="mock",
+        memory_root=tmp_path / "mem",
+        run_dir=tmp_path / "runs",
+        decider=MockDecider([Decision()]),
+        vector_store_factory=_fake_factory,
+        world=world,
+    )
+    assert spatial.begin_travel(agent.id, "energy-1", clock(), speed=32.0).travel is not None
+    stop = asyncio.Event()
+    running = asyncio.create_task(
+        run_simulation(
+            sim,
+            pace=60.0,
+            duration=None,
+            world_tick_interval=60.0,
+            refresh_interval=60.0,
+            terminal_ui=False,
+            install_signal_handlers=False,
+            stop_event=stop,
+        )
+    )
+    for _ in range(10):
+        if sim.run_context.status == "running":
+            break
+        await asyncio.sleep(0)
+    assert sim.run_context.status == "running"
+
+    clock.advance(0.5)
+    stop.set()
+    await running
+
+    stopped = spatial.position_at(agent.id, clock())
+    assert stopped["x"] == 64.0
+    assert stopped["travel"] is None
+    clock.advance(10.0)
+    assert spatial.position_at(agent.id, clock())["x"] == 64.0
+    assert spatial.position_at(agent.id, clock())["travel"] is None
+
+    snapshots = [
+        json.loads(line)
+        for line in sim.run_context.snapshot_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert snapshots[-1]["reason"] == "simulation_stopped"
+    assert snapshots[-1]["snapshot"]["agents"][0]["spatial"]["travel"] is None
 
 
 async def test_runner_smoke_runs_and_shuts_down(tmp_path: Path) -> None:

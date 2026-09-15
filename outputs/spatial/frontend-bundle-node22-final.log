@@ -1,0 +1,5 @@
+
+> vivarium-frontend@0.1.0 check:bundle
+> node scripts/assert-build-budget.mjs
+
+Bundle budget ok: initial=5013 bytes, renderer=738104 bytes, eventDemo=11902 bytes, worldPresence=12531 bytes, canvasFull=272136 bytes, canvasIncremental=79053 bytes, productionCanvasFull=24661 bytes, productionCanvasIncremental=15457 bytes, productionCanvasCss=1985 bytes, productionCanvasArt=0 bytes, chunks=24

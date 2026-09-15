@@ -161,6 +161,18 @@ describe("NirvanaEastPainter", () => {
     expect(landform).toMatchObject({ destination: { x: -40, y: -22 }, pivotY: 30 });
   });
 
+  it("grounds large landforms with a directional contact band before their sprite", () => {
+    const scene = fixtureScene();
+    const plan = createNirvanaEastPaintPlan(scene, fixtureRecipe(), dummyAssets(), "fixture-depth");
+    const accent = plan.operations.find((operation) => operation.stableId === "grounding:prop:prop-boulder-1");
+    const spriteIndex = plan.operations.findIndex((operation) => operation.stableId === "prop:prop-boulder-1");
+    expect(accent).toMatchObject({ layer: "scenery", pivotY: 45 });
+    expect(accent).toBeDefined();
+    expect(plan.operations.indexOf(accent!)).toBeLessThan(spriteIndex);
+    expect(accent!.destination.x).toBeGreaterThan(10);
+    expect(accent!.destination.y).toBeGreaterThan(5);
+  });
+
   it("has unique stable ids across the whole plan", () => {
     const scene = fixtureScene();
     const plan = createNirvanaEastPaintPlan(scene, fixtureRecipe(), dummyAssets(), "fixture-unique");

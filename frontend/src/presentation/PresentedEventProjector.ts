@@ -1,5 +1,7 @@
 import type {
+  AgentSpatialSnapshot,
   AgentSnapshot,
+  HomeSpatialSnapshot,
   HomeSnapshot,
   PendingProposalSnapshot,
   RegionSnapshot,
@@ -9,6 +11,7 @@ import type { PresentedRecord } from "./contracts";
 import type {
   PresentedEventType,
   PresentedPayloadByType,
+  TypedSpatialTravelEvent,
   TypedPresentedEvent,
 } from "./eventPayloads";
 
@@ -35,6 +38,8 @@ export interface ProjectionResult {
 
 export interface PresentedEventProjector {
   project(state: ProjectedWorldState, evidence: TypedPresentedEvent): ProjectionResult;
+  /** Apply one atomic backend navigation state without inventing a body command. */
+  projectSpatial(state: ProjectedWorldState, evidence: TypedSpatialTravelEvent): ProjectionResult;
 }
 
 type ProjectorMap = {
@@ -49,6 +54,7 @@ type ProjectorMap = {
 export const PRESENTED_EVENT_PROJECTORS: ProjectorMap = {
   agent_born(state, payload, cursor) {
     const draft = new ProjectionDraft(state);
+    const spatial = payload.spatial;
     draft.introduceAgent(payload.child_id, {
       id: payload.child_id,
       name: payload.child_name,
@@ -56,7 +62,8 @@ export const PRESENTED_EVENT_PROJECTORS: ProjectorMap = {
       energy: payload.child_resources.energy,
       materials: payload.child_resources.materials,
       status: "alive",
-    }, ["id", "name", "position", "energy", "materials", "status"], [
+      ...(spatial === undefined || spatial === null ? {} : { spatial }),
+    }, ["id", "name", "position", "energy", "materials", "status", ...(spatial === undefined || spatial === null ? [] : ["spatial"])], [
       "persona", "last_mated_at", "offspring_count", "died_at", "home_id", "is_hoarding",
     ]);
     draft.removeProposal(payload.initiator_id, payload.acceptor_id);
@@ -98,12 +105,38 @@ export const PRESENTED_EVENT_PROJECTORS: ProjectorMap = {
   },
   agent_left_region(state, payload, cursor) {
     const draft = new ProjectionDraft(state);
-    draft.markUnresolved("agents", payload.agent_id, ["position", "energy"]);
+    if (payload.authoritative_spatial === true) {
+      const sourcePosition = payload.source_position;
+      if (sourcePosition === undefined) throw new Error("agent_left_region authoritative_spatial requires source_position");
+      draft.patchAgent(payload.agent_id, {
+        position: payload.from_region,
+        energy: payload.agent_energy,
+        spatial: undefined,
+        spatial_migration: {
+          from_region: payload.from_region,
+          to_region: payload.to_region,
+          source_position: sourcePosition,
+        },
+      }, ["position", "energy", "spatial", "spatial_migration"]);
+    } else {
+      if (payload.spatial === null) draft.patchAgent(payload.agent_id, { spatial: undefined }, ["spatial"]);
+      draft.markUnresolved("agents", payload.agent_id, ["position", "energy"]);
+    }
     return draft.finish(cursor);
   },
   agent_entered_region(state, payload, cursor) {
     const draft = new ProjectionDraft(state);
-    draft.patchAgent(payload.agent_id, { position: payload.to_region, energy: payload.agent_energy }, ["position", "energy"]);
+    draft.patchAgent(payload.agent_id, {
+      position: payload.to_region,
+      energy: payload.agent_energy,
+      ...(payload.spatial === undefined ? {} : { spatial: payload.spatial ?? undefined }),
+      ...(payload.authoritative_spatial === true ? { spatial_migration: undefined } : {}),
+    }, [
+      "position",
+      "energy",
+      ...(payload.spatial === undefined ? [] : ["spatial"]),
+      ...(payload.authoritative_spatial === true ? ["spatial_migration"] : []),
+    ]);
     return draft.finish(cursor);
   },
   speak(state, payload, cursor) {
@@ -169,6 +202,7 @@ export const PRESENTED_EVENT_PROJECTORS: ProjectorMap = {
   },
   home_built(state, payload, cursor) {
     const draft = new ProjectionDraft(state);
+    const homeSpatial = payload.home_spatial;
     draft.introduceHome(payload.home_id, {
       home_id: payload.home_id,
       owner_id: payload.owner_id,
@@ -176,7 +210,8 @@ export const PRESENTED_EVENT_PROJECTORS: ProjectorMap = {
       integrity: payload.integrity,
       stakeholders: [...payload.stakeholders],
       status: "standing",
-    }, ["home_id", "owner_id", "region", "integrity", "stakeholders", "status"], [
+      ...(homeSpatial === undefined || homeSpatial === null ? {} : { spatial: homeSpatial }),
+    }, ["home_id", "owner_id", "region", "integrity", "stakeholders", "status", ...(homeSpatial === undefined || homeSpatial === null ? [] : ["spatial"])], [
       "max_integrity", "built_at", "last_upkeep_at", "last_integrity_at", "vault_materials",
       "ruined_at", "remnant_materials", "breachers", "is_hoarding",
     ]);
@@ -317,6 +352,7 @@ export function createPresentedEventProjector(
   const frozenThresholds = freezeHoardThresholds(thresholds);
   return {
     project(state, evidence) {
+      validateLifecycleSpatialAuthority(state, evidence);
       const handler = PRESENTED_EVENT_PROJECTORS[evidence.type] as (
         state: ProjectedWorldState,
         payload: PresentedPayloadByType[PresentedEventType],
@@ -325,7 +361,148 @@ export function createPresentedEventProjector(
       ) => ProjectionResult;
       return handler(state, evidence.payload, evidence.entry.cursor, frozenThresholds);
     },
+    projectSpatial(state, evidence) {
+      const payload = evidence.payload;
+      const region = state.regions.get(payload.region_id)?.value;
+      const regionSpatial = region?.spatial;
+      if (
+        region === undefined
+        || region.name !== payload.region_id
+        || regionSpatial === undefined
+        || regionSpatial.map_id !== payload.map_id
+        || regionSpatial.layout_fingerprint !== payload.layout_fingerprint
+      ) {
+        throw new Error("spatial travel event does not match the projected regional map");
+      }
+      const current = state.agents.get(payload.agent_id)?.value;
+      if (current === undefined || current.position !== payload.region_id) {
+        throw new Error("spatial travel event does not match the projected agent region");
+      }
+      const landmarks = new Set(regionSpatial.landmarks.map(({ id }) => id));
+      if (!landmarks.has(payload.destination_id)) {
+        throw new Error("spatial travel event names an unknown map landmark");
+      }
+      const draft = new ProjectionDraft(state);
+      draft.patchAgent(payload.agent_id, { spatial: payload.spatial }, ["spatial"]);
+      return draft.finish(evidence.entry.cursor);
+    },
   };
+}
+
+/**
+ * Lifecycle payloads may be emitted before a checkpoint catches up.  Validate
+ * their map identity at the projection boundary, so a stale regional state can
+ * neither survive a legacy transition nor be attached to the wrong map.
+ */
+function validateLifecycleSpatialAuthority(
+  state: ProjectedWorldState,
+  evidence: TypedPresentedEvent,
+): void {
+  const source = evidence.entry.event.source;
+  switch (evidence.type) {
+    case "agent_left_region": {
+      const { payload } = evidence;
+      if (payload.spatial === undefined) return;
+      validateEventSource(source, payload.agent_id, "agent_left_region");
+      if (payload.spatial !== null) {
+        throw new Error("agent_left_region spatial authority must explicitly clear");
+      }
+      if (payload.authoritative_spatial === true) {
+        if (payload.source_position === undefined) {
+          throw new Error("agent_left_region authoritative_spatial requires source_position");
+        }
+        const current = state.agents.get(payload.agent_id)?.value;
+        const region = state.regions.get(payload.from_region)?.value;
+        if (current === undefined || current.position !== payload.from_region || region?.spatial === undefined) {
+          throw new Error("agent_left_region authoritative_spatial does not match the projected source region");
+        }
+      }
+      return;
+    }
+    case "agent_entered_region": {
+      const { payload } = evidence;
+      if (payload.spatial === undefined) return;
+      validateEventSource(source, payload.agent_id, "agent_entered_region");
+      if (payload.authoritative_spatial === true && payload.spatial === null) {
+        throw new Error("agent_entered_region authoritative_spatial requires non-null spatial");
+      }
+      if (payload.spatial !== null) {
+        validateAgentSpatialForRegion(state, payload.to_region, payload.spatial, "agent_entered_region");
+      }
+      return;
+    }
+    case "agent_born": {
+      const { payload } = evidence;
+      if (payload.spatial === undefined) return;
+      validateEventSource(source, payload.child_id, "agent_born");
+      if (payload.spatial !== null) {
+        validateAgentSpatialForRegion(state, payload.region, payload.spatial, "agent_born");
+      }
+      return;
+    }
+    case "home_built": {
+      const { payload } = evidence;
+      if (payload.home_spatial === undefined) return;
+      validateEventSource(source, payload.builder_id, "home_built");
+      if (payload.home_spatial !== null) {
+        validateHomeSpatialForRegion(state, payload.region, payload.home_spatial, "home_built");
+      }
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+function validateEventSource(source: string, expected: string, label: string): void {
+  if (source !== expected) {
+    throw new Error(`${label} spatial authority must be emitted by its authoritative being`);
+  }
+}
+
+function validateAgentSpatialForRegion(
+  state: ProjectedWorldState,
+  regionId: string,
+  spatial: AgentSpatialSnapshot,
+  label: string,
+): void {
+  const region = state.regions.get(regionId)?.value;
+  const regionSpatial = region?.spatial;
+  if (
+    region === undefined
+    || region.name !== regionId
+    || spatial.region_id !== regionId
+    || regionSpatial === undefined
+    || regionSpatial.map_id !== spatial.map_id
+    || regionSpatial.layout_fingerprint !== spatial.layout_fingerprint
+  ) {
+    throw new Error(`${label} spatial authority does not match the projected regional map`);
+  }
+  if (
+    spatial.at_landmark !== null
+    && !regionSpatial.landmarks.some((landmark) => landmark.id === spatial.at_landmark)
+  ) {
+    throw new Error(`${label} spatial authority names an unknown map landmark`);
+  }
+}
+
+function validateHomeSpatialForRegion(
+  state: ProjectedWorldState,
+  regionId: string,
+  spatial: HomeSpatialSnapshot,
+  label: string,
+): void {
+  const region = state.regions.get(regionId)?.value;
+  const regionSpatial = region?.spatial;
+  if (
+    region === undefined
+    || region.name !== regionId
+    || spatial.region_id !== regionId
+    || regionSpatial === undefined
+    || regionSpatial.map_id !== spatial.map_id
+  ) {
+    throw new Error(`${label} home spatial authority does not match the projected regional map`);
+  }
 }
 
 function removeMatingProposal<K extends "mating_rejected" | "mating_proposal_invalidated" | "mating_proposal_timeout">(

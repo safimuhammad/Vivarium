@@ -1078,7 +1078,7 @@ export function Vivarium2DApp({
           onPause={runtime.pause}
           onResume={() => runtime.resume()}
           onSpeedChange={runtime.setSpeed}
-          onViewCursor={(cursor) => viewCursor(runtime, chronicleView, cursor)}
+          onViewCursor={(cursor) => { void viewCursor(runtime, chronicleView, cursor); }}
           onFocusBeing={chooseFollowSubject}
           onOpenArchive={() => openArchive()}
           onClose={closeSurface}
@@ -1089,6 +1089,10 @@ export function Vivarium2DApp({
           liveness={liveness}
           notices={frame.notices ?? []}
           onReconnect={() => runtime.reconnectStream()}
+          {...(snapshot.archive.status === "active" ? {
+            historicalSourceKey: frame.sourceKey,
+            onReturnLive: runtime.returnToLive,
+          } : {})}
           {...(chronicleSourceControls === undefined
             ? {}
             : { sourceControls: chronicleSourceControls })}
@@ -1401,6 +1405,10 @@ function announceFrame(
     key: `${frame.runId}:${frame.sourceKey}:${frame.presentedCursor}:now:${chronicle.now.key}:${frame.scene.phase}`,
     message: `${chronicle.now.title}. ${chronicle.now.summary}`,
   });
+  if (frame.source === "archive") return Object.freeze({
+    key: `${frame.runId}:${frame.sourceKey}:archive-replay`,
+    message: "Viewing an archived replay.",
+  });
   if (frame.transport.connection === "recovery-paused") return Object.freeze({
     key: `${frame.runId}:${frame.sourceKey}:transport:recovery-paused`,
     message: "World recovery is paused.",
@@ -1556,11 +1564,16 @@ function viewMoment(
  * the *existing* production path -- `viewMoment` plus a moment focus request --
  * rather than reaching for the camera itself.
  */
-function viewCursor(
+async function viewCursor(
   runtime: ObserverShellRuntime,
   chronicle: ChronicleView,
   cursor: number,
-): void {
+): Promise<void> {
+  // A valid spatial card has a renderer-safe archive restore path. It has to
+  // run before moment focus so the selected world, not only its feed row,
+  // rewinds to the recorded feet. Old or incomplete recordings report false
+  // and continue through the long-standing focus behavior below.
+  if (await runtime.replayCursor(cursor)) return;
   const rows = chronicle.now === null ? chronicle.previous : [chronicle.now, ...chronicle.previous];
   const row = rows.find(
     (candidate) => candidate.firstCursor <= cursor && cursor <= candidate.lastCursor,

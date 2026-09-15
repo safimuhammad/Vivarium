@@ -21,17 +21,19 @@ from tools.builtin.homes import (
     withdraw_from_home,
 )
 from tools.builtin.mating import accept_mating, initiate_mating, reject_mating
-from tools.builtin.movement import look_around, move
+from tools.builtin.movement import go_to, look_around, move, stop_moving
 from tools.builtin.resources import harvest_resources, transfer_resource
 from tools.registry import ToolFn, ToolRegistry
 
 __all__ = [
     "BUILTIN_TOOLS",
+    "SPATIAL_BUILTIN_TOOLS",
     "accept_mating",
     "attack",
     "break_in",
     "build_home",
     "deposit_to_home",
+    "go_to",
     "harvest_resources",
     "initiate_mating",
     "leave_home",
@@ -42,6 +44,7 @@ __all__ = [
     "reject_mating",
     "scavenge_ruins",
     "speak",
+    "stop_moving",
     "transfer_resource",
     "use_hearth",
     "withdraw_from_home",
@@ -67,12 +70,21 @@ BUILTIN_TOOLS: dict[str, ToolFn] = {
     "break_in": break_in,
     "scavenge_ruins": scavenge_ruins,
 }
+"""Frozen legacy tool catalog used by historical worlds and chronicles."""
+
+SPATIAL_BUILTIN_TOOLS: dict[str, ToolFn] = {
+    "go_to": go_to,
+    "stop_moving": stop_moving,
+}
+"""Map-backed tools registered after at least one production map is attached."""
 
 
 def register_builtins(registry: ToolRegistry) -> None:
-    """Register every built-in tool on ``registry`` under its canonical name.
+    """Register legacy tools and any active map-backed pilot tools.
 
-    Mutates the registry's tool map (see :data:`BUILTIN_TOOLS`).
+    Nonspatial worlds receive the exact frozen legacy set.  A registry created
+    after any exported map is attached also exposes :data:`SPATIAL_BUILTIN_TOOLS`.
+    This keeps archived worlds and their tool catalogs byte-compatible.
 
     Args:
         registry: The :class:`~tools.registry.ToolRegistry` to populate.
@@ -82,3 +94,6 @@ def register_builtins(registry: ToolRegistry) -> None:
     """
     for name, func in BUILTIN_TOOLS.items():
         registry.register(name, func)
+    if registry.world.spatial is not None:
+        for name, func in SPATIAL_BUILTIN_TOOLS.items():
+            registry.register(name, func)

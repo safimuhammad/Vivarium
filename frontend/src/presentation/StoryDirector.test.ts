@@ -212,6 +212,29 @@ describe("StoryDirector", () => {
     expect(director.getSnapshot().activeMoment?.firstCursor).toBe(3);
   });
 
+  it("projects enriched region lifecycle authority without starting a fake movement scene", () => {
+    const base = reCursorMoment(singleMoment("C12", "agent_entered_region"), 1);
+    const evidence = base.evidence.map((entry) => ({
+      ...entry,
+      event: {
+        ...entry.event,
+        payload: { ...entry.event.payload, spatial: null },
+      },
+    }));
+    const moment = { ...base, evidence, representative: evidence[0]! };
+    const { director, model, runtime } = setup();
+
+    director.ingest([moment]);
+
+    expect(director.getSnapshot()).toMatchObject({
+      activeMoment: null,
+      presentedCursor: 1,
+      pending: [],
+    });
+    expect(runtime.cancelRequests).toBe(0);
+    expect(model.getView().projectedThroughCursor).toBe(1);
+  });
+
   it("paces the complete frozen C12 life story to its final causal cursor", () => {
     const { director, clock, model, manifest } = setup();
     director.ingest(new BeatDirector().group(manifest.entries));

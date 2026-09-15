@@ -1,0 +1,13 @@
+
+> vivarium-frontend@0.1.0 test:unit
+> vitest run src/app/observer2d/chronicleStream/ChronicleKillfeed.test.tsx src/app/observer2d/observerLiveness.test.ts src/app/observer2d/observerShellRuntime.test.ts src/app/gateway/recordedRunClient.test.ts src/app/replaySession.test.ts src/presentation/PresentationSession.test.ts src/app/Vivarium2DApp.test.tsx src/app/Vivarium2DApp.truth.test.tsx
+
+
+ RUN  v4.1.9 /Users/safi/Desktop/work/Vivarium/frontend
+
+
+ Test Files  8 passed (8)
+      Tests  275 passed (275)
+   Start at  18:51:52
+   Duration  6.01s (transform 3.16s, setup 0ms, import 4.60s, tests 6.89s, environment 4.38s)
+

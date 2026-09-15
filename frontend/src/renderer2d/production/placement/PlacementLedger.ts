@@ -6,6 +6,7 @@ import {
   cloneTrustedRegionMapRecipe,
   type RegionMapRecipeV1,
 } from "../maps/RegionMapRecipe";
+import { navigationLayoutFingerprint } from "../navigation/SpatialNavigationExport";
 import { navigationGridIsToroidal, type NavigationGrid } from "../navigation/navigation";
 import {
   STANDING_HUMAN_VISUAL_ENVELOPE,
@@ -26,6 +27,8 @@ export interface AgentPlacement {
 export interface HomePlacement {
   readonly regionId: string;
   readonly plotId: string;
+  /** Supplied only when the backend owns this exact shelter origin. */
+  readonly origin?: Vec2;
   readonly door: Vec2;
 }
 
@@ -94,6 +97,14 @@ export interface PlacementCheckpoint {
   readonly homes: readonly HomeSnapshot[];
 }
 
+/**
+ * A projected home may arrive from a `home_built` event before its next full
+ * checkpoint.  Placement needs only identity, region, and optional spatial
+ * truth; it must not manufacture the snapshot fields that have not arrived.
+ */
+export type PlaceableHome = Readonly<Pick<HomeSnapshot, "home_id" | "region">>
+  & Readonly<Partial<HomeSnapshot>>;
+
 export type AgentPlacementContext =
   | Readonly<{ kind: "arrival"; fromRegion: string; requestedFinal?: Vec2 }>
   | Readonly<{
@@ -158,7 +169,11 @@ export class PlacementLedger {
     for (const home of checkpoint.homes) {
       if (seenHomes.has(home.home_id)) return false;
       seenHomes.add(home.home_id);
-      if (this.homePlacements.get(home.home_id)?.regionId !== home.region) return false;
+      const placement = this.homePlacements.get(home.home_id);
+      if (placement?.regionId !== home.region) return false;
+      if (home.spatial !== undefined && !sameAuthoritativeHomePlacement(placement, home)) {
+        return false;
+      }
     }
     return true;
   }
@@ -212,9 +227,14 @@ export class PlacementLedger {
    * present in simulation state, ready to be placed once a later phase
    * grows the region.
    */
-  placeHome(home: HomeSnapshot): HomePlacementResult {
+  placeHome(home: PlaceableHome): HomePlacementResult {
     const existing = this.homePlacements.get(home.home_id);
-    if (existing) return { status: "placed", ...existing };
+    if (existing) {
+      if (home.spatial !== undefined && !sameAuthoritativeHomePlacement(existing, home)) {
+        throw new Error(`home ${home.home_id} changed its authoritative spatial plot`);
+      }
+      return { status: "placed", ...existing };
+    }
     const knownUnplaced = this.unplacedHomes.get(home.home_id);
     if (knownUnplaced) {
       return {
@@ -229,6 +249,16 @@ export class PlacementLedger {
     }
     const recipe = this.requireRecipe(home.region);
     const occupied = this.occupiedPlotsFor(home.region);
+    const authoritative = home.spatial === undefined
+      ? null
+      : resolveAuthoritativeHomePlacement(home, recipe, occupied);
+    if (authoritative !== null) {
+      this.homePlacements.set(home.home_id, authoritative.placement);
+      occupied.add(authoritative.placement.plotId);
+      this.markDistrict(home.region, authoritative.districtIndex);
+      this.revision += 1;
+      return { status: "placed", ...authoritative.placement };
+    }
     const district = recipe.districts.find((candidate) =>
       candidate.shelterPlots.some((plot) => !occupied.has(plot.id)));
     const plot = district
@@ -539,7 +569,70 @@ function cloneAgentPlacement(placement: AgentPlacement): AgentPlacement {
 }
 
 function cloneHomePlacement(placement: HomePlacement): HomePlacement {
-  return { ...placement, door: { ...placement.door } };
+  return {
+    ...placement,
+    ...(placement.origin === undefined ? {} : { origin: { ...placement.origin } }),
+    door: { ...placement.door },
+  };
+}
+
+function resolveAuthoritativeHomePlacement(
+  home: PlaceableHome,
+  recipe: RegionMapRecipeV1,
+  occupied: ReadonlySet<string>,
+): Readonly<{ placement: HomePlacement; districtIndex: number }> {
+  const spatial = home.spatial;
+  if (spatial === undefined) throw new Error("missing authoritative home spatial state");
+  const expectedFingerprint = navigationLayoutFingerprint(recipe);
+  if (
+    spatial.region_id !== home.region
+    || spatial.map_id !== `${home.region}:${expectedFingerprint}`
+  ) {
+    throw new Error(`home ${home.home_id} does not belong to this production map`);
+  }
+  const plot = recipe.shelterPlots.find((candidate) => candidate.id === spatial.plot_id);
+  const districtIndex = recipe.districts.findIndex((candidate) =>
+    candidate.shelterPlots.some(({ id }) => id === spatial.plot_id));
+  if (plot === undefined || districtIndex < 0) {
+    throw new Error(`home ${home.home_id} names an unknown authoritative shelter plot`);
+  }
+  const origin = tileCenter(plot.tile);
+  const door = tileCenter(plot.door);
+  if (
+    spatial.x !== origin.x
+    || spatial.y !== origin.y
+    || spatial.door.x !== door.x
+    || spatial.door.y !== door.y
+  ) {
+    throw new Error(`home ${home.home_id} coordinates disagree with its authoritative shelter plot`);
+  }
+  if (occupied.has(plot.id)) {
+    throw new Error(`home ${home.home_id} names an already reserved authoritative shelter plot`);
+  }
+  return Object.freeze({
+    placement: Object.freeze({
+      regionId: home.region,
+      plotId: plot.id,
+      origin: { ...origin },
+      door: { ...door },
+    }),
+    districtIndex,
+  });
+}
+
+function sameAuthoritativeHomePlacement(
+  placement: HomePlacement | undefined,
+  home: PlaceableHome,
+): boolean {
+  const spatial = home.spatial;
+  return placement !== undefined
+    && spatial !== undefined
+    && placement.regionId === home.region
+    && placement.plotId === spatial.plot_id
+    && placement.origin?.x === spatial.x
+    && placement.origin?.y === spatial.y
+    && placement.door.x === spatial.door.x
+    && placement.door.y === spatial.door.y;
 }
 
 function pointKey(point: Vec2): string {

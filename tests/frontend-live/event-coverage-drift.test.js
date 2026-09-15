@@ -1505,7 +1505,7 @@ test('Task 12 Chronicle producer tool catalog stays equal to the exact 17 builti
   const builtins = extractPythonQuotedSet(
     readRepoFile('tools/builtin/__init__.py'),
     'BUILTIN_TOOLS: dict[str, ToolFn] = {',
-    '\n}\n\n\ndef register_builtins',
+    '\n}',
   );
   assert.equal(canonical.length, 17);
   assert.deepEqual(canonical, builtins);

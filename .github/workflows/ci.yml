@@ -29,6 +29,18 @@ jobs:
           python-version: "3.13"
           cache: pip
 
+      # Simulation startup exports the same navigation geometry used by the
+      # frontend. Backend integration tests therefore need its local Vite runtime.
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install navigation exporter dependencies
+        run: npm ci --prefix frontend
+
       - name: Install (dev) dependencies
         run: |
           python -m pip install --upgrade pip

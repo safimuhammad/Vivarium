@@ -54,6 +54,17 @@ def test_prompt_lists_every_tool() -> None:
         assert name in prompt
 
 
+def test_spatial_prompt_distinguishes_senses_thoughts_and_executed_actions() -> None:
+    """Ground the actor's role without assigning it a purpose or preferred action."""
+    prompt = build_system_prompt("A curious wanderer.", TOOL_NAMES, spatial=True)
+    assert "observations describe your own senses and possessions" in prompt
+    assert "Ordinary words are private thoughts" in prompt
+    assert "Perform actions by calling their available functions" in prompt
+    assert "action results establish what actually happened" in prompt
+    for term in FORBIDDEN_TERMS:
+        assert term not in prompt.lower()
+
+
 def test_prompt_has_no_goal_or_simulation_language() -> None:
     prompt = build_system_prompt("A curious wanderer.", TOOL_NAMES).lower()
     for term in FORBIDDEN_TERMS:

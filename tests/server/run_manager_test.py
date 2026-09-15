@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -134,3 +135,26 @@ async def test_a_failing_final_checkpoint_does_not_break_shutdown(tmp_path: Path
 
     await manager.shutdown()
     assert handle.status == "stopped"
+
+
+async def test_shutdown_after_a_finished_run_keeps_terminal_recording_immutable(
+    tmp_path: Path,
+) -> None:
+    """A later server exit must not extend an already saved run's duration."""
+    manager = _manager(tmp_path)
+    await manager.start(manager.default_config())
+    handle = manager.require_run()
+    checkpoint_path = handle.simulation.run_context.snapshot_log_path
+    sidecar_path = handle.simulation.run_context.run_dir / "run.json"
+
+    await manager.stop()
+    assert handle.watcher is not None
+    await asyncio.wait_for(handle.watcher, timeout=1.0)
+    before_sidecar = sidecar_path.read_bytes()
+    before_checkpoints = checkpoint_path.read_bytes()
+    assert json.loads(before_sidecar)["status"] == "stopped"
+
+    await manager.shutdown()
+
+    assert sidecar_path.read_bytes() == before_sidecar
+    assert checkpoint_path.read_bytes() == before_checkpoints

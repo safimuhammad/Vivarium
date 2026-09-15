@@ -15,6 +15,7 @@ import type { PresentedHoardThresholds } from "./PresentedEventProjector";
 import {
   PRESENTED_EVENT_PAYLOAD_CASES,
   eventEntry,
+  spatialTravelEntry,
 } from "./eventPayloads.test";
 
 describe("PresentedWorldModel", () => {
@@ -223,6 +224,167 @@ describe("PresentedWorldModel", () => {
     delete malformed.event.payload.agent_energy;
     expect(() => model.applyEvidence([entryOf("self_talk", 7), malformed])).toThrow();
     expect(model.getView()).toBe(beforeMalformed);
+  });
+
+  it("projects only atomic Nirvana travel samples and rejects an unknown destination without mutation", () => {
+    const input = spatialNirvanaWorld();
+    const model = new PresentedWorldModel(input, identity(input));
+
+    model.applyEvidence([spatialTravelEntry("spatial_travel_started", 5)]);
+    expect(agentValue(model.getView(), "agent_001").spatial).toMatchObject({
+      x: 20,
+      y: 40,
+      travel: { id: "journey-east", destination_id: "east-gate" },
+    });
+
+    const beforeMalformed = model.getView();
+    const malformed = spatialTravelEntry("spatial_travel_cancelled", 6);
+    (malformed.event.payload as Record<string, unknown>).destination_id = "invented-landmark";
+    expect(() => model.applyEvidence([malformed])).toThrow(/unknown map landmark/);
+    expect(model.getView()).toBe(beforeMalformed);
+
+    model.applyEvidence([spatialTravelEntry("spatial_travel_cancelled", 6)]);
+    expect(agentValue(model.getView(), "agent_001").spatial).toMatchObject({
+      x: 60,
+      y: 40,
+      travel: null,
+    });
+  });
+
+  it("clears and restores lifecycle spatial authority before a checkpoint", () => {
+    const input = spatialTransitionWorld();
+    const model = new PresentedWorldModel(input, identity(input));
+
+    const left = entryOf("agent_left_region", 5);
+    left.event.payload = {
+      ...left.event.payload,
+      from_region: "nirvana",
+      to_region: "warm_springs",
+      spatial: null,
+    };
+    model.applyEvidence([left]);
+    expect(agentValue(model.getView(), "agent_001")).toMatchObject({ position: "nirvana", spatial: undefined });
+
+    const enteredLegacy = entryOf("agent_entered_region", 6);
+    enteredLegacy.event.payload = {
+      ...enteredLegacy.event.payload,
+      from_region: "nirvana",
+      to_region: "warm_springs",
+      spatial: null,
+    };
+    model.applyEvidence([enteredLegacy]);
+    expect(agentValue(model.getView(), "agent_001")).toMatchObject({ position: "warm_springs", spatial: undefined });
+
+    const enteredNirvana = entryOf("agent_entered_region", 7);
+    enteredNirvana.event.payload = {
+      ...enteredNirvana.event.payload,
+      from_region: "warm_springs",
+      to_region: "nirvana",
+      spatial: spatialLifecycleState(80, 40, 20),
+    };
+    model.applyEvidence([enteredNirvana]);
+    expect(agentValue(model.getView(), "agent_001")).toMatchObject({
+      position: "nirvana",
+      spatial: { x: 80, y: 40, travel: null },
+    });
+
+    const born = entryOf("agent_born", 8);
+    born.event.source = "agent_003";
+    born.event.payload = {
+      ...born.event.payload,
+      region: "nirvana",
+      spatial: spatialLifecycleState(96, 48, 21),
+    };
+    model.applyEvidence([born]);
+    expect(agentValue(model.getView(), "agent_003")).toMatchObject({
+      position: "nirvana",
+      spatial: { x: 96, y: 48 },
+    });
+
+    const built = entryOf("home_built", 9);
+    built.event.payload = {
+      ...built.event.payload,
+      builder_id: "agent_001",
+      owner_id: "agent_001",
+      region: "nirvana",
+      stakeholders: ["agent_001"],
+      home_spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        plot_id: "plot-before-checkpoint",
+        x: 32,
+        y: 64,
+        door: { x: 32, y: 96 },
+      },
+    };
+    model.applyEvidence([built]);
+    expect(homeValue(model.getView(), "home_002")).toMatchObject({
+      region: "nirvana",
+      spatial: { plot_id: "plot-before-checkpoint", x: 32, y: 64 },
+    });
+
+    const beforeWrongMap = model.getView();
+    const wrongMap = entryOf("agent_entered_region", 10);
+    wrongMap.event.payload = {
+      ...wrongMap.event.payload,
+      from_region: "nirvana",
+      to_region: "nirvana",
+      spatial: { ...spatialLifecycleState(100, 40, 22), map_id: "nirvana:wrong" },
+    };
+    expect(() => model.applyEvidence([wrongMap])).toThrow(/projected regional map/);
+    expect(model.getView()).toBe(beforeWrongMap);
+  });
+
+  it("records an authoritative cross-region gate handoff without inventing a route", () => {
+    const input = spatialAllRegionWorld();
+    const model = new PresentedWorldModel(input, identity(input));
+    const left = entryOf("agent_left_region", 5);
+    left.event.payload = {
+      ...left.event.payload,
+      from_region: "nirvana",
+      to_region: "warm_springs",
+      authoritative_spatial: true,
+      spatial: null,
+      source_position: { x: 120, y: 40 },
+    };
+
+    model.applyEvidence([left]);
+    expect(agentValue(model.getView(), "agent_001")).toMatchObject({
+      position: "nirvana",
+      spatial: undefined,
+      spatial_migration: {
+        from_region: "nirvana",
+        to_region: "warm_springs",
+        source_position: { x: 120, y: 40 },
+      },
+    });
+
+    const entered = entryOf("agent_entered_region", 6);
+    entered.event.payload = {
+      ...entered.event.payload,
+      from_region: "nirvana",
+      to_region: "warm_springs",
+      authoritative_spatial: true,
+      spatial: {
+        version: 1,
+        region_id: "warm_springs",
+        map_id: "warm_springs:test-layout",
+        layout_fingerprint: "test-layout",
+        x: 32,
+        y: 96,
+        observed_at: 20,
+        at_landmark: "west-arrival",
+        travel: null,
+      },
+    };
+
+    model.applyEvidence([entered]);
+    expect(agentValue(model.getView(), "agent_001")).toMatchObject({
+      position: "warm_springs",
+      spatial: { region_id: "warm_springs", map_id: "warm_springs:test-layout", x: 32, y: 96 },
+      spatial_migration: undefined,
+    });
   });
 
   it("retains exact home partitions beside later rebased visible evidence", () => {
@@ -707,6 +869,107 @@ function identity(snapshot: WorldSnapshot, overrides: Partial<FrameIdentity> = {
     lastCursor: snapshot.event_cursor,
     ...overrides,
   };
+}
+
+function spatialNirvanaWorld(): WorldSnapshot {
+  const base = makeWorld();
+  return {
+    ...base,
+    agents: [{
+      ...base.agents[0]!,
+      position: "nirvana",
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        x: 20,
+        y: 40,
+        observed_at: 10,
+        at_landmark: null,
+        travel: null,
+      },
+    }],
+    regions: [{
+      ...base.regions[0]!,
+      name: "nirvana",
+      connections: [],
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        tile_size: 32,
+        landmarks: [{ id: "east-gate", name: "East Gate", x: 120, y: 40, affordances: ["travel"] }],
+        initial_pressure: { populationHighWater: 1, builtFootprintHighWater: 0 },
+      },
+    }],
+    homes: [],
+    ruins: [],
+    region_pressure: [{ region: "nirvana", population_high_water: 1, built_footprint_high_water: 0 }],
+    pending_proposals: [],
+  };
+}
+
+function spatialTransitionWorld(): WorldSnapshot {
+  const base = spatialNirvanaWorld();
+  const nirvana = base.regions[0]!;
+  const { spatial: _spatial, ...legacy } = nirvana;
+  return {
+    ...base,
+    regions: [nirvana, { ...legacy, name: "warm_springs", connections: [] }],
+    region_pressure: [
+      ...base.region_pressure ?? [],
+      { region: "warm_springs", population_high_water: 0, built_footprint_high_water: 0 },
+    ],
+  };
+}
+
+function spatialAllRegionWorld(): WorldSnapshot {
+  const base = spatialNirvanaWorld();
+  const source = base.regions[0]!;
+  const sourceSpatial = source.spatial;
+  if (sourceSpatial === undefined) throw new Error("missing source spatial map");
+  const warmSprings: RegionSnapshot = {
+    ...source,
+    name: "warm_springs",
+    description: "Hot springs with a west arrival gate.",
+    connections: [],
+    spatial: {
+      ...sourceSpatial,
+      region_id: "warm_springs",
+      map_id: "warm_springs:test-layout",
+      landmarks: [{
+        id: "west-arrival",
+        name: "West Arrival",
+        x: 32,
+        y: 96,
+        affordances: ["travel"],
+      }],
+    },
+  };
+  return {
+    ...base,
+    regions: [source, warmSprings],
+    region_pressure: [
+      ...(base.region_pressure ?? []),
+      { region: "warm_springs", population_high_water: 0, built_footprint_high_water: 0 },
+    ],
+  };
+}
+
+function spatialLifecycleState(x: number, y: number, observedAt: number) {
+  return {
+    version: 1,
+    region_id: "nirvana",
+    map_id: "nirvana:test-layout",
+    layout_fingerprint: "test-layout",
+    x,
+    y,
+    observed_at: observedAt,
+    at_landmark: null,
+    travel: null,
+  } as const;
 }
 
 function checkpoint(

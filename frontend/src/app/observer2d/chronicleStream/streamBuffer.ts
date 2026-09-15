@@ -130,6 +130,8 @@ export interface ChronicleStreamBufferOptions {
 
 interface WorldAnchor {
   readonly exactBaseCursor: number;
+  /** The displayed presence may already include projections beyond the exact base. */
+  readonly presenceThroughCursor: number;
   readonly atMs: number;
   readonly presence: BaselinePresence;
   readonly standing: readonly StandingCondition[];
@@ -160,6 +162,7 @@ export function createChronicleStreamBuffer(
 
   let sourceKey: string | null = null;
   let names: StreamNameRegistry = createStreamNameRegistry();
+  let landmarks = new Map<string, string>();
   let events: StreamEvent[] = [];
   let anchors: WorldAnchor[] = [];
   let seenCursors = new Set<number>();
@@ -181,6 +184,7 @@ export function createChronicleStreamBuffer(
   const reset = (nextSourceKey: string): void => {
     sourceKey = nextSourceKey;
     names = createStreamNameRegistry();
+    landmarks = new Map<string, string>();
     events = [];
     anchors = [];
     seenCursors = new Set<number>();
@@ -229,6 +233,7 @@ export function createChronicleStreamBuffer(
       const atMs = options.now();
       liveMs = Math.max(liveMs, atMs);
       retainAnchor(input.world, atMs);
+      rememberSpatialLandmarks(input.world, landmarks);
 
       let appended = false;
       for (const entry of [...input.entries].sort((left, right) => left.cursor - right.cursor)) {
@@ -238,6 +243,9 @@ export function createChronicleStreamBuffer(
           names,
           atMs,
           deniedIds: input.deniedIds,
+          landmarkNameFor: (regionId, mapId, landmarkId) =>
+            landmarks.get(spatialLandmarkKey(regionId, mapId, landmarkId)) ?? null,
+          thoughtRegionFor: (actorId) => priorThoughtRegion(anchors, events, actorId, entry.cursor),
         });
         if (resolved === null) continue;
         seenCursors.add(entry.cursor);
@@ -317,6 +325,30 @@ export function createChronicleStreamBuffer(
   };
 }
 
+/** Resolve a legacy thought using only presence established before that event. */
+function priorThoughtRegion(
+  anchors: readonly WorldAnchor[],
+  events: readonly StreamEvent[],
+  actorId: string,
+  cursor: number,
+): string | null {
+  let anchor: WorldAnchor | null = null;
+  for (const candidate of anchors) {
+    if (candidate.presenceThroughCursor < cursor
+      && (anchor === null || candidate.presenceThroughCursor >= anchor.presenceThroughCursor)) {
+      anchor = candidate;
+    }
+  }
+  if (anchor === null) return null;
+  let region = anchor.presence.region.get(actorId) ?? null;
+  for (const event of events) {
+    if (event.cursor <= anchor.presenceThroughCursor || event.cursor >= cursor || event.actorId !== actorId) continue;
+    if (event.type === "agent_entered_region" || event.type === "agent_born") region = event.regionId;
+    if (event.type === "agent_decayed") region = null;
+  }
+  return region;
+}
+
 function anchorAtOrBefore(
   anchors: readonly WorldAnchor[],
   cursor: number,
@@ -337,6 +369,26 @@ function emptyBaseline(): BaselinePresence {
     built: new Set(),
     ruined: new Set(),
   };
+}
+
+/** Retains the exporter-owned names that make a destination id readable later in replay. */
+function rememberSpatialLandmarks(
+  world: PresentedWorldView,
+  landmarks: Map<string, string>,
+): void {
+  for (const record of world.regions) {
+    const spatial = record.value.spatial;
+    if (spatial === undefined) continue;
+    for (const landmark of spatial.landmarks) {
+      if (landmark.name.length === 0) continue;
+      const key = spatialLandmarkKey(spatial.region_id, spatial.map_id, landmark.id);
+      if (!landmarks.has(key)) landmarks.set(key, landmark.name);
+    }
+  }
+}
+
+function spatialLandmarkKey(regionId: string, mapId: string, landmarkId: string): string {
+  return `${regionId}\u0000${mapId}\u0000${landmarkId}`;
 }
 
 interface MutablePresence {
@@ -543,6 +595,7 @@ function anchorFrom(
 
   return {
     exactBaseCursor: world.exactBaseCursor,
+    presenceThroughCursor: Math.max(world.exactBaseCursor, world.projectedThroughCursor),
     atMs,
     presence: { region, gone, absent, built, ruined },
     standing: Object.freeze(standing),

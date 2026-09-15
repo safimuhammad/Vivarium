@@ -396,10 +396,13 @@ class ReplayArchive:
     def _append_line(self, stream: ReplayStreamName, line: bytes) -> int:
         with self._lock:
             self._ensure_healthy()
-            _validate_jsonl_line(line)
+            value = _validate_jsonl_line(line)
             state = self._states[stream]
             cursor = state.next_line
-            event_cursor = _checkpoint_event_cursor(line) if stream == "checkpoints" else None
+            event_cursor = (
+                _checkpoint_event_cursor_from_value(value) if stream == "checkpoints" else None
+            )
+            del value  # Do not retain a decoded world snapshot during segment rotation.
             try:
                 with state.active_path.open("ab", buffering=0) as handle:
                     written = handle.write(line)
@@ -842,11 +845,12 @@ def _complete_lines(path: Path) -> list[bytes]:
     return raw.splitlines(keepends=True)
 
 
-def _validate_jsonl_line(line: bytes) -> None:
+def _validate_jsonl_line(line: bytes) -> object:
+    """Validate the JSONL boundary and return its decoded value for reuse."""
     if not line or not line.endswith(b"\n") or line.count(b"\n") != 1:
         raise ReplayArchiveError("replay records must be one newline-terminated JSONL line")
     try:
-        json.loads(line)
+        return json.loads(line)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ReplayArchiveError("replay record must contain valid JSON") from exc
 
@@ -854,8 +858,18 @@ def _validate_jsonl_line(line: bytes) -> None:
 def _checkpoint_event_cursor(line: bytes) -> int:
     try:
         value = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise ReplayArchiveError("checkpoint record has no valid event_cursor") from exc
+    return _checkpoint_event_cursor_from_value(value)
+
+
+def _checkpoint_event_cursor_from_value(value: object) -> int:
+    """Read the cursor from already decoded JSON without re-parsing a snapshot."""
+    if not isinstance(value, dict):
+        raise ReplayArchiveError("checkpoint record has no valid event_cursor")
+    try:
         cursor = value["event_cursor"]
-    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+    except KeyError as exc:
         raise ReplayArchiveError("checkpoint record has no valid event_cursor") from exc
     if not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0:
         raise ReplayArchiveError("checkpoint event_cursor must be a non-negative integer")

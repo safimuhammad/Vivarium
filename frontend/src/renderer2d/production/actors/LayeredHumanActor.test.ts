@@ -142,6 +142,28 @@ function agentIdForRig(rig: "human-a" | "human-b"): string {
 }
 
 describe("LayeredHumanActor mechanics-faithful state", () => {
+  it("samples backend feet without manufacturing a route, arrival, or pose reset", () => {
+    const { actor } = createActor();
+    actor.apply({ kind: "play-body", action: "work" }, 0);
+    actor.apply({ kind: "set-face", expression: "talk-1" }, 0);
+
+    actor.sampleAuthoritativeMotion({ position: { x: 72, y: 61 }, traveling: true }, 50);
+    expect(actor.snapshot()).toMatchObject({
+      position: { x: 72, y: 61 },
+      routeActive: true,
+      activeAction: "speaking",
+    });
+    expect(actor.nextDeadlineMs()).toBeGreaterThan(50);
+    expect(actor.advance(0.016, 66).map(({ kind }) => kind)).not.toContain("arrived");
+
+    actor.sampleAuthoritativeMotion({ position: { x: 88, y: 61 }, traveling: false }, 80);
+    expect(actor.snapshot()).toMatchObject({
+      position: { x: 88, y: 61 },
+      routeActive: false,
+      activeAction: "speaking",
+    });
+  });
+
   it("clears a completed gather body pose without waiting for another action", () => {
     const { actor } = createActor();
     actor.apply({ kind: "play-body", action: "gather" }, 0);

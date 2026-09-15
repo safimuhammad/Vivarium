@@ -17,7 +17,7 @@ import type {
   ConversationStaging,
   ConversationStagingDecision,
 } from "./conversationStaging";
-import type { StoryMoment } from "./BeatDirector";
+import { BeatDirector, type StoryMoment } from "./BeatDirector";
 import { EVENT_VISUAL_EVENT_TYPES } from "../events/eventVisualCatalog";
 import type { PresentedEventType } from "./eventPayloads";
 import { PresentedWorldModel } from "./PresentedWorldModel";
@@ -29,6 +29,10 @@ import {
 } from "./SceneSettlementCoordinator";
 import { clamp, type PresentationClock } from "./storyClock";
 import { isUtteranceMoment, utterancesFor } from "./utteranceLane";
+import {
+  isSpatialAuthorityLifecycleEvent,
+  isSpatialTravelEvent,
+} from "./eventPayloads";
 
 export type PresentationSpeed = 0.5 | 1 | 1.5 | 2;
 
@@ -318,6 +322,49 @@ export class StoryDirector {
     if (!this.paused && !this.held) this.drainUtterances();
     this.applyPressurePolicy();
     if (!this.paused) this.startNextIfIdle();
+    this.emit();
+  }
+
+  /**
+   * Establishes an archive card's already-recorded prefix without replaying it
+   * as new choreography.
+   *
+   * A historical selection must show the world that existed at its cursor
+   * immediately. Feeding the prefix through `ingest` would let an earlier
+   * staged scene defer the spatial start behind it, while feeding a full suffix
+   * would apply a later stop at once. This method projects only a contiguous
+   * prefix into the model and retains its moments for the Chronicle. Newer
+   * evidence is released separately by the archive playback clock.
+   */
+  restoreHistoricalEvidence(entries: readonly EventEnvelopeEntry[]): void {
+    if (this.disposed || entries.length === 0) return;
+    if (this.activeMoment !== null || this.pending.length > 0 || this.deferredEvidence.length > 0) {
+      throw new Error("historical evidence requires an idle archive director");
+    }
+    const first = entries[0]!;
+    const expected = this.model.getView().projectedThroughCursor + 1;
+    if (first.cursor !== expected) {
+      throw new RangeError(`historical evidence must begin at cursor ${expected}`);
+    }
+    for (let index = 1; index < entries.length; index += 1) {
+      if (entries[index]!.cursor !== entries[index - 1]!.cursor + 1) {
+        throw new RangeError("historical evidence must be contiguous");
+      }
+    }
+
+    const moments = new BeatDirector().group(entries);
+    this.model.applyEvidence(entries);
+    const lastCursor = entries.at(-1)!.cursor;
+    this.ingestedCursor = lastCursor;
+    this.presentedCursor = lastCursor;
+    this.doneThroughCursor = lastCursor;
+    for (const moment of moments) {
+      try {
+        this.onUtteranceMoment?.(moment);
+      } catch {
+        // A Chronicle listener cannot invalidate recorded world truth.
+      }
+    }
     this.emit();
   }
 
@@ -666,7 +713,7 @@ export class StoryDirector {
   }
 
   /**
-   * Clears every display-only moment at the head of the queue, without a lease.
+   * Clears every no-stage moment from the queue, without a lease.
    *
    * This is the whole of the two-lane split on the queue side. An utterance
    * commits its evidence to the world model, raises its overlay, advances the
@@ -679,9 +726,10 @@ export class StoryDirector {
    * Cursor contiguity is preserved exactly: the queue is consumed in order, so
    * `presentedCursor` still advances one contiguous moment at a time.
    *
-   * Side effects: applies evidence to the world model, replaces the overlay
-   * window, advances `presentedCursor`, and calls `onUtteranceMoment` per
-   * moment so the session can keep the chronicle lossless.
+   * Spatial navigation and enriched lifecycle facts are also no-stage: they
+   * project backend-owned feet, attachments, or explicit clears. They must
+   * never enter this director's choreography resolver, where they could become
+   * a frontend-planned walk or flash step.
    */
   private drainUtterances(): boolean {
     // A halted director is about to have its cursor snapped forward by recovery;
@@ -702,14 +750,14 @@ export class StoryDirector {
     const cleared: StoryMoment[] = [];
     this.pending = this.pending.filter((moment) => {
       if (cleared.length + this.deferredEvidence.length >= MAX_DEFERRED_UTTERANCE_EVIDENCE) return true;
-      if (!isUtteranceMoment(moment)) return true;
+      if (!isUtteranceMoment(moment) && !isSpatialTravelMoment(moment)) return true;
       cleared.push(moment);
       return false;
     });
     if (cleared.length === 0) return false;
     for (const moment of cleared) {
       this.deferredEvidence.push(...moment.evidence);
-      raised.push(...utterancesFor(moment, regionOf));
+      if (isUtteranceMoment(moment)) raised.push(...utterancesFor(moment, regionOf));
       this.doneThroughCursor = Math.max(this.doneThroughCursor, moment.lastCursor);
       try {
         this.onUtteranceMoment?.(moment);
@@ -1245,6 +1293,13 @@ export class StoryDirector {
       }
     }
   }
+}
+
+/** A whole moment whose only authority is backend-recorded spatial state. */
+function isSpatialTravelMoment(moment: StoryMoment): boolean {
+  return moment.evidence.length > 0 && moment.evidence.every((entry) => (
+    isSpatialTravelEvent(entry) || isSpatialAuthorityLifecycleEvent(entry)
+  ));
 }
 
 function checkpointFocusTargets(

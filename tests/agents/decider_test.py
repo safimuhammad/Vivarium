@@ -375,6 +375,32 @@ async def test_serializing_decider_releases_on_error() -> None:
     assert not dec._lock.locked()  # context manager released it
 
 
+async def test_serializing_decider_prepares_context_after_queue_wait() -> None:
+    """A queued decision observes the world when inference starts, not when queued."""
+    lock = asyncio.Lock()
+    await lock.acquire()
+    value = "old"
+    observed: list[str] = []
+
+    class Probe:
+        async def decide(
+            self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        ) -> Decision:
+            observed.append(messages[-1]["content"])
+            return Decision(text="ok")
+
+    decider = SerializingDecider(Probe(), lock)
+    task = asyncio.create_task(
+        decider.decide_fresh(lambda: ([{"role": "user", "content": value}], []))
+    )
+    await asyncio.sleep(0)
+    assert observed == []
+    value = "fresh"
+    lock.release()
+    await task
+    assert observed == ["fresh"]
+
+
 async def test_serializing_decider_closes_once_after_active_decision_finishes() -> None:
     """Closing waits for the inference lock, then delegates exactly once."""
     started = asyncio.Event()

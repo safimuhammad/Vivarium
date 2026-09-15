@@ -201,6 +201,25 @@
   gap: 20px;
 }
 
+.saved-runs-screen__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.saved-runs-screen__pagination-button {
+  min-width: 96px;
+}
+
+.saved-runs-screen__pagination-status {
+  min-width: 86px;
+  color: var(--saved-runs-muted);
+  font-size: .78rem;
+  text-align: center;
+}
+
 .saved-run-card {
   display: flex;
   min-width: 0;
@@ -529,12 +548,41 @@
     gap: 5px;
   }
 
+  .saved-runs-screen__pagination {
+    justify-content: space-between;
+  }
+
   .saved-run-card__body {
     padding: 18px;
   }
 }
 
 @media (max-width: 380px) {
+  .saved-runs-screen__pagination {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .saved-runs-screen__pagination-status {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .saved-runs-screen__pagination-button {
+    min-width: 0;
+  }
+
+  .saved-runs-screen__pagination-button:first-of-type {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .saved-runs-screen__pagination-button:last-of-type {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
   .saved-run-card__roster-grid,
   .saved-run-card__stats {
     grid-template-columns: 1fr;

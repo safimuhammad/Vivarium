@@ -1687,7 +1687,9 @@ async def _build_c17() -> JsonObject:
             "display_only": True,
         },
         "scope": "private",
-        "region": None,
+        # Location supports the observer's Nearby feed without broadening the
+        # thought's private delivery scope.
+        "region": "warm_springs",
         "target": None,
         "timestamp": s.clock(),
     }

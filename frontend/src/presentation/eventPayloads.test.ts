@@ -4,7 +4,10 @@ import { EVENT_VISUAL_EVENT_TYPES } from "../events/eventVisualCatalog";
 import type { EventEnvelopeEntry } from "../app/schemas";
 import {
   PRESENTED_EVENT_PAYLOAD_PARSERS,
+  isSpatialAuthorityLifecycleEvent,
+  parseSpatialTravelEvent,
   parsePresentedEvent,
+  type SpatialTravelEventType,
   type PresentedEventType,
 } from "./eventPayloads";
 
@@ -416,7 +419,209 @@ export function eventEntry(
   };
 }
 
+function caseFor(type: PresentedEventType): PayloadCase {
+  const eventCase = PRESENTED_EVENT_PAYLOAD_CASES.find((candidate) => candidate.type === type);
+  if (eventCase === undefined) throw new Error(`missing payload case ${type}`);
+  return eventCase;
+}
+
+/** Exact local Nirvana event shape emitted by the spatial world authority. */
+export function spatialTravelEntry(
+  type: SpatialTravelEventType,
+  cursor = 5,
+): EventEnvelopeEntry {
+  const traveling = type === "spatial_travel_started";
+  const position = traveling ? { x: 20, y: 40 }
+    : type === "spatial_travel_arrived" ? { x: 120, y: 40 }
+      : { x: 60, y: 40 };
+  const route = [{ x: 20, y: 40 }, { x: 120, y: 40 }];
+  return {
+    cursor,
+    event: {
+      type,
+      source: "agent_001",
+      scope: "local",
+      region: "nirvana",
+      target: null,
+      timestamp: type === "spatial_travel_arrived" ? 20 : 10,
+      payload: {
+        message: "Aster follows the east path.",
+        agent_id: "agent_001",
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        travel_id: "journey-east",
+        destination_id: "east-gate",
+        route,
+        started_at: 10,
+        arrives_at: 20,
+        position,
+        spatial: {
+          version: 1,
+          region_id: "nirvana",
+          map_id: "nirvana:test-layout",
+          layout_fingerprint: "test-layout",
+          ...position,
+          observed_at: type === "spatial_travel_arrived" ? 20 : 10,
+          at_landmark: type === "spatial_travel_arrived" ? "east-gate" : null,
+          travel: traveling ? {
+            id: "journey-east",
+            destination_id: "east-gate",
+            route,
+            started_at: 10,
+            arrives_at: 20,
+          } : null,
+        },
+        ...(type === "spatial_travel_cancelled" ? { reason: "observer-stop" } : {}),
+      },
+    },
+    resolved: {},
+    snapshot_after: null,
+  };
+}
+
 describe("event payload parsing", () => {
+  it("parses each atomic Nirvana travel event outside the choreography vocabulary", () => {
+    for (const type of [
+      "spatial_travel_started",
+      "spatial_travel_cancelled",
+      "spatial_travel_arrived",
+    ] as const) {
+      const entry = spatialTravelEntry(type);
+      const parsed = parseSpatialTravelEvent(entry);
+      expect(parsed).toMatchObject({ type, payload: { agent_id: "agent_001", destination_id: "east-gate" } });
+      expect(parsePresentedEvent(entry)).toEqual({ known: false, entry });
+    }
+  });
+
+  it("rejects malformed spatial authority rather than retaining a stale route", () => {
+    const malformed = spatialTravelEntry("spatial_travel_started");
+    (malformed.event.payload as Record<string, unknown>).position = { x: 99, y: 40 };
+    expect(() => parseSpatialTravelEvent(malformed)).toThrow(/atomic spatial position/);
+
+    const foreign = spatialTravelEntry("spatial_travel_cancelled");
+    foreign.event.source = "agent_002";
+    expect(() => parseSpatialTravelEvent(foreign)).toThrow(/authoritative agent and region/);
+  });
+
+  it("parses enriched lifecycle authority without changing legacy payload shapes", () => {
+    const agentSpatial = (spatialTravelEntry("spatial_travel_cancelled").event.payload as Record<string, unknown>).spatial;
+    const left = eventEntry(caseFor("agent_left_region"));
+    left.event.payload = { ...left.event.payload, spatial: null };
+    const entered = eventEntry(caseFor("agent_entered_region"));
+    entered.event.payload = { ...entered.event.payload, to_region: "nirvana", spatial: agentSpatial };
+    const born = eventEntry(caseFor("agent_born"));
+    born.event.payload = { ...born.event.payload, region: "nirvana", spatial: agentSpatial };
+    const built = eventEntry(caseFor("home_built"));
+    built.event.payload = {
+      ...built.event.payload,
+      region: "nirvana",
+      home_spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        plot_id: "shelter-1",
+        x: 32,
+        y: 64,
+        door: { x: 32, y: 96 },
+      },
+    };
+
+    expect(parsePresentedEvent(left)).toMatchObject({ known: true, evidence: { payload: { spatial: null } } });
+    expect(parsePresentedEvent(entered)).toMatchObject({ known: true, evidence: { payload: { spatial: agentSpatial } } });
+    expect(parsePresentedEvent(born)).toMatchObject({ known: true, evidence: { payload: { spatial: agentSpatial } } });
+    expect(parsePresentedEvent(built)).toMatchObject({ known: true, evidence: { payload: { home_spatial: { plot_id: "shelter-1" } } } });
+    expect(isSpatialAuthorityLifecycleEvent(left)).toBe(true);
+    expect(isSpatialAuthorityLifecycleEvent(entered)).toBe(true);
+    expect(isSpatialAuthorityLifecycleEvent(born)).toBe(true);
+    expect(isSpatialAuthorityLifecycleEvent(built)).toBe(true);
+    expect(isSpatialAuthorityLifecycleEvent(eventEntry(caseFor("agent_born")))).toBe(false);
+    expect(isSpatialAuthorityLifecycleEvent(eventEntry(caseFor("home_built")))).toBe(false);
+  });
+
+  it("parses an authoritative gate-to-gate migration and a local non-Nirvana route", () => {
+    const sourcePosition = { x: 120, y: 40 };
+    const left = eventEntry(caseFor("agent_left_region"));
+    left.event.payload = {
+      ...left.event.payload,
+      from_region: "nirvana",
+      to_region: "warm_springs",
+      authoritative_spatial: true,
+      spatial: null,
+      source_position: sourcePosition,
+    };
+    const entered = eventEntry(caseFor("agent_entered_region"));
+    entered.event.payload = {
+      ...entered.event.payload,
+      from_region: "nirvana",
+      to_region: "warm_springs",
+      authoritative_spatial: true,
+      spatial: {
+        version: 1,
+        region_id: "warm_springs",
+        map_id: "warm_springs:pilot-layout",
+        layout_fingerprint: "pilot-layout",
+        x: 32,
+        y: 96,
+        observed_at: 20,
+        at_landmark: "west-arrival",
+        travel: null,
+      },
+    };
+    const warmRoute = spatialTravelEntry("spatial_travel_started");
+    warmRoute.event.region = "warm_springs";
+    (warmRoute.event.payload as Record<string, unknown>).region_id = "warm_springs";
+    (warmRoute.event.payload as Record<string, unknown>).map_id = "warm_springs:test-layout";
+    (warmRoute.event.payload as Record<string, unknown>).travel_id = "warm_springs:agent_001:travel:7";
+    (warmRoute.event.payload as Record<string, unknown>).destination_region = "nirvana";
+    ((warmRoute.event.payload as Record<string, unknown>).spatial as Record<string, unknown>).region_id = "warm_springs";
+    ((warmRoute.event.payload as Record<string, unknown>).spatial as Record<string, unknown>).map_id = "warm_springs:test-layout";
+    const warmTravel = ((warmRoute.event.payload as Record<string, unknown>).spatial as Record<string, unknown>).travel as Record<string, unknown>;
+    warmTravel.id = "warm_springs:agent_001:travel:7";
+    warmTravel.destination_region = "nirvana";
+
+    expect(parsePresentedEvent(left)).toMatchObject({
+      known: true,
+      evidence: { payload: { authoritative_spatial: true, spatial: null, source_position: sourcePosition } },
+    });
+    expect(parsePresentedEvent(entered)).toMatchObject({
+      known: true,
+      evidence: { payload: { authoritative_spatial: true, spatial: { region_id: "warm_springs", x: 32, y: 96 } } },
+    });
+    expect(parseSpatialTravelEvent(warmRoute)).toMatchObject({
+      type: "spatial_travel_started",
+      payload: {
+        region_id: "warm_springs",
+        map_id: "warm_springs:test-layout",
+        travel_id: "warm_springs:agent_001:travel:7",
+        destination_region: "nirvana",
+        spatial: { travel: { destination_region: "nirvana" } },
+      },
+    });
+    expect(isSpatialAuthorityLifecycleEvent(left)).toBe(true);
+    expect(isSpatialAuthorityLifecycleEvent(entered)).toBe(true);
+  });
+
+  it("rejects incomplete authoritative migration halves", () => {
+    const left = eventEntry(caseFor("agent_left_region"));
+    left.event.payload = { ...left.event.payload, authoritative_spatial: true, spatial: null };
+    expect(() => parsePresentedEvent(left)).toThrow(/source_position/);
+
+    const entered = eventEntry(caseFor("agent_entered_region"));
+    entered.event.payload = { ...entered.event.payload, authoritative_spatial: true, spatial: null };
+    expect(() => parsePresentedEvent(entered)).toThrow(/non-null spatial/);
+  });
+
+  it("rejects malformed optional lifecycle spatial state", () => {
+    const malformed = eventEntry(caseFor("agent_entered_region"));
+    malformed.event.payload = { ...malformed.event.payload, spatial: { version: 1 } };
+    expect(() => parsePresentedEvent(malformed)).toThrow("agent.spatial");
+
+    const malformedHome = eventEntry(caseFor("home_built"));
+    malformedHome.event.payload = { ...malformedHome.event.payload, home_spatial: { version: 1 } };
+    expect(() => parsePresentedEvent(malformedHome)).toThrow("home.spatial");
+  });
+
   it("strictly parses the exact source payload keys for all 28 known event types", () => {
     expect(PRESENTED_EVENT_PAYLOAD_CASES.map(({ type }) => type)).toEqual(
       EVENT_VISUAL_EVENT_TYPES,

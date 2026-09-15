@@ -761,7 +761,9 @@ export function createCamera(options: Camera2DOptions): Camera2DPort {
       x: clamp(screen.x, deadZone.x, deadZone.x + deadZone.width),
       y: clamp(screen.y, deadZone.y, deadZone.y + deadZone.height),
     };
-    setDestination({
+    // Preserve the active ease while the subject walks; restarting it every frame
+    // makes Follow lag farther behind on displays with higher refresh rates.
+    setTrackedDestination({
       x: center.x + (screen.x - clampedScreen.x) / zoom,
       y: center.y + (screen.y - clampedScreen.y) / zoom,
     });

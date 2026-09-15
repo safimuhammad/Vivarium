@@ -4,18 +4,29 @@
  * sprite-sheet actor integration).
  */
 
+import { resolve } from "node:path";
+
+import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { deriveHumanAppearance } from "./appearance";
-import { characterIds, type BeingCharacterId } from "./beingChibiAtlas";
+import { BEING_CHIBI_GEOMETRY, characterIds, type BeingCharacterId } from "./beingChibiAtlas";
 import {
+  BEING_ACCESSORIES,
   BEING_PALETTE_VARIANTS,
+  BEING_VISUAL_PALETTE_VARIANTS,
   createPaletteVariantSource,
+  createVisualPaletteVariantSource,
+  drawBeingAccessory,
   PALETTE_REMAPS_BY_CHARACTER,
   resolveBeingPaletteVariant,
+  VISUAL_PALETTE_REMAPS_BY_CHARACTER,
   type BeingPaletteVariant,
   type RgbTriple,
 } from "./beingPalette";
+import { resolveBeingVisualIdentity } from "./visualIdentity";
+
+const BEING_ATLAS_IMAGE_PATH = resolve(process.cwd(), "src/assets/renderer2d/core/being-chibi.png");
 
 /**
  * "redmean" perceptual color distance — a low-cost RGB-space approximation
@@ -97,7 +108,7 @@ class FixturePixelContext {
 const fixturePixels = new WeakMap<CanvasImageSource, Uint8ClampedArray>();
 let canvasContexts = new WeakMap<HTMLCanvasElement, FixturePixelContext>();
 
-function registerFixturePixels(image: FixtureImage, pixels: readonly number[]): void {
+function registerFixturePixels(image: FixtureImage, pixels: ArrayLike<number>): void {
   fixturePixels.set(image, Uint8ClampedArray.from(pixels));
 }
 
@@ -119,6 +130,64 @@ function readBackPixels(canvas: CanvasImageSource): Uint8ClampedArray {
   const context = canvasContexts.get(canvas as HTMLCanvasElement);
   if (!context) throw new Error("Expected the returned source to be a canvas the mock backs.");
   return context.snapshotPixels();
+}
+
+interface CommittedAtlasFixture {
+  readonly image: FixtureImage;
+  readonly pixels: Uint8ClampedArray;
+  readonly width: number;
+  readonly height: number;
+}
+
+async function committedAtlasFixture(): Promise<CommittedAtlasFixture> {
+  const { data, info } = await sharp(BEING_ATLAS_IMAGE_PATH)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const pixels = Uint8ClampedArray.from(data);
+  const image = fixtureImage(info.width, info.height);
+  registerFixturePixels(image, pixels);
+  return { image, pixels, width: info.width, height: info.height };
+}
+
+function pixelAt(data: Uint8ClampedArray, width: number, x: number, y: number): readonly [number, number, number, number] {
+  const offset = (y * width + x) * 4;
+  return [data[offset]!, data[offset + 1]!, data[offset + 2]!, data[offset + 3]!];
+}
+
+function changedPixelsInFrame(
+  before: Uint8ClampedArray,
+  after: Uint8ClampedArray,
+  sheetWidth: number,
+  frameOrigin: { readonly x: number; readonly y: number },
+  localYStart = 0,
+  localYEnd = BEING_CHIBI_GEOMETRY.frameHeight - 1,
+): number {
+  let changed = 0;
+  for (let localY = localYStart; localY <= localYEnd; localY += 1) {
+    for (let localX = 0; localX < BEING_CHIBI_GEOMETRY.frameWidth; localX += 1) {
+      const beforePixel = pixelAt(before, sheetWidth, frameOrigin.x + localX, frameOrigin.y + localY);
+      const afterPixel = pixelAt(after, sheetWidth, frameOrigin.x + localX, frameOrigin.y + localY);
+      if (beforePixel.some((channel, index) => channel !== afterPixel[index])) changed += 1;
+    }
+  }
+  return changed;
+}
+
+function nonTransparentPixelsInFrame(
+  pixels: Uint8ClampedArray,
+  sheetWidth: number,
+  frameOrigin: { readonly x: number; readonly y: number },
+  localYStart = 0,
+  localYEnd = BEING_CHIBI_GEOMETRY.frameHeight - 1,
+): number {
+  let count = 0;
+  for (let localY = localYStart; localY <= localYEnd; localY += 1) {
+    for (let localX = 0; localX < BEING_CHIBI_GEOMETRY.frameWidth; localX += 1) {
+      if (pixelAt(pixels, sheetWidth, frameOrigin.x + localX, frameOrigin.y + localY)[3] !== 0) count += 1;
+    }
+  }
+  return count;
 }
 
 describe("resolveBeingPaletteVariant", () => {
@@ -230,6 +299,148 @@ describe("BeingPaletteVariant exhaustiveness", () => {
       bone: true,
     };
     expect(Object.keys(table).sort()).toEqual([...BEING_PALETTE_VARIANTS].sort());
+  });
+});
+
+describe("styled visual palette and accessory compositor", () => {
+  beforeEach(() => {
+    installCanvasMock();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("adds three curated garment families without changing the legacy palette set", () => {
+    expect(BEING_PALETTE_VARIANTS).toEqual([
+      "slate-blue",
+      "violet-grey",
+      "moss",
+      "ochre",
+      "bone",
+    ]);
+    expect(BEING_VISUAL_PALETTE_VARIANTS).toEqual([
+      ...BEING_PALETTE_VARIANTS,
+      "terracotta",
+      "deep-teal",
+      "plum",
+    ]);
+    expect(new Set(BEING_VISUAL_PALETTE_VARIANTS).size).toBe(8);
+    for (const variant of BEING_VISUAL_PALETTE_VARIANTS) {
+      expect(VISUAL_PALETTE_REMAPS_BY_CHARACTER.m1[variant]).toHaveLength(4);
+    }
+  });
+
+  it("preserves unfamiliar atlas layouts and reuses its bounded source cache", () => {
+    const base = fixtureImage(1, 1);
+    const sourceEntry = VISUAL_PALETTE_REMAPS_BY_CHARACTER.m1.terracotta[0]!;
+    registerFixturePixels(base, [sourceEntry.from.r, sourceEntry.from.g, sourceEntry.from.b, 255]);
+
+    const first = createVisualPaletteVariantSource(base, "terracotta", "m1");
+    const second = createVisualPaletteVariantSource(base, "terracotta", "m1");
+    expect(second).toBe(first);
+    const pixels = readBackPixels(first);
+    expect([pixels[0], pixels[1], pixels[2], pixels[3]]).toEqual([
+      sourceEntry.from.r,
+      sourceEntry.from.g,
+      sourceEntry.from.b,
+      255,
+    ]);
+  });
+
+  it("draws every non-empty accessory on the garment band only, so faces remain untouched", () => {
+    const fills: Array<{ readonly x: number; readonly y: number; readonly width: number; readonly height: number; readonly fillStyle: string }> = [];
+    const context = {
+      fillStyle: "#000000" as string | CanvasGradient | CanvasPattern,
+      save: (): void => undefined,
+      restore: (): void => undefined,
+      fillRect: (x: number, y: number, width: number, height: number): void => {
+        fills.push({ x, y, width, height, fillStyle: String(context.fillStyle) });
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    for (const accessory of BEING_ACCESSORIES) {
+      const start = fills.length;
+      drawBeingAccessory(context, accessory, "terracotta", 0, 0);
+      if (accessory === "none") {
+        expect(fills.length).toBe(start);
+      } else {
+        expect(fills.length).toBeGreaterThan(start);
+      }
+    }
+    expect(fills.every((fill) => fill.y >= 22 && fill.y + fill.height <= 48)).toBe(true);
+    expect(new Set(fills.map((fill) => fill.fillStyle)).size).toBe(1);
+  });
+});
+
+describe("committed packed atlas visual palette regression", () => {
+  beforeEach(() => {
+    installCanvasMock();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("changes wardrobe pixels for every packed character while preserving its head band", async () => {
+    const { image, pixels: before, width, height } = await committedAtlasFixture();
+    expect(width).toBe(BEING_CHIBI_GEOMETRY.frameWidth * 5);
+    expect(height).toBe(BEING_CHIBI_GEOMETRY.frameHeight * 4 * characterIds().length);
+
+    for (const characterId of characterIds()) {
+      const recolored = createVisualPaletteVariantSource(image, "plum", characterId);
+      const after = readBackPixels(recolored);
+      const frameOrigin = BEING_CHIBI_GEOMETRY.characters[characterId].frames["walk-down-1"]!;
+      const changedWardrobePixels = changedPixelsInFrame(before, after, width, frameOrigin, 16);
+      const changedHeadPixels = changedPixelsInFrame(before, after, width, frameOrigin, 0, 15);
+
+      // This is backed by the committed PNG, so a stale or source-RGB-only
+      // table fails here instead of passing on a synthetic one-pixel fixture.
+      expect(changedWardrobePixels, `${characterId} wardrobe should visibly recolor`).toBeGreaterThan(0);
+      expect(changedHeadPixels, `${characterId} head pixels must remain native`).toBe(0);
+      expect(
+        nonTransparentPixelsInFrame(before, width, frameOrigin, 0, 15),
+        `${characterId} head band should contain source art`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps hair and the raised-arm skin sample native in the packed side frame", async () => {
+    const { image, pixels: before, width } = await committedAtlasFixture();
+    const recolored = createVisualPaletteVariantSource(image, "plum", "m1");
+    const after = readBackPixels(recolored);
+    const sideOrigin = BEING_CHIBI_GEOMETRY.characters.m1.frames["walk-side-1"]!;
+
+    // These are real pixels from m1's side-view frame: the hair sample shares
+    // a packed RGB with a trouser role, while the arm sample sits inside the
+    // upper wardrobe band but uses m1's skin color. Both must survive the
+    // bounded RGB remap.
+    const hairSample = pixelAt(before, width, sideOrigin.x + 10, sideOrigin.y + 10);
+    const raisedArmSkinSample = pixelAt(before, width, sideOrigin.x + 8, sideOrigin.y + 21);
+    expect(hairSample).toEqual([45, 28, 16, 255]);
+    expect(raisedArmSkinSample).toEqual([227, 151, 77, 255]);
+    expect(pixelAt(after, width, sideOrigin.x + 10, sideOrigin.y + 10)).toEqual(hairSample);
+    expect(pixelAt(after, width, sideOrigin.x + 8, sideOrigin.y + 21)).toEqual(raisedArmSkinSample);
+  });
+
+  it("makes each default wanderer identity visibly recolor its actual atlas frame", async () => {
+    const { image, pixels: before, width } = await committedAtlasFixture();
+    const defaultIds = ["wanderer_001", "wanderer_002", "wanderer_003", "wanderer_004"] as const;
+
+    for (const agentId of defaultIds) {
+      const identity = resolveBeingVisualIdentity(agentId);
+      const recolored = createVisualPaletteVariantSource(image, identity.paletteVariant, identity.characterId);
+      const after = readBackPixels(recolored);
+      const frameOrigin = BEING_CHIBI_GEOMETRY.characters[identity.characterId].frames["walk-down-1"]!;
+      expect(
+        changedPixelsInFrame(before, after, width, frameOrigin, 16),
+        `${agentId} (${identity.characterId}/${identity.paletteVariant}) wardrobe should recolor`,
+      ).toBeGreaterThan(0);
+      expect(
+        changedPixelsInFrame(before, after, width, frameOrigin, 0, 15),
+        `${agentId} head pixels must remain native`,
+      ).toBe(0);
+    }
   });
 });
 

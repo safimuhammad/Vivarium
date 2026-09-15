@@ -16,6 +16,7 @@ import {
   type RegionMapRecipeV1,
 } from "../../renderer2d/production/maps/RegionMapRecipe";
 import { createProductionRegionMapRecipe } from "../../renderer2d/production/maps/ProductionRegionMapRecipe";
+import { createSpatialNavigationExport } from "../../renderer2d/production/navigation/SpatialNavigationExport";
 import { createPlacementGenerationOwner } from "../../renderer2d/production/placement/PlacementGeneration";
 import {
   createProductionArchiveObserverSession,
@@ -413,6 +414,140 @@ describe("production observer session assembly", () => {
     genesisArchive.dispose();
   });
 
+  it("recreates a spatial Archive map from its frozen exported identity, not current Live growth", async () => {
+    const run = makeRun({ run_id: "frozen-spatial-history", seed: 401, event_cursor: 9 });
+    const archivedPressure = { populationHighWater: 200, builtFootprintHighWater: 100 };
+    const archivedBase = makeNirvanaWorld(run.run_id, 4, archivedPressure);
+    const archivedNirvana = archivedBase.regions.find((region) => region.name === "nirvana")!;
+    const archivedRecipe = createProductionRegionMapRecipe(
+      createRegionMapIdentity(run.seed, archivedNirvana, archivedBase.regions),
+      archivedPressure,
+    );
+    const navigation = createSpatialNavigationExport(archivedRecipe, archivedPressure);
+    const frozenArchive = {
+      ...archivedBase,
+      regions: archivedBase.regions.map((region) => region.name !== "nirvana"
+        ? region
+        : {
+            ...region,
+            spatial: {
+              version: 1 as const,
+              region_id: "nirvana" as const,
+              map_id: navigation.map_id,
+              layout_fingerprint: navigation.layout_fingerprint,
+              tile_size: navigation.tile_size,
+              landmarks: navigation.landmarks,
+              initial_pressure: navigation.initial_pressure,
+            },
+          }),
+    };
+    const currentLive = makeNirvanaWorld(run.run_id, 9, {
+      populationHighWater: 225,
+      builtFootprintHighWater: 112,
+    });
+    const currentLiveRecipes = new Map(currentLive.regions.map((region) => {
+      const recipe = createProductionRegionMapRecipe(
+        createRegionMapIdentity(run.seed, region, currentLive.regions),
+        region.name === "nirvana"
+          ? { populationHighWater: 225, builtFootprintHighWater: 112 }
+          : undefined,
+      );
+      return [recipe.regionId, recipe] as const;
+    }));
+
+    const archive = createProductionArchiveObserverSession({
+      runSeed: run.seed,
+      recipes: currentLiveRecipes,
+      window: archiveWindowFor(frozenArchive, 4),
+      clockFactory: createManualPresentationClock,
+      runtimeFactory: createSceneExecutor,
+    });
+    await archive.session.ready;
+    expect(serializeRegionMapRecipe(archive.getResources().recipes.get("nirvana")!))
+      .toBe(serializeRegionMapRecipe(archivedRecipe));
+
+    archive.dispose();
+    const mismatchedSnapshot = {
+      ...frozenArchive,
+      regions: frozenArchive.regions.map((region) => region.name !== "nirvana"
+        ? region
+        : {
+            ...region,
+            spatial: {
+              ...region.spatial!,
+              map_id: "nirvana:wrong-map",
+              layout_fingerprint: "wrong-map",
+            },
+          }),
+    };
+    let mismatch: unknown;
+    try {
+      createProductionArchiveObserverSession({
+        runSeed: run.seed,
+        recipes: currentLiveRecipes,
+        window: archiveWindowFor(mismatchedSnapshot, 4),
+      });
+    } catch (error) {
+      mismatch = error;
+    }
+    expect(mismatch).toMatchObject({ message: "Archive recipes must belong to the same run seed and snapshot" });
+    expect((mismatch as Error & { cause?: unknown }).cause)
+      .toMatchObject({ message: "spatial snapshot map identity does not match the frozen production recipe" });
+  });
+
+  it("rejects a non-Nirvana spatial Archive snapshot whose map fingerprint is not frozen", () => {
+    const run = makeRun({ run_id: "warm-springs-frozen-history", seed: 401, event_cursor: 7 });
+    const world = makeWarmSpringsWorld(run.run_id, 7);
+    const pressure = { populationHighWater: 1, builtFootprintHighWater: 1 };
+    const springs = world.regions.find((region) => region.name === "warm_springs")!;
+    const springsRecipe = createProductionRegionMapRecipe(
+      createRegionMapIdentity(run.seed, springs, world.regions),
+    );
+    const navigation = createSpatialNavigationExport(springsRecipe, pressure);
+    const frozenArchive = {
+      ...world,
+      regions: world.regions.map((region) => region.name !== "warm_springs"
+        ? region
+        : {
+            ...region,
+            spatial: {
+              version: 1 as const,
+              region_id: "warm_springs",
+              map_id: navigation.map_id,
+              layout_fingerprint: navigation.layout_fingerprint,
+              tile_size: navigation.tile_size,
+              landmarks: navigation.landmarks,
+              initial_pressure: navigation.initial_pressure,
+            },
+          }),
+    };
+    const recipes = new Map(frozenArchive.regions.map((region) => {
+      const recipe = createProductionRegionMapRecipe(
+        createRegionMapIdentity(run.seed, region, frozenArchive.regions),
+      );
+      return [recipe.regionId, recipe] as const;
+    }));
+    const mismatchedSnapshot = {
+      ...frozenArchive,
+      regions: frozenArchive.regions.map((region) => region.name !== "warm_springs"
+        ? region
+        : {
+            ...region,
+            spatial: {
+              ...region.spatial!,
+              map_id: "warm_springs:wrong-map",
+              layout_fingerprint: "wrong-map",
+            },
+          }),
+    };
+
+    expect(() => createProductionArchiveObserverSession({
+      runSeed: run.seed,
+      recipes,
+      window: archiveWindowFor(mismatchedSnapshot, 7),
+    })).toThrow(/same run seed and snapshot/i);
+  });
+
   it("rejects a supplied Nirvana Archive recipe whose static-scene hash drifted", () => {
     const run = makeRun({ run_id: "nirvana-run", seed: 401, event_cursor: 7 });
     const world = makeNirvanaWorld(run.run_id, 7);
@@ -566,6 +701,32 @@ function makeNirvanaWorld(
           built_footprint_high_water: pressure.builtFootprintHighWater,
         }
       : record),
+  };
+}
+
+function makeWarmSpringsWorld(
+  runId: string,
+  eventCursor: number,
+): ReturnType<typeof makeWorld> {
+  const base = makeNirvanaWorld(runId, eventCursor);
+  const renamed = (regionId: string): string => regionId === "grove" ? "warm_springs" : regionId;
+  return {
+    ...base,
+    agents: base.agents.map((agent) => ({ ...agent, position: renamed(agent.position) })),
+    regions: base.regions.map((region) => region.name !== "grove"
+      ? { ...region, connections: region.connections.map(renamed) }
+      : {
+          ...region,
+          name: "warm_springs",
+          description: "hot spring lakes",
+          connections: region.connections.map(renamed),
+        }),
+    homes: base.homes.map((home) => ({ ...home, region: renamed(home.region) })),
+    ruins: base.ruins.map((ruin) => ({ ...ruin, region: renamed(ruin.region) })),
+    region_pressure: base.region_pressure?.map((record) => ({
+      ...record,
+      region: renamed(record.region),
+    })),
   };
 }
 

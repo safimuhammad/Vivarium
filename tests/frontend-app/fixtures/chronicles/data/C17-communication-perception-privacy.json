@@ -381,7 +381,7 @@
           "display_only": true,
           "message": "I will keep this thought within."
         },
-        "region": null,
+        "region": "warm_springs",
         "scope": "private",
         "source": "wanderer_001",
         "target": null,
@@ -389,7 +389,8 @@
         "type": "self_talk"
       },
       "resolved": {
-        "actor_id": "wanderer_001"
+        "actor_id": "wanderer_001",
+        "region": "warm_springs"
       },
       "snapshot_after": null
     }

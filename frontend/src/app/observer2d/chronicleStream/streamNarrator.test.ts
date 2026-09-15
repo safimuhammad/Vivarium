@@ -91,6 +91,18 @@ describe("narrateStreamEvent", () => {
       .toBe("Joe left Warm Springs.");
   });
 
+  it("names authoritative spatial journeys without surfacing their internal route", () => {
+    expect(narrate("spatial_travel_started", { destination_id: "foraging_grove" }).line)
+      .toBe("Joe began walking to Foraging Grove.");
+    expect(narrate("spatial_travel_cancelled", { destination_id: "foraging_grove" }).line)
+      .toBe("Joe came to rest on the way to Foraging Grove.");
+    expect(narrate("spatial_travel_arrived", { destination_id: "foraging_grove" }).line)
+      .toBe("Joe arrived at Foraging Grove.");
+    expect(narrate("spatial_travel_started", {}, {
+      spatialDestinationName: "Grove of Returns",
+    }).line).toBe("Joe began walking to Grove of Returns.");
+  });
+
   it("signs a spend and reports the holding for a resource change", () => {
     expect(narrate("resource_changed", {
       resource_type: "energy",

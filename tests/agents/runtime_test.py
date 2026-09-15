@@ -1804,6 +1804,7 @@ async def test_text_only_breath_emits_private_self_talk(
     log = InMemoryEventLog()
     event_bus = EventBus(world, event_log=log)
     event_bus.subscribe(ADA)
+    event_bus.subscribe(BORIS)
     decider = MockDecider([Decision(text="  I wonder what lies past the hills.  ")])
     agent = Agent(ADA, world, event_bus, populated_registry, decider, pace=0.0)
     energy_before = _live(world, ADA).current_energy
@@ -1813,9 +1814,11 @@ async def test_text_only_breath_emits_private_self_talk(
     self_talks = [e for e in log.events if e.type == "self_talk"]
     assert len(self_talks) == 1
     assert self_talks[0].scope is ScopeType.PRIVATE
+    assert self_talks[0].region == _live(world, ADA).current_position
     assert self_talks[0].payload["message"] == "I wonder what lies past the hills."
     assert self_talks[0].payload["agent_id"] == ADA
     assert event_bus.get_events(ADA) == []  # delivered to no one, not even itself
+    assert event_bus.get_events(BORIS) == []
     # Self-talk itself costs nothing extra; the idle breath it rides on still ages.
     assert _live(world, ADA).current_energy == energy_before - IDLE_AGING_ENERGY_COST
 

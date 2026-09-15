@@ -1,10 +1,13 @@
+import { bridgeDepthScene, bridgeRailSlices, drawBridgeBase, drawBridgeRail, projectBridgeFeet } from "./depth/BridgeDepth";
 import type { AgentSnapshot, HomeSnapshot, RegionSnapshot } from "../../app/schemas";
+import { sampleAuthoritativeSpatialMotion } from "../../presentation/spatialMotion";
 import {
   assertValidFrameIdentity,
   type FrameIdentity,
   type ObserverSelection,
   type PresentedObserverFrame,
   type PresentedRecord,
+  type PresentedSpatialPlayback,
 } from "../../presentation/contracts";
 import type { Direction4, Rect, Vec2 } from "../contracts";
 import { TILE_SIZE, tileCenter } from "../map/regionMap";
@@ -14,6 +17,8 @@ import type {
   ProductionActorSignal,
 } from "./actors/LayeredHumanActor";
 import { BEING_CHIBI_ATLAS_ID } from "./actors/beingChibiAtlas";
+import { DEPTH_SCENERY_ATLAS_ID } from "./depth/DepthSceneryAssets";
+import { depthSceneryPlacements, depthSceneryInView, DEPTH_SCENERY_FRAME_INTERVAL_MS, drawDepthSceneryProp, drawDepthSceneryShadows, type DepthSceneryPlacement } from "./depth/DepthScenery";
 import type { ProductionHumanActor } from "./actors/ProductionHumanActor";
 import {
   HUMAN_EXPRESSIONS,
@@ -41,6 +46,7 @@ import type {
   AgentPlacement,
   HomePlacement,
   HomePlacementResult,
+  PlaceableHome,
   PlacementLedger,
   PlacementLedgerSnapshot,
   ShelterCapacitySnapshot,
@@ -291,7 +297,8 @@ export interface ProductionSceneGraph {
   applySceneCommands(batch: ProductionSceneCommandBatch, nowMs: number): ProductionSceneCommandResult;
   sceneSignals(afterSerial?: number): readonly ProductionSceneSignal[];
   updateTime(deltaSeconds: number, nowMs: number): void;
-  draw(context: CanvasRenderingContext2D, view?: OverlayViewport): void;
+  /** Later wrapped copies of one renderer frame retain earlier copies' visibility. */
+  draw(context: CanvasRenderingContext2D, view?: OverlayViewport, pass?: Readonly<{ continueFrame?: boolean }>): void;
   /**
    * Draw ONLY the moving-being pass, with no terrain, scenery, homes or overlay chrome.
    *
@@ -400,6 +407,7 @@ interface EnvironmentEntry {
   readonly recipe: RegionMapRecipeV1;
   readonly landmarkInteractionExclusions: readonly Rect[];
   condition: RegionCondition;
+  readonly depth: Readonly<{ source: CanvasImageSource; props: readonly DepthSceneryPlacement[] }> | null;
 }
 
 interface PreparedActor {
@@ -439,6 +447,11 @@ interface CandidateRecords {
   }>>;
   readonly regions: Map<string, PresentedRecord<RegionSnapshot>>;
   readonly malformedRecords: number;
+}
+
+/** The graph-local wall-clock anchor for one session playback sample. */
+interface SpatialPlaybackAnchor extends PresentedSpatialPlayback {
+  readonly wallAnchorMs: number;
 }
 
 const EMPTY_CURSORS = Object.freeze({
@@ -485,6 +498,8 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
     recordDisposed(ownership.environments);
   };
   let orderedActors: readonly OrderedActorEntry[] = [];
+  let orderedBeingFeet: readonly Vec2[] = [];
+  let depthMotionVisible = false;
   let orderedHomes: readonly OrderedHomeEntry[] = [];
   /**
    * Every currently-standing home's spatial-truth exclusion geometry (see
@@ -505,6 +520,9 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
   let staticCacheRebuilds = 0;
   let disposed = false;
   let lastNowMs = 0;
+  // `worldTime` remains checkpoint truth only. This anchor is advanced from
+  // the presentation session's explicit replay/pause/speed clock instead.
+  let spatialPlayback: SpatialPlaybackAnchor | null = null;
   let worldTime = 0;
   const recentMarkers: Array<ProductionSceneGraphDebugSnapshot["recentMarkers"][number]> = [];
   const regionTransitions: ProductionRegionTransitionWitness[] = [];
@@ -595,7 +613,10 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
       if (sameIdentity(frame, identity)
         && !changesObserverRegion
         && !changesStoryRegion
-        && !changesCheckpointRegion) return emptyDiff("duplicate");
+        && !changesCheckpointRegion) {
+        adoptSpatialPlayback(frame.spatialPlayback);
+        return emptyDiff("duplicate");
+      }
       if (frame.revision < identity.revision
         || frame.firstCursor < identity.firstCursor
         || frame.lastCursor < identity.lastCursor
@@ -606,6 +627,8 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
         return emptyDiff("stale");
       }
     }
+
+    adoptSpatialPlayback(frame.spatialPlayback);
 
     const candidate = collectCandidateRecords(frame);
     if (candidate === null) {
@@ -674,7 +697,10 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
     const placementHints = matchingPlacementHints(frame, batch, consumedPlacementHintIds);
     const needsCandidatePlacement = placementHints.length > 0
       || [...activeActors.keys()].some((id) => !placementSnapshot.agents.has(id))
-      || [...activeHomes.keys()].some((id) => !placementSnapshot.homes.has(id));
+      || [...activeHomes.keys()].some((id) => !placementSnapshot.homes.has(id))
+      || [...activeActors].some(([id, record]) => (
+        authoritativeReanchorPoint(actors.get(id)?.known ?? {}, record.value) !== null
+      ));
     const candidatePlacement = needsCandidatePlacement ? placement.fork() : placement;
     const consumedPlacementHints: string[] = [];
     const completedArrivals: PendingRegionTransition[] = [];
@@ -683,6 +709,9 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
     for (const hint of placementHints) {
       const record = activeActors.get(hint.agentId);
       if (record === undefined || !isCreatableAgent(record.value)) continue;
+      // A spatial actor already has explicit world feet. A legacy birth/arrival
+      // hint must never replace them with a staging anchor.
+      if (record.value.spatial !== undefined) continue;
       const before = candidatePlacement.snapshot();
       if (!validPlacementHint(hint, record.value, before, recipes)) continue;
       const actorEntry = actors.get(hint.agentId);
@@ -755,8 +784,17 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
           stagedMalformedRecords += 1;
           continue;
         }
-        const localPlacement = candidatePlacement.snapshot().agents.get(id)
+        let localPlacement = candidatePlacement.snapshot().agents.get(id)
           ?? candidatePlacement.placeAgent(record.value);
+        const authoritativePlacement = record.value.spatial
+          ?? record.value.spatial_migration?.source_position;
+        if (authoritativePlacement !== undefined) {
+          // First render uses backend feet immediately. The ledger is updated in
+          // the candidate transaction too, so effect contacts, follow targets,
+          // hit testing, and depth ordering all share the same point.
+          candidatePlacement.updateAgentPoint(id, authoritativePlacement);
+          localPlacement = candidatePlacement.snapshot().agents.get(id)!;
+        }
         const atlasLeases = acquireAtlasLeases(coreActorAtlasIds(manifest));
         let actor: ProductionHumanActor;
         try {
@@ -860,6 +898,10 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
           recipe: nextRecipe,
           landmarkInteractionExclusions: nextLandmarkInteractionExclusions,
           condition,
+          depth: atlasLeases.has(DEPTH_SCENERY_ATLAS_ID) ? {
+            source: atlasLeases.get(DEPTH_SCENERY_ATLAS_ID)!.value,
+            props: depthSceneryPlacements(nextRecipe),
+          } : null,
         };
       }
     } catch (error) {
@@ -957,6 +999,7 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
       for (const reanchor of pendingBirthReanchors.values()) {
         const entry = actors.get(reanchor.actorId);
         if (entry === undefined) throw new Error(`Missing projected newborn actor ${reanchor.actorId}.`);
+        if (hasAuthoritativeSpatialOwnership(entry)) continue;
         const rollback = entry.actor.stagePosition(reanchor.point);
         if (rollback === null) throw new Error(`Projected newborn actor ${reanchor.actorId} rejected birth staging.`);
         stagedActorRollbacks.push({ entry, rollback });
@@ -974,6 +1017,7 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
       for (const arrival of arrivalsToStage) {
         const entry = actors.get(arrival.actorId);
         if (entry === undefined) throw new Error(`Missing retained destination actor ${arrival.actorId}.`);
+        if (hasAuthoritativeSpatialOwnership(entry)) continue;
         const rollback = entry.actor.stagePosition(arrival.gate);
         if (rollback === null) throw new Error(`Retained destination actor ${arrival.actorId} rejected staging.`);
         stagedActorRollbacks.push({ entry, rollback });
@@ -1007,6 +1051,15 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
         const nextKnown = mergeKnown(entry.known, terminalProjectedContradiction
           ? { ...record.value, status: entry.status }
           : record.value);
+        const authoritativeReanchor = authoritativeReanchorPoint(entry.known, record.value);
+        if (authoritativeReanchor !== null) {
+          candidatePlacement.updateAgentPoint(id, authoritativeReanchor);
+          const rollback = entry.actor.stagePosition(authoritativeReanchor);
+          if (rollback === null) {
+            throw new Error(`Authoritative spatial actor ${id} rejected its supplied position.`);
+          }
+          stagedActorRollbacks.push({ entry, rollback });
+        }
         const candidateStatus = validAgentStatus(record.value.status) ? record.value.status : entry.status;
         const nextStatus = terminalProjectedContradiction ? entry.status : candidateStatus;
         const selected = frame.selection?.kind === "agent" && frame.selection.id === id;
@@ -1160,6 +1213,7 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
         removed.push(entityKey("region", priorEnvironment.regionId));
       }
       environment = preparedEnvironment;
+      depthMotionVisible = false;
       if (environment !== null) added.push(entityKey("region", environment.regionId));
       staticCacheRebuilds += 1;
     } else if (environment !== null) {
@@ -1206,11 +1260,22 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
     const safeNow = Number.isFinite(nowMs) ? Math.max(lastNowMs, nowMs) : lastNowMs;
     const safeDelta = Number.isFinite(deltaSeconds) && deltaSeconds >= 0 ? deltaSeconds : 0;
     lastNowMs = safeNow;
+    const spatialAt = sampledSpatialPlaybackAt(safeNow);
     const advancedMovers = new Set([...movingActorIds]
       .filter((actorId) => isActorTimeActive(actorId) && !pendingMovementStartIds.has(actorId)));
     const repositionedActors = new Set<string>();
+    const authoritativeMovers = new Set<string>();
     for (const [actorId, entry] of actors) {
       if (!isActorTimeActive(actorId)) continue;
+      if (spatialAt !== null && entry.known.spatial !== undefined) {
+        const motion = sampleAuthoritativeSpatialMotion(entry.known.spatial, spatialAt);
+        entry.actor.sampleAuthoritativeMotion(motion, safeNow);
+        // The placement ledger is the shared feet authority for bubbles,
+        // effects, follow framing, hit targets, and sort order. Do not wait for
+        // a renderer arrival signal: a spatial route has no such invented beat.
+        syncArrivalPoint(placement, actorId, motion.position);
+        if (motion.traveling) authoritativeMovers.add(actorId);
+      }
       if (pendingMovementStartIds.delete(actorId)) continue;
       if ((actorHitStopUntilMs.get(actorId) ?? Number.NEGATIVE_INFINITY) > safeNow) continue;
       actorHitStopUntilMs.delete(actorId);
@@ -1243,14 +1308,14 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
           ? null
           : options.recipes.get(settledRegionId)?.grid ?? null;
         const canonical = grid === null ? settled : wrapNavigationPoint(grid, settled);
-        if (canonical.x !== settled.x || canonical.y !== settled.y) {
+        if (!hasAuthoritativeSpatialOwnership(entry) && (canonical.x !== settled.x || canonical.y !== settled.y)) {
           entry.actor.stagePosition(canonical);
         }
-        syncArrivalPoint(placement, actorId, canonical);
+        if (!hasAuthoritativeSpatialOwnership(entry)) syncArrivalPoint(placement, actorId, canonical);
       }
       recordActorSignals(signals, actorId, safeNow);
     }
-    refreshMovingActorOrder(new Set([...advancedMovers, ...repositionedActors]));
+    refreshMovingActorOrder(new Set([...advancedMovers, ...repositionedActors, ...authoritativeMovers]));
     refreshEnvironmentExclusions();
     for (const entry of orderedHomes) {
       recordHomeSignals(entry.actor.advanceTo(safeNow), entry.id, safeNow);
@@ -1284,7 +1349,9 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
     }
     if (batch.sceneToken > activeSceneToken) {
       disposeProvisionalHomes();
-      for (const entry of actors.values()) entry.actor.cancelFallbackReposition();
+      for (const entry of actors.values()) {
+        if (!hasAuthoritativeSpatialOwnership(entry)) entry.actor.cancelFallbackReposition();
+      }
       rebuildStructuralOrder();
       activeSceneToken = batch.sceneToken;
       seenSceneCommandIds.clear();
@@ -1332,6 +1399,7 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
       const transition = pendingRegionTransitions.get(command.commandId);
       if (transition === undefined) continue;
       const entry = actors.get(command.agentId);
+      if (hasAuthoritativeSpatialOwnership(entry)) continue;
       const currentPlacement = placement.snapshot().agents.get(command.agentId);
       const recipe = recipes.get(transition.toRegion);
       const directedGate = recipe?.gates.find((gate) => (
@@ -1420,6 +1488,7 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
       }
       if (command.kind === "clear-scene") {
         for (const entry of actors.values()) {
+          if (hasAuthoritativeSpatialOwnership(entry)) continue;
           entry.actor.cancelFallbackReposition();
           entry.actor.apply({ kind: "set-offset", offset: { x: 0, y: 0 } }, safeNow);
         }
@@ -1541,6 +1610,14 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
         }
         const current = placement.snapshot().agents.get(command.actorId);
         const entry = actors.get(command.actorId);
+        if (hasAuthoritativeSpatialOwnership(entry)) {
+          reject(
+            command,
+            "authoritative-spatial-motion",
+            `${command.actorId}'s backend-owned Nirvana route cannot enter a legacy region-transition lane`,
+          );
+          continue;
+        }
         const knownRegion = entry?.known.position;
         const destination = recipes.get(command.toRegion);
         const arrivalGate = destination?.gates.find((gate) =>
@@ -1580,13 +1657,27 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
           );
           continue;
         }
+        if (hasAuthoritativeSpatialOwnership(entry)) {
+          reject(
+            command,
+            "authoritative-spatial-motion",
+            `${command.actorId}'s backend-owned body may not be hidden by choreography`,
+          );
+          continue;
+        }
         if (command.mode === "vanish") entry.actor.beginPresenceVanish();
         else entry.actor.beginPresenceReveal();
         applied.push(command.commandId);
         continue;
       }
       if (command.kind === "stage-arrival") {
-        if (consumedArrivalStagingIds.has(command.commandId)) applied.push(command.commandId);
+        if (hasAuthoritativeSpatialOwnership(actors.get(command.actorId))) {
+          reject(
+            command,
+            "authoritative-spatial-motion",
+            `${command.actorId}'s backend-owned feet do not accept arrival staging`,
+          );
+        } else if (consumedArrivalStagingIds.has(command.commandId)) applied.push(command.commandId);
         else {
           reject(
             command,
@@ -1597,7 +1688,13 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
         continue;
       }
       if (command.kind === "placement-hint") {
-        if (consumedPlacementHintIds.has(command.commandId)) applied.push(command.commandId);
+        if (hasAuthoritativeSpatialOwnership(actors.get(command.agentId))) {
+          reject(
+            command,
+            "authoritative-spatial-motion",
+            `${command.agentId}'s backend-owned feet do not accept placement hints`,
+          );
+        } else if (consumedPlacementHintIds.has(command.commandId)) applied.push(command.commandId);
         else {
           reject(
             command,
@@ -1618,6 +1715,14 @@ export function createProductionSceneGraph(options: ProductionSceneGraphOptions)
             command,
             entry === undefined ? "unknown-actor" : "terminal-actor",
             `${command.actorId} is dead or terminal`,
+          );
+          continue;
+        }
+        if (hasAuthoritativeSpatialOwnership(entry) && isSpatialRelocationCommand(command.command)) {
+          reject(
+            command,
+            "authoritative-spatial-motion",
+            `${command.actorId}'s backend-owned feet may not be changed by ${command.command.kind}`,
           );
           continue;
         }
@@ -1849,18 +1954,95 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
       .map((signal) => ({ ...signal })));
   }
 
+  /** Render-only elevation; navigation, animation routes and semantic feet stay on the ground plane. */
+  function visualFeet(point: Vec2): Vec2 {
+    return projectBridgeFeet(environment === null ? null : bridgeDepthScene(environment.recipe), point);
+  }
+
+  function drawBeing(context: CanvasRenderingContext2D, entry: OrderedActorEntry): void {
+    const projected = visualFeet(entry.position);
+    const offset = projected.y - entry.position.y;
+    if (offset === 0) { entry.actor.draw(context); return; }
+    context.save();
+    context.translate(0, offset);
+    // Contact shadow belongs on the deck beneath the raised feet, not down in the water.
+    context.save();
+    context.globalAlpha *= entry.actor.snapshot().opacity ?? 1;
+    context.fillStyle = "rgba(18,26,23,0.24)";
+    context.beginPath();
+    context.ellipse(entry.position.x + 2, entry.position.y + 1, 8, 3, 0, 0, Math.PI * 2);
+    context.fill();
+    context.restore();
+    entry.actor.draw(context);
+    context.restore();
+  }
+
   /** Beings only — the periodic seam copy; see `ProductionSceneGraph.drawSeamActors`. */
   function drawSeamActors(context: CanvasRenderingContext2D): void {
     if (disposed) return;
-    for (const entry of orderedActors) entry.actor.draw(context);
+    for (const entry of orderedActors) {
+      // Nirvana routes are bounded absolute coordinates. A toroidal seam copy
+      // would manufacture a second body at a location the backend never gave.
+      if (hasAuthoritativeSpatialOwnership(actors.get(entry.id))) continue;
+      drawBeing(context, entry);
+    }
   }
 
-  function draw(context: CanvasRenderingContext2D, view?: OverlayViewport): void {
+  function draw(context: CanvasRenderingContext2D, view?: OverlayViewport, pass?: Readonly<{ continueFrame?: boolean }>): void {
     if (disposed) return;
-    environment?.system.draw(context, "ground");
+    if (pass?.continueFrame !== true) depthMotionVisible = false;
+    if (view?.regionContentVisible === false) return;
+    environment?.system.draw(context, "ground", view);
+    const depth = environment?.depth;
+    const bridge = environment === null || view?.depthSceneryVisible === false
+      ? null : bridgeDepthScene(environment.recipe);
+    const visibleBounds = view?.width !== undefined && view.height !== undefined && view.zoom > 0
+      ? { x: -view.originX / view.zoom, y: -view.originY / view.zoom, width: view.width / view.zoom, height: view.height / view.zoom }
+      : undefined;
+    if (depth != null && view?.depthSceneryVisible !== false) {
+      drawDepthSceneryShadows(context, depth.props, visibleBounds);
+    }
+    if (bridge !== null) drawBridgeBase(context, bridge, visibleBounds);
     for (const entry of orderedHomes) entry.actor.draw(context, "back");
-    for (const entry of orderedActors) entry.actor.draw(context);
-    for (const entry of orderedHomes) entry.actor.draw(context, "front");
+    if (depth == null && bridge === null) {
+      for (const entry of orderedActors) drawBeing(context, entry);
+      for (const entry of orderedHomes) entry.actor.draw(context, "front");
+    } else {
+      // Merge logical-depth streams; height changes projection, never front/back ordering.
+      const props = depth?.props ?? [];
+      const rails = bridge === null ? [] : bridgeRailSlices(bridge);
+      let railIndex = 0;
+      let actorIndex = 0;
+      // Callers can separately omit props when a cache already owns their representation.
+      let propIndex = view?.depthSceneryVisible === false ? props.length : 0;
+      let homeIndex = 0;
+      while (actorIndex < orderedActors.length || propIndex < props.length || homeIndex < orderedHomes.length || railIndex < rails.length) {
+        const being = orderedActors[actorIndex];
+        const prop = props[propIndex];
+        const home = orderedHomes[homeIndex];
+        const beingY = being?.position.y ?? Infinity;
+        const propY = prop?.feet.y ?? Infinity;
+        const homeY = home?.door.y ?? Infinity;
+        const rail = rails[railIndex];
+        const railY = rail?.feetY ?? Infinity;
+        if (bridge !== null && rail !== undefined && railY <= beingY && railY <= propY && railY <= homeY) {
+          drawBridgeRail(context, bridge, rail.feetY, visibleBounds);
+          railIndex += 1;
+        } else if (depth != null && prop !== undefined && propY <= beingY && propY <= homeY) {
+          if (!reducedMotion && (prop.kind === "oak" || prop.kind === "willow")
+            && depthSceneryInView(prop, visibleBounds)) depthMotionVisible = true;
+          drawDepthSceneryProp(context, depth.source, prop, orderedBeingFeet, visibleBounds,
+            reducedMotion ? undefined : lastNowMs);
+          propIndex += 1;
+        } else if (home !== undefined && homeY <= beingY) {
+          home.actor.draw(context, "front");
+          homeIndex += 1;
+        } else if (being !== undefined) {
+          drawBeing(context, being);
+          actorIndex += 1;
+        }
+      }
+    }
     // The legibility overlay is the last thing in the air pass and the only
     // screen-space drawing in this renderer: it needs the caller's own
     // bounds-clamped raster origin, not the camera's unclamped one, so the view
@@ -1872,6 +2054,9 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
   function nextDeadlineMs(): number | null {
     if (disposed) return null;
     let deadline: number | null = null;
+    if (!reducedMotion && depthMotionVisible) {
+      deadline = (Math.floor(lastNowMs / DEPTH_SCENERY_FRAME_INTERVAL_MS) + 1) * DEPTH_SCENERY_FRAME_INTERVAL_MS;
+    }
     if (!reducedMotion) {
       for (const actorId of movingActorIds) {
         if (!isActorTimeActive(actorId)) continue;
@@ -1898,7 +2083,7 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
       if ((snapshot.opacity ?? 1) <= 0) continue;
       targets.push({
         selection: { kind: "agent", id },
-        worldBounds: feetAnchoredVisualRect(snapshot.position),
+        worldBounds: feetAnchoredVisualRect(visualFeet(snapshot.position)),
         feetY: snapshot.position.y,
         selectionKey: entityKey("agent", id),
       });
@@ -1989,7 +2174,7 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
       const snapshot = entry.actor.snapshot();
       return deepFreeze({
         selection: { kind: "agent", id: selection.id },
-        worldBounds: feetAnchoredVisualRect(snapshot.position),
+        worldBounds: feetAnchoredVisualRect(visualFeet(snapshot.position)),
         feetY: snapshot.position.y,
         selectionKey: entityKey("agent", selection.id),
       });
@@ -2175,8 +2360,10 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
     visibleActorIds.clear();
     homes.clear();
     orderedActors = [];
+    orderedBeingFeet = [];
     orderedHomes = [];
     environment = null;
+    depthMotionVisible = false;
     recentMarkers.length = 0;
     regionTransitions.length = 0;
     sceneSignalHistory.length = 0;
@@ -2247,6 +2434,59 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
     if (disposed) throw new Error("ProductionSceneGraph is disposed.");
   }
 
+  /** Re-anchor only from the session's explicit playback sample, never `world.worldTime`. */
+  function adoptSpatialPlayback(next: PresentedObserverFrame["spatialPlayback"]): void {
+    if (next === undefined) {
+      spatialPlayback = null;
+      return;
+    }
+    spatialPlayback = {
+      sampledAt: next.sampledAt,
+      speed: next.speed,
+      paused: next.paused,
+      wallAnchorMs: lastNowMs,
+    };
+  }
+
+  function sampledSpatialPlaybackAt(nowMs: number): number | null {
+    const anchor = spatialPlayback;
+    if (anchor === null) return null;
+    if (anchor.paused) return anchor.sampledAt;
+    return anchor.sampledAt + Math.max(0, nowMs - anchor.wallAnchorMs) * anchor.speed / 1_000;
+  }
+
+  function hasAuthoritativeSpatialMotion(entry: ActorEntry | undefined): boolean {
+    return entry?.known.spatial !== undefined;
+  }
+
+  /** A gate handoff owns feet even while its departure has explicitly cleared `spatial`. */
+  function hasAuthoritativeSpatialOwnership(entry: ActorEntry | undefined): boolean {
+    return hasAuthoritativeSpatialMotion(entry) || entry?.known.spatial_migration !== undefined;
+  }
+
+  function authoritativeReanchorPoint(
+    known: Readonly<Partial<AgentSnapshot>>,
+    incoming: Readonly<Partial<AgentSnapshot>>,
+  ): Vec2 | null {
+    const migration = incoming.spatial_migration;
+    if (migration !== undefined && !sameSpatialMigration(known.spatial_migration, migration)) {
+      return migration.source_position;
+    }
+    const spatial = incoming.spatial;
+    if (
+      spatial !== undefined
+      && (known.spatial === undefined
+        || known.position !== incoming.position
+        || known.spatial.region_id !== spatial.region_id
+        || known.spatial.map_id !== spatial.map_id)
+    ) return spatial;
+    return null;
+  }
+
+  function isSpatialRelocationCommand(command: HumanPrimitiveCommand): boolean {
+    return command.kind === "move" || command.kind === "reposition" || command.kind === "set-offset";
+  }
+
   function isActorTimeActive(actorId: string): boolean {
     return visibleActorIds.has(actorId)
       || (movingActorIds.has(actorId) && retainedTravelers.has(actorId));
@@ -2274,6 +2514,7 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
     nextActors.sort((left, right) =>
       left.position.y - right.position.y || compareText(left.id, right.id));
     orderedActors = nextActors;
+    orderedBeingFeet = nextActors.map(({ position }) => position);
 
     const nextHomes = [...homes.entries()].map(([id, entry]) => {
       const plot = entry.actor.snapshot().plot;
@@ -2290,7 +2531,7 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
   }
 
   function refreshEnvironmentExclusions(): void {
-    const actorZones = orderedActors.map((entry) => feetAnchoredVisualRect(entry.position));
+    const actorZones = orderedActors.map((entry) => feetAnchoredVisualRect(visualFeet(entry.position)));
     const homeZones = orderedHomes.map(({ plot }) => ({
       x: plot.x,
       y: plot.y,
@@ -2307,7 +2548,7 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
     // frozen at emit time visibly detaches from the head it belongs to; publish
     // the same live positions this pass already has.
     environment?.system.setAnchorPositions(new Map([
-      ...orderedActors.map(({ id, position }) => [id, position] as const),
+      ...orderedActors.map(({ id, position }) => [id, visualFeet(position)] as const),
       ...orderedHomes.map(({ id, door }) => [id, door] as const),
     ]));
     homeRouteExclusions = homeRouteExclusionRects(orderedHomes);
@@ -2329,6 +2570,7 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
         left.position.y - right.position.y || compareText(left.id, right.id));
     }
     orderedActors = nextActors;
+    orderedBeingFeet = nextActors.map(({ position }) => position);
   }
 
   function disposeProvisionalHomes(): void {
@@ -2424,6 +2666,7 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
     for (const arrival of pending.arrivals) {
       const entry = actors.get(arrival.actorId);
       if (entry === undefined || entry.status !== "alive" || entry.actor.snapshot().terminal) continue;
+      if (hasAuthoritativeSpatialOwnership(entry)) continue;
       entry.actor.stagePosition(arrival.gate);
     }
     rebuildStructuralOrder();
@@ -2447,6 +2690,9 @@ function tileKey(tile: Readonly<{ column: number; row: number }>): string {
       const current = placement.snapshot().agents.get(command.actorId);
       const entry = actors.get(command.actorId);
       const presented = frame.world.agents.find(({ value }) => value.id === command.actorId);
+      if (hasAuthoritativeSpatialOwnership(entry)
+        || presented?.value.spatial !== undefined
+        || presented?.value.spatial_migration !== undefined) continue;
       const presentedRegion = presented?.value.position;
       const destination = recipes.get(command.toRegion);
       const arrivalGate = destination?.gates.find((gate) => (
@@ -3166,6 +3412,7 @@ function homeActorAtlasIds(
     home.detailAtlasId,
     home.ruinAtlasId,
     home.yard.atlasId,
+    ...(manifest.atlases[DEPTH_SCENERY_ATLAS_ID] ? [DEPTH_SCENERY_ATLAS_ID] : []),
   ])];
 }
 
@@ -3173,7 +3420,8 @@ function environmentAtlasIds(
   manifest: ProductionAssetManifest,
   kit: RegionMapRecipeV1["kit"],
 ): readonly string[] {
-  return manifest.regions[kit].atlasIds.filter((id) => manifest.atlases[id]?.group === "region");
+  return [...manifest.regions[kit].atlasIds.filter((id) => manifest.atlases[id]?.group === "region"),
+    ...(manifest.atlases[DEPTH_SCENERY_ATLAS_ID] ? [DEPTH_SCENERY_ATLAS_ID] : [])];
 }
 
 /** One line naming a deferred home and why its actor could not be built. */
@@ -3306,7 +3554,10 @@ function presentedHomeInput(
       ? {}
       : { projectedRemnantMaterials: provenance.projected }),
     worldTime: world.worldTime,
-    plot: tileCenter(plot.tile),
+    // A spatial home comes with the exporter-verified shelter origin. Never
+    // recompute a different visual placement from its ID; legacy homes retain
+    // the deterministic recipe origin they have always used.
+    plot: outcome.origin === undefined ? tileCenter(plot.tile) : { ...outcome.origin },
     door: outcome.door,
     kit: recipe.kit,
   };
@@ -3454,14 +3705,18 @@ function isCreatableAgent(value: Readonly<Partial<AgentSnapshot>>): value is Age
     && typeof value.materials === "number";
 }
 
-function isCreatableHome(value: Readonly<Partial<HomeSnapshot>>): value is HomeSnapshot {
-  return typeof value.home_id === "string" && value.home_id.trim().length > 0
+function isCreatableHome(value: Readonly<Partial<HomeSnapshot>>): value is PlaceableHome {
+  const identified = typeof value.home_id === "string" && value.home_id.trim().length > 0
     && typeof value.region === "string" && value.region.trim().length > 0
     && (value.status === "standing" || value.status === "ruin")
     && typeof value.owner_id === "string"
-    && typeof value.integrity === "number"
-    && typeof value.max_integrity === "number"
-    && typeof value.built_at === "number";
+    && typeof value.integrity === "number";
+  if (!identified) return false;
+  // A legacy projected build still waits for the fields its actor has always
+  // required. An enriched Nirvana build owns a verified shelter plot and may
+  // render before its checkpoint supplies the remaining snapshot fields.
+  return value.spatial !== undefined
+    || (typeof value.max_integrity === "number" && typeof value.built_at === "number");
 }
 
 function validAgentStatus(value: unknown): value is AgentSnapshot["status"] {
@@ -3471,9 +3726,25 @@ function validAgentStatus(value: unknown): value is AgentSnapshot["status"] {
 function mergeKnown<T extends object>(current: Partial<T>, next: Readonly<Partial<T>>): Partial<T> {
   const merged = { ...current };
   for (const [key, value] of Object.entries(next)) {
-    if (value !== undefined) (merged as Record<string, unknown>)[key] = value;
+    if ((key === "spatial" || key === "spatial_migration") && value === undefined) {
+      // Lifecycle clears must not retain the prior route or the transient gate
+      // handoff after the backend has superseded either one.
+      delete (merged as Record<string, unknown>)[key];
+    } else if (value !== undefined) {
+      (merged as Record<string, unknown>)[key] = value;
+    }
   }
   return merged;
+}
+
+function sameSpatialMigration(
+  left: AgentSnapshot["spatial_migration"] | undefined,
+  right: NonNullable<AgentSnapshot["spatial_migration"]>,
+): boolean {
+  return left !== undefined
+    && left.from_region === right.from_region
+    && left.to_region === right.to_region
+    && samePoint(left.source_position, right.source_position);
 }
 
 function disposePrepared(

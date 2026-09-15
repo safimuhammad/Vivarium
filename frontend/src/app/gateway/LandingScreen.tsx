@@ -18,6 +18,14 @@ import { LANDING_COPY } from "./copy";
 export interface LandingScreenProps {
   /** Enters the configuration screen. */
   readonly onConfigure: () => void;
+  /** Rejoins the same run after a fresh lifecycle check, when one is running. */
+  readonly onReturnToCurrentWorld?: (() => void) | null;
+  /** Disables the return action while its click-time lifecycle check is pending. */
+  readonly returningToCurrentWorld?: boolean;
+  /** Why a discovered world could not be adopted, if a click raced its lifecycle. */
+  readonly currentWorldNote?: string | null;
+  /** Repeats a failed lifecycle check without changing the run. */
+  readonly onRetryCurrentWorld?: (() => void) | null;
   /**
    * Plays a recorded run. `null` when no recording is published, in which case
    * the way in is shown disabled with a reason rather than removed — a viewer
@@ -39,17 +47,31 @@ export interface LandingScreenProps {
 /** Renders the landing page. */
 export function LandingScreen({
   onConfigure,
+  onReturnToCurrentWorld = null,
+  returningToCurrentWorld = false,
+  currentWorldNote = null,
+  onRetryCurrentWorld = null,
   onWatchRecording,
   recordingNote,
   note = null,
 }: LandingScreenProps) {
   const [watch, configure] = LANDING_COPY.ways;
   return (
-    <div className="gateway">
+    <div className="gateway gateway--landing">
       <main className="landing">
         <section className="landing-plate">
           {note === null ? null : (
             <p className="landing-note" role="status">{note}</p>
+          )}
+          {currentWorldNote === null ? null : (
+            <div className="landing-note" role="status">
+              <span>{currentWorldNote}</span>
+              {onRetryCurrentWorld === null || onRetryCurrentWorld === undefined ? null : (
+                <button type="button" className="landing-note-retry" onClick={onRetryCurrentWorld}>
+                  Try again
+                </button>
+              )}
+            </div>
           )}
           <p className="gateway-eyebrow">A world, continuously</p>
           <h1 className="landing-wordmark">{LANDING_COPY.title}</h1>
@@ -64,6 +86,24 @@ export function LandingScreen({
         </section>
 
         <section className="landing-ways" aria-label="Ways in">
+          {onReturnToCurrentWorld === null || onReturnToCurrentWorld === undefined ? null : (
+            <button
+              type="button"
+              className="landing-way"
+              aria-label="Return to current world"
+              disabled={returningToCurrentWorld}
+              onClick={onReturnToCurrentWorld}
+            >
+              <p className="gateway-eyebrow">Already running</p>
+              <h2 className="landing-way-title">Return to current world</h2>
+              <p className="landing-way-blurb">
+                A world is already breathing on this machine. Continue watching it.
+              </p>
+              <span className="landing-way-action">
+                {returningToCurrentWorld ? "Checking the world…" : "Return to current world →"}
+              </span>
+            </button>
+          )}
           {watch === undefined ? null : (
             <button
               type="button"

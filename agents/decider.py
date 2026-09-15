@@ -22,6 +22,7 @@ This module provides:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -378,6 +379,25 @@ class SerializingDecider:
             if isinstance(self._inner, AsyncCloseable):
                 await self._inner.aclose()
             self._closed = True
+
+    async def decide_fresh(
+        self,
+        prepare: Callable[[], tuple[list[dict[str, Any]], list[dict[str, Any]]]],
+    ) -> Decision:
+        """Refresh sensory input after waiting for the shared inference slot.
+
+        Args:
+            prepare: Synchronous factory for current messages and tools. Called
+                exactly once under the inference lock, immediately before the model.
+
+        Returns:
+            The inner decision. Preparation and provider failures release the lock.
+        """
+        async with self._lock:
+            if self._closed:
+                raise RuntimeError("Serializing decider is closed")
+            messages, tools = prepare()
+            return await self._inner.decide(messages, tools)
 
 
 def make_default_decider(model: str, *, provider: str = "ollama") -> Decider:

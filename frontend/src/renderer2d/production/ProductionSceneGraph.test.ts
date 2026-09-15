@@ -51,6 +51,9 @@ import {
   type ProductionSceneFactories,
 } from "./ProductionSceneGraph";
 import * as productionSceneGraphModule from "./ProductionSceneGraph";
+import { DEPTH_SCENERY_ATLAS_ID, withDepthSceneryManifest } from "./depth/DepthSceneryAssets";
+import { createNirvanaRegionMapRecipe } from "./nirvana/NirvanaRegionMapRecipe";
+import { navigationLayoutFingerprint } from "./navigation/SpatialNavigationExport";
 
 interface ExpectedSceneTarget {
   readonly selection: Exclude<ObserverSelection, null>;
@@ -73,6 +76,414 @@ function expectBirthPlacementToBeNearbyAndReadable(acceptor: Vec2, child: Vec2):
 }
 
 describe("ProductionSceneGraph", () => {
+  it("omits region bodies, homes and bubbles while the Atlas owns their map representation", () => {
+    const resident = agent("walker", "alpha");
+    const harness = makeHarness({ checkpointAgents: [resident] });
+    harness.graph.update(frame({ agents: [resident], homes: [home("cottage", "walker", "alpha")], regions: harness.regions }));
+    const before = harness.graph.semanticSnapshot();
+    const context = new Proxy({}, { get: () => () => undefined }) as unknown as CanvasRenderingContext2D;
+    harness.graph.draw(context, { zoom: 1, originX: 0, originY: 0 });
+    expect(harness.factories.drawTrace.length).toBeGreaterThan(0);
+    harness.factories.drawTrace.length = 0;
+    harness.graph.draw(context, { zoom: 0.1, originX: 0, originY: 0, regionContentVisible: false });
+    expect(harness.factories.drawTrace).toEqual([]);
+    expect(harness.graph.semanticSnapshot()).toEqual(before);
+    harness.graph.draw(context, { zoom: 1, originX: 0, originY: 0 });
+    expect(harness.factories.drawTrace.length).toBeGreaterThan(0);
+    harness.graph.dispose();
+  });
+
+  it("projects bridge bodies, follow targets and bubble anchors without moving navigation feet", () => {
+    const nirvana = region("nirvana", []);
+    const resident = agent("walker", "nirvana");
+    const recipe = createNirvanaRegionMapRecipe(createRegionMapIdentity(7, nirvana, [nirvana]));
+    const factories = new FakeFactories();
+    factories.actorPositionOverrides.set(resident.id, { x: 976, y: 304 });
+    const placement = PlacementLedger.reconstruct([recipe], { agents: [resident], homes: [] });
+    const graph = createProductionSceneGraph({
+      manifest: PRODUCTION_ASSET_MANIFEST, factories, placement,
+      recipes: new Map([[recipe.regionId, recipe]]), atlasLeases: new Map(),
+    });
+    graph.update(frame({ agents: [resident], regions: [nirvana], scene: scene("nirvana") }));
+    const logical = { x: 976, y: 304 };
+    const projected = { x: 976, y: 286 };
+    const hit = graph.hitTargets().find((target) => target.selection.id === resident.id)!;
+    expect(hit.worldBounds).toEqual(feetAnchoredVisualRect(projected));
+    expect(hit.feetY).toBe(logical.y);
+    expect(graph.focusTarget({ kind: "agent", id: resident.id })?.worldBounds).toEqual(hit.worldBounds);
+    expect(factories.environments.get("nirvana")!.anchorPositions.at(-1)!.get(resident.id)).toEqual(projected);
+    expect(graph.semanticSnapshot().subjects.find((subject) => subject.selection.id === resident.id)?.position).toEqual(logical);
+    expect(factories.actors.get(resident.id)!.snapshot().position).toEqual(logical);
+    const offsets: number[] = [];
+    let translationY = 0;
+    const stack: number[] = [];
+    const context = new Proxy({
+      globalAlpha: 1,
+      save: () => { stack.push(translationY); },
+      restore: () => { translationY = stack.pop()!; },
+      translate: (_x: number, y: number) => { translationY += y; },
+    }, { get: (target, key) => key in target ? Reflect.get(target, key) : () => undefined }) as unknown as CanvasRenderingContext2D;
+    vi.spyOn(factories.actors.get(resident.id)!, "draw").mockImplementation(() => { offsets.push(translationY); });
+    graph.draw(context, { zoom: 1, originX: 0, originY: 0 });
+    graph.drawSeamActors!(context);
+    expect(offsets).toEqual([-18, -18]);
+    expect(translationY).toBe(0);
+    graph.dispose();
+  });
+
+  it("samples bounded Nirvana route feet from playback time and refuses choreography relocation", () => {
+    const nirvana = region("nirvana", []);
+    const walker: AgentSnapshot = {
+      ...agent("walker", "nirvana"),
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        x: 20,
+        y: 40,
+        observed_at: 100,
+        at_landmark: null,
+        travel: {
+          id: "journey-east",
+          destination_id: "east-gate",
+          route: [{ x: 20, y: 40 }, { x: 120, y: 40 }],
+          started_at: 100,
+          arrives_at: 120,
+        },
+      },
+    };
+    const harness = makeHarness({ checkpointAgents: [walker], regions: [nirvana] });
+    const initial = frame({
+      agents: [walker],
+      regions: [nirvana],
+      scene: scene("nirvana"),
+      spatialPlayback: { sampledAt: 100, speed: 1, paused: false },
+    });
+    harness.graph.update(initial);
+    expect(harness.factories.actorInputs[0]?.position).toEqual({ x: 20, y: 40 });
+
+    // `worldTime` deliberately stays an unrelated checkpoint value; 5 seconds
+    // of playback moves 25% of the 20-second recorded route.
+    harness.graph.updateTime(0, 5_000);
+    expect(harness.factories.actors.get("walker")?.position).toEqual({ x: 45, y: 40 });
+    expect(harness.placement.snapshot().agents.get("walker")?.point).toEqual({ x: 45, y: 40 });
+
+    harness.graph.update({ ...initial, spatialPlayback: { sampledAt: 105, speed: 1, paused: true } });
+    harness.graph.updateTime(3, 8_000);
+    expect(harness.factories.actors.get("walker")?.position).toEqual({ x: 45, y: 40 });
+
+    const command = harness.graph.applySceneCommands({
+      identity: identityOf(initial),
+      sceneToken: 1,
+      commands: [{
+        kind: "actor",
+        commandId: "fake-walk",
+        actorId: "walker",
+        command: { kind: "move", waypoints: [{ x: 300, y: 40 }], speedPixelsPerSecond: 48, gait: "walk" },
+      }],
+    }, 8_000);
+    expect(command.rejections).toEqual([expect.objectContaining({
+      reason: "authoritative-spatial-motion",
+    })]);
+    expect(harness.factories.actors.get("walker")?.position).toEqual({ x: 45, y: 40 });
+
+    harness.factories.drawTrace.length = 0;
+    harness.graph.drawSeamActors!({} as CanvasRenderingContext2D);
+    expect(harness.factories.drawTrace).toEqual([]);
+  });
+
+  it("clears old route sampling across a legacy transfer and accepts a re-entry and birth before checkpoint", () => {
+    const nirvana = region("nirvana", []);
+    const warmSprings = region("warm_springs", []);
+    const traveler: AgentSnapshot = {
+      ...agent("walker", "nirvana"),
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        x: 20,
+        y: 40,
+        observed_at: 100,
+        at_landmark: null,
+        travel: {
+          id: "journey-east",
+          destination_id: "east-gate",
+          route: [{ x: 20, y: 40 }, { x: 120, y: 40 }],
+          started_at: 100,
+          arrives_at: 120,
+        },
+      },
+    };
+    const harness = makeHarness({ checkpointAgents: [traveler], regions: [nirvana, warmSprings] });
+    harness.graph.update(frame({
+      agents: [traveler], regions: [nirvana, warmSprings], scene: scene("nirvana"),
+      spatialPlayback: { sampledAt: 100, speed: 1, paused: false },
+    }));
+    harness.graph.updateTime(0, 5_000);
+    expect(harness.factories.actors.get("walker")?.position).toEqual({ x: 45, y: 40 });
+
+    const exited = { ...traveler, position: "warm_springs", spatial: undefined };
+    harness.graph.update(frame({
+      revision: 2,
+      lastCursor: 2,
+      agents: [exited],
+      regions: [nirvana, warmSprings],
+      scene: scene("warm_springs"),
+      spatialPlayback: { sampledAt: 110, speed: 1, paused: false },
+    }));
+    harness.graph.updateTime(0, 10_000);
+    expect(harness.factories.actors.get("walker")?.position).toEqual({ x: 45, y: 40 });
+
+    const reentered: AgentSnapshot = {
+      ...exited,
+      position: "nirvana",
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        x: 84,
+        y: 40,
+        observed_at: 200,
+        at_landmark: null,
+        travel: null,
+      },
+    };
+    harness.graph.update(frame({
+      revision: 3,
+      lastCursor: 3,
+      agents: [reentered],
+      regions: [nirvana, warmSprings],
+      scene: scene("nirvana"),
+      spatialPlayback: { sampledAt: 200, speed: 1, paused: false },
+    }));
+    harness.graph.updateTime(0, 15_000);
+    expect(harness.factories.actors.get("walker")?.position).toEqual({ x: 84, y: 40 });
+    expect(harness.placement.snapshot().agents.get("walker")?.point).toEqual({ x: 84, y: 40 });
+
+    const newborn: AgentSnapshot = {
+      ...agent("newborn", "nirvana"),
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        x: 96,
+        y: 48,
+        observed_at: 201,
+        at_landmark: null,
+        travel: null,
+      },
+    };
+    harness.graph.update(frame({
+      revision: 4,
+      lastCursor: 4,
+      agents: [reentered, newborn],
+      regions: [nirvana, warmSprings],
+      scene: scene("nirvana"),
+      spatialPlayback: { sampledAt: 201, speed: 1, paused: false },
+    }));
+    expect(harness.factories.actorInputs.find(({ record }) => record.value.id === "newborn")?.position)
+      .toEqual({ x: 96, y: 48 });
+    expect(harness.placement.snapshot().agents.get("newborn")?.point).toEqual({ x: 96, y: 48 });
+  });
+
+  it("keeps an authoritative cross-region departure at its supplied gate and rejects legacy transit", () => {
+    const nirvana = region("nirvana", []);
+    const warmSprings = region("warm_springs", []);
+    const traveler: AgentSnapshot = {
+      ...agent("walker", "nirvana"),
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:pilot-layout",
+        layout_fingerprint: "pilot-layout",
+        x: 20,
+        y: 40,
+        observed_at: 10,
+        at_landmark: null,
+        travel: null,
+      },
+    };
+    const harness = makeHarness({ checkpointAgents: [traveler], regions: [nirvana, warmSprings] });
+    const source = frame({
+      agents: [traveler],
+      regions: [nirvana, warmSprings],
+      scene: scene("nirvana"),
+      spatialPlayback: { sampledAt: 10, speed: 1, paused: true },
+    });
+    harness.graph.update(source);
+    const actor = harness.factories.actors.get("walker")!;
+
+    const departed: AgentSnapshot = {
+      ...traveler,
+      spatial: undefined,
+      spatial_migration: {
+        from_region: "nirvana",
+        to_region: "warm_springs",
+        source_position: { x: 120, y: 40 },
+      },
+    };
+    const departure = frame({
+      revision: 2,
+      lastCursor: 2,
+      agents: [departed],
+      regions: [nirvana, warmSprings],
+      scene: scene("nirvana"),
+      spatialPlayback: { sampledAt: 20, speed: 1, paused: true },
+    });
+    harness.graph.update(departure);
+
+    expect(harness.factories.actors.get("walker")).toBe(actor);
+    expect(actor.position).toEqual({ x: 120, y: 40 });
+    expect(harness.placement.snapshot().agents.get("walker")?.point).toEqual({ x: 120, y: 40 });
+    const rejected = harness.graph.applySceneCommands({
+      identity: identityOf(departure),
+      sceneToken: 2,
+      commands: [
+        {
+          kind: "retain-traveler",
+          commandId: "invented-transit",
+          actorId: "walker",
+          fromRegion: "nirvana",
+          toRegion: "warm_springs",
+        },
+        {
+          kind: "actor",
+          commandId: "invented-path",
+          actorId: "walker",
+          command: { kind: "reposition", position: { x: 400, y: 40 }, reason: "fallback" },
+        },
+      ],
+    }, 20);
+    expect(rejected.rejections.map(({ reason }) => reason)).toEqual([
+      "authoritative-spatial-motion",
+      "authoritative-spatial-motion",
+    ]);
+    expect(actor.position).toEqual({ x: 120, y: 40 });
+
+    const entered: AgentSnapshot = {
+      ...departed,
+      position: "warm_springs",
+      spatial_migration: undefined,
+      spatial: {
+        version: 1,
+        region_id: "warm_springs",
+        map_id: "warm_springs:pilot-layout",
+        layout_fingerprint: "pilot-layout",
+        x: 32,
+        y: 96,
+        observed_at: 30,
+        at_landmark: null,
+        travel: null,
+      },
+    };
+    const arrival = frame({
+      revision: 3,
+      lastCursor: 3,
+      agents: [entered],
+      regions: [nirvana, warmSprings],
+      scene: scene("warm_springs"),
+      spatialPlayback: { sampledAt: 30, speed: 1, paused: true },
+    });
+    harness.graph.update(arrival);
+    harness.graph.updateTime(0, 30);
+
+    expect(harness.factories.actors.get("walker")).toBe(actor);
+    expect(actor.position).toEqual({ x: 32, y: 96 });
+    expect(harness.placement.snapshot().agents.get("walker")?.point).toEqual({ x: 32, y: 96 });
+  });
+
+  it("places an enriched Nirvana home on its backend-owned plot before its checkpoint", () => {
+    const nirvana = region("nirvana", []);
+    const recipe = createNirvanaRegionMapRecipe(createRegionMapIdentity(7, nirvana, [nirvana]));
+    const plot = recipe.shelterPlots[0]!;
+    const origin = tileCenter(plot.tile);
+    const door = tileCenter(plot.door);
+    const factories = new FakeFactories();
+    const placement = PlacementLedger.reconstruct([recipe], { agents: [], homes: [] });
+    const graph = createProductionSceneGraph({
+      manifest: PRODUCTION_ASSET_MANIFEST,
+      factories,
+      placement,
+      recipes: new Map([[recipe.regionId, recipe]]),
+      atlasLeases: new Map(),
+    });
+    graph.update(frame({
+      agents: [],
+      regions: [nirvana],
+      homeRecords: [projected<HomeSnapshot>({
+        home_id: "home-before-checkpoint",
+        owner_id: "walker",
+        region: "nirvana",
+        integrity: 120,
+        stakeholders: ["walker"],
+        status: "standing",
+        spatial: {
+          version: 1,
+          region_id: "nirvana",
+          map_id: `nirvana:${navigationLayoutFingerprint(recipe)}`,
+          plot_id: plot.id,
+          x: origin.x,
+          y: origin.y,
+          door,
+        },
+      })],
+      scene: scene("nirvana"),
+    }));
+
+    expect(factories.homeInputs).toHaveLength(1);
+    expect(factories.homeInputs[0]?.presented).toMatchObject({ plot: origin, door });
+    expect(placement.snapshot().homes.get("home-before-checkpoint"))
+      .toMatchObject({ plotId: plot.id, origin, door });
+  });
+
+  it.each([false, true])("bounds canopy wakeups to visible region detail (reduced motion: %s)", (reducedMotion) => {
+    const nirvana = region("nirvana", []);
+    const recipe = createNirvanaRegionMapRecipe(createRegionMapIdentity(7, nirvana, [nirvana]));
+    const source = {} as ImageBitmap;
+    const factories = new FakeFactories();
+    const graph = createProductionSceneGraph({
+      manifest: withDepthSceneryManifest(PRODUCTION_ASSET_MANIFEST),
+      factories,
+      placement: PlacementLedger.reconstruct([recipe], { agents: [], homes: [] }),
+      recipes: new Map([[recipe.regionId, recipe]]),
+      atlasLeases: new Map([[DEPTH_SCENERY_ATLAS_ID, { value: source, release: vi.fn() }]]),
+      reducedMotion,
+    });
+    graph.update(frame({ agents: [], regions: [nirvana], scene: scene("nirvana") }));
+    const context = {
+      save: vi.fn(), restore: vi.fn(), drawImage: vi.fn(), beginPath: vi.fn(),
+      ellipse: vi.fn(), fill: vi.fn(), translate: vi.fn(), rotate: vi.fn(), globalAlpha: 1,
+      fillRect: vi.fn(), closePath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    graph.draw(context, { zoom: 1, originX: 0, originY: 0 });
+    expect(context.drawImage).toHaveBeenCalled();
+    expect(graph.nextDeadlineMs()).toBe(reducedMotion ? null : 125);
+    expect(vi.mocked(context.rotate).mock.calls.length > 0).toBe(!reducedMotion);
+    graph.updateTime(0.13, 130);
+    expect(graph.nextDeadlineMs()).toBe(reducedMotion ? null : 250);
+    // A wrapped copy with no visible trees must retain an earlier copy's wake.
+    graph.draw(context, { zoom: 1, originX: -100000, originY: -100000, width: 100, height: 100 },
+      { continueFrame: true });
+    expect(graph.nextDeadlineMs()).toBe(reducedMotion ? null : 250);
+    vi.mocked(context.drawImage).mockClear();
+    vi.mocked(context.ellipse).mockClear();
+    factories.drawTrace.length = 0;
+    graph.draw(context, { zoom: 0.1, originX: 0, originY: 0, depthSceneryVisible: false });
+    expect(context.drawImage).not.toHaveBeenCalled();
+    expect(context.ellipse).not.toHaveBeenCalled();
+    expect(graph.nextDeadlineMs()).toBeNull();
+    expect(factories.drawTrace).toHaveLength(2);
+    graph.draw(context, { zoom: 1, originX: -100000, originY: -100000, width: 100, height: 100 });
+    expect(context.drawImage).not.toHaveBeenCalled();
+    expect(graph.nextDeadlineMs()).toBeNull();
+    graph.dispose();
+    expect(graph.nextDeadlineMs()).toBeNull();
+  });
+
   it("publishes immutable spatial-binding diagnostics owned at Graph construction", () => {
     const harness = makeHarness({
       spatialBinding: { placementRebound: true, recipesRebound: false },
@@ -5017,6 +5428,7 @@ class FakeActor {
   readonly instanceId = nextFakeInstanceId++;
   readonly commands: HumanPrimitiveCommand[] = [];
   readonly advances: [number, number][] = [];
+  readonly authoritativeSamples: Array<Readonly<{ position: Vec2; traveling: boolean; nowMs: number }>> = [];
   disposeCalls = 0;
   deadline: number | null = null;
   status: AgentSnapshot["status"] = "alive";
@@ -5035,6 +5447,15 @@ class FakeActor {
   }
 
   position: Vec2;
+
+  sampleAuthoritativeMotion(
+    sample: Readonly<{ position: Vec2; traveling: boolean }>,
+    nowMs: number,
+  ): void {
+    this.position = { ...sample.position };
+    this.routeActive = sample.traveling;
+    this.authoritativeSamples.push({ position: { ...sample.position }, traveling: sample.traveling, nowMs });
+  }
 
   stagePosition(position: Vec2): (() => void) | null {
     if (this.terminal || this.status !== "alive") return null;
@@ -5341,6 +5762,7 @@ function frame(options: Readonly<{
   ruinRecords?: readonly PresentedRecord<HomeSnapshot>[];
   scene?: PresentedSceneView | null;
   selection?: ObserverSelection;
+  spatialPlayback?: PresentedObserverFrame["spatialPlayback"];
 }> = {}): PresentedObserverFrame {
   const lastCursor = options.lastCursor ?? 1;
   return {
@@ -5352,6 +5774,7 @@ function frame(options: Readonly<{
     source: "live",
     ingestedCursor: lastCursor,
     presentedCursor: lastCursor,
+    ...(options.spatialPlayback === undefined ? {} : { spatialPlayback: options.spatialPlayback }),
     world: {
       exactBaseCursor: options.exactBaseCursor ?? lastCursor,
       projectedThroughCursor: options.projectedThroughCursor ?? lastCursor,

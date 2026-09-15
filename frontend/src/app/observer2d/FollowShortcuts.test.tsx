@@ -169,6 +169,10 @@ describe("FollowShortcuts", () => {
       "[data-follow-shortcut]",
     )];
     expect(buttons).toHaveLength(4);
+    const portraits = [...container.querySelectorAll<HTMLElement>("[data-being-portrait]")];
+    expect(portraits).toHaveLength(4);
+    expect(portraits.every((portrait) => portrait.getAttribute("aria-hidden") === "true")).toBe(true);
+    expect(container.querySelectorAll(".follow-shortcuts__medallion")).toHaveLength(0);
     expect(container.textContent).toContain("Speaking");
     expect(container.innerHTML).not.toContain("token-");
     expect(container.innerHTML).not.toContain("aster");

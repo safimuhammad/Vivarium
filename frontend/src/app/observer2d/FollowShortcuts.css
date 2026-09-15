@@ -46,6 +46,7 @@
 }
 
 .follow-shortcuts__card {
+  position: relative;
   display: flex;
   align-items: center;
   width: 100%;
@@ -88,24 +89,13 @@
   opacity: .72;
 }
 
-.follow-shortcuts__card--unavailable .follow-shortcuts__medallion {
+.follow-shortcuts__card--unavailable .follow-shortcuts__portrait {
   filter: grayscale(.7);
 }
 
-.follow-shortcuts__medallion {
-  display: grid;
-  place-items: center;
-  flex: 0 0 34px;
-  width: 34px;
-  height: 34px;
-  border: 2px solid #f0f2df88;
-  border-radius: 50%;
-  color: #fff7d2;
-  font-size: .68rem;
-  font-weight: 750;
-  letter-spacing: .04em;
-  line-height: 1;
-  text-shadow: 0 1px 2px #00110dcc;
+.follow-shortcuts__portrait {
+  flex: 0 0 44px;
+  width: 44px;
 }
 
 .follow-shortcuts__copy {

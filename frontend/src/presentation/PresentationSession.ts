@@ -3,6 +3,7 @@ import { classifyRunAcceptance } from "../app/client";
 import type { ReplayPresentationWindow } from "../app/replayArtifactClient";
 import type {
   EventEnvelope,
+  EventEnvelopeEntry,
   RunMetadata,
   WorldSnapshot,
 } from "../app/schemas";
@@ -73,6 +74,10 @@ import type { PlacementLedgerSnapshot } from "../renderer2d/production/placement
 import type { PlacementGenerationOwner } from "../renderer2d/production/placement/PlacementGeneration";
 import type { RegionMapRecipeV1 } from "../renderer2d/production/maps/RegionMapRecipe";
 import { createChoreographyProgramResolver } from "./choreography/registry";
+import {
+  createSpatialPlaybackClock,
+  type SpatialPlaybackClock,
+} from "./spatialMotion";
 
 export interface PresentationControls {
   pause(): void;
@@ -497,6 +502,14 @@ class OwnedPresentationSession implements PresentationSession {
   private hiddenEvidence: HiddenEvidenceDigest | null = null;
   private held = false;
   private speed: PresentationSpeed = 1;
+  /**
+   * Route time owned by playback controls, never by a newly received checkpoint.
+   * A reset/recovery explicitly establishes a new recorded starting point.
+   */
+  private spatialPlayback: SpatialPlaybackClock | null = null;
+  /** Evidence after a historical card's selected cursor, released by replay time. */
+  private archiveContinuation: readonly EventEnvelopeEntry[] = [];
+  private cancelArchiveContinuation: (() => void) | null = null;
   private disposed = false;
   private notifying = false;
   private pendingNotifications = 0;
@@ -577,13 +590,20 @@ class OwnedPresentationSession implements PresentationSession {
     }
     this.controlPort = Object.freeze<PresentationControls>({
       pause: () => {
-        if (!this.recoveryLocked) this.owners?.director.setPaused(true);
+        if (this.recoveryLocked) return;
+        this.owners?.director.setPaused(true);
+        this.syncSpatialPlaybackPause();
+        this.rescheduleArchiveContinuation();
+        this.publishObserverFrame();
       },
       resume: (choice: "continue-from-summary" | "snap-to-live" = "continue-from-summary") => {
         if (this.recoveryLocked) return;
         if (choice === "snap-to-live" && this.source === "live") {
           if (this.ingress.getSnapshot().ingestedCursor <= this.getFrame().lastCursor) {
             this.owners?.director.resumeAfterAbsence(choice);
+            this.syncSpatialPlaybackPause();
+            this.rescheduleArchiveContinuation();
+            this.publishObserverFrame();
             return;
           }
           const activeScene = this.owners?.settlement.getSnapshot().sceneToken !== null;
@@ -592,17 +612,25 @@ class OwnedPresentationSession implements PresentationSession {
           return;
         }
         this.owners?.director.resumeAfterAbsence(choice);
+        this.syncSpatialPlaybackPause();
+        this.rescheduleArchiveContinuation();
+        this.publishObserverFrame();
       },
       setSpeed: (speed: PresentationSpeed) => {
         if (this.recoveryLocked) return;
         this.speed = speed;
         this.owners?.director.setSpeed(speed);
+        this.spatialPlayback?.setSpeed(speed, this.clock.now());
+        this.syncSpatialPlaybackPause();
+        this.rescheduleArchiveContinuation();
         this.publishObserverFrame();
       },
       holdCurrentMoment: (hold: boolean) => {
         if (this.recoveryLocked) return;
         this.held = hold;
         this.owners?.director.holdCurrentMoment(hold);
+        this.syncSpatialPlaybackPause();
+        this.rescheduleArchiveContinuation();
         this.publishObserverFrame();
       },
       viewMoment: (momentId: string) => {
@@ -741,17 +769,20 @@ class OwnedPresentationSession implements PresentationSession {
     if (this.recoveryLocked) {
       if (hidden) this.hiddenStartCursor = this.getFrame().ingestedCursor;
       else this.hiddenEvidence = null;
+      this.syncSpatialPlaybackPause();
       return;
     }
     if (hidden) {
       this.hiddenStartCursor = this.getFrame().ingestedCursor;
       if (this.recoveryPromise === null) this.owners?.director.setPaused(true);
       this.hiddenEvidence = this.pendingHiddenEvidence();
+      this.syncSpatialPlaybackPause();
       return;
     }
     if (this.recoveryPromise !== null) {
       this.hiddenEvidence = null;
       this.owners?.director.setPaused(false);
+      this.syncSpatialPlaybackPause();
       return;
     }
     const pressureDigest = this.hiddenPressureDigest();
@@ -760,6 +791,7 @@ class OwnedPresentationSession implements PresentationSession {
       return;
     }
     this.owners?.director.setPaused(false);
+    this.syncSpatialPlaybackPause();
     this.publishWhileAwayGap();
   }
 
@@ -817,6 +849,9 @@ class OwnedPresentationSession implements PresentationSession {
     this.lastCompletedRecovery = null;
     this.generation += 1;
     this.cancelScheduledRejoin();
+    this.cancelArchiveContinuation?.();
+    this.cancelArchiveContinuation = null;
+    this.archiveContinuation = [];
     this.closeStream();
     this.teardownNarrative();
     this.unsubscribeIngress?.();
@@ -870,7 +905,19 @@ class OwnedPresentationSession implements PresentationSession {
       openStream: false,
       resetFeed: false,
       preserveGeneration: true,
+      ...(window.historical === undefined
+        ? {}
+        : { spatialAnchorAt: window.historical.targetWorldTime }),
     });
+    if (window.historical !== undefined) {
+      if (window.entries.length > 0) this.restoreArchiveEvidence(window.entries);
+      this.archiveContinuation = window.historical.continuation;
+      this.releaseArchiveContinuation();
+      this.rescheduleArchiveContinuation();
+      return;
+    }
+    // An ordinary Archive checkpoint keeps its established staging semantics.
+    // Only a historical Chronicle card establishes a direct state prefix.
     if (window.entries.length > 0) {
       this.ingress.onEnvelopeAccepted({
         schema: 1,
@@ -884,6 +931,76 @@ class OwnedPresentationSession implements PresentationSession {
     }
   }
 
+  /** Projects an already-recorded archive interval without staging it as new action. */
+  private restoreArchiveEvidence(entries: readonly EventEnvelopeEntry[]): void {
+    if (entries.length === 0 || this.owners === null || this.run === null) return;
+    const first = entries[0]!;
+    const last = entries.at(-1)!;
+    this.owners.director.restoreHistoricalEvidence(entries);
+    this.lifetimeAcceptedCount += entries.length;
+    this.canonical.acceptEnvelope({
+      schema: 1,
+      cursor: first.cursor - 1,
+      oldest_cursor: first.cursor,
+      next_cursor: last.cursor,
+      events: [...entries],
+      overflow: false,
+      snapshot_required: false,
+    });
+    // The prefix is true in the model already. Advance ingress without
+    // re-emitting it through its normal live-ingest subscriber.
+    this.ingress.reset({
+      runId: this.run.run_id,
+      sourceKey: this.sourceKey,
+      cursor: last.cursor,
+    });
+  }
+
+  /** Releases only the archive events whose recorded time the replay clock reached. */
+  private releaseArchiveContinuation(): void {
+    if (this.source !== "archive" || this.archiveContinuation.length === 0) return;
+    const playback = this.spatialPlayback;
+    if (playback === null) return;
+    const sampledAt = playback.sample(this.clock.now());
+    let count = 0;
+    while (
+      count < this.archiveContinuation.length
+      && this.archiveContinuation[count]!.event.timestamp <= sampledAt
+    ) count += 1;
+    if (count === 0) return;
+    const released = this.archiveContinuation.slice(0, count);
+    this.archiveContinuation = this.archiveContinuation.slice(count);
+    this.restoreArchiveEvidence(released);
+  }
+
+  /** Arms the next timestamp release in the same wall-to-simulation clock as routes. */
+  private rescheduleArchiveContinuation(): void {
+    this.cancelArchiveContinuation?.();
+    this.cancelArchiveContinuation = null;
+    if (this.source !== "archive" || this.archiveContinuation.length === 0) return;
+    const playback = this.spatialPlayback;
+    if (playback === null) return;
+    const state = playback.snapshot();
+    if (state.paused) return;
+    const wallNow = this.clock.now();
+    const sampledAt = playback.sample(wallNow);
+    const next = this.archiveContinuation[0]!;
+    if (next.event.timestamp <= sampledAt) {
+      this.releaseArchiveContinuation();
+      this.rescheduleArchiveContinuation();
+      return;
+    }
+    const delayMs = (next.event.timestamp - sampledAt) * 1_000 / state.speed;
+    const generation = this.generation;
+    this.cancelArchiveContinuation = this.clock.schedule(wallNow + delayMs, () => {
+      this.cancelArchiveContinuation = null;
+      if (this.disposed || generation !== this.generation) return;
+      this.releaseArchiveContinuation();
+      this.rescheduleArchiveContinuation();
+      this.publishObserverFrame();
+    });
+  }
+
   private installSnapshot(input: Readonly<{
     run: RunMetadata;
     snapshot: WorldSnapshot;
@@ -892,6 +1009,8 @@ class OwnedPresentationSession implements PresentationSession {
     openStream: boolean;
     resetFeed: boolean;
     preserveGeneration?: boolean;
+    /** A card replay anchors routes at event time, never at an older checkpoint. */
+    spatialAnchorAt?: number;
   }>): void {
     if (this.disposed) return;
     if (input.run.run_id !== input.snapshot.run_id) {
@@ -929,6 +1048,9 @@ class OwnedPresentationSession implements PresentationSession {
     this.lastCompletedRecovery = null;
     const candidate = this.generation;
     this.cancelScheduledRejoin();
+    this.cancelArchiveContinuation?.();
+    this.cancelArchiveContinuation = null;
+    this.archiveContinuation = [];
     this.rejoinAttempt = 0;
     this.frozenRetryAttempt = 0;
     this.runReplacementPending = false;
@@ -968,6 +1090,13 @@ class OwnedPresentationSession implements PresentationSession {
     this.hiddenEvidence = null;
     this.held = false;
     this.speed = 1;
+    this.spatialPlayback = spatialPlaybackForSnapshot(
+      input.snapshot,
+      this.clock.now(),
+      1,
+      false,
+      input.spatialAnchorAt,
+    );
     this.canonical.acceptRun(input.run);
     this.canonical.acceptSnapshot(input.snapshot);
     this.ingress.reset({
@@ -1567,10 +1696,20 @@ class OwnedPresentationSession implements PresentationSession {
     this.ingress.reset({ runId: snapshot.run_id, sourceKey: this.sourceKey, cursor: snapshot.event_cursor });
     this.feed?.reset({ runId: snapshot.run_id, sourceKey: this.sourceKey });
     this.recoverySnapshot = null;
+    // Recovery is an explicit replacement of recorded world truth, unlike an
+    // ordinary checkpoint reconciliation. Re-anchor only here, never from
+    // `frame.world.worldTime` during ongoing playback.
+    this.spatialPlayback = spatialPlaybackForSnapshot(
+      snapshot,
+      this.clock.now(),
+      this.speed,
+      true,
+    );
     this.teardownNarrative();
     this.buildNarrative(snapshot, recoveredIdentity);
     this.openStream(snapshot.event_cursor, candidate);
     this.clearRecoveryFreeze();
+    this.syncSpatialPlaybackPause();
     this.emit();
   }
 
@@ -1668,6 +1807,7 @@ class OwnedPresentationSession implements PresentationSession {
           directorState.activeProgramId,
           presentedEventType(directorState.activeMoment?.representative.event.type),
         );
+    const spatialPlayback = this.presentedSpatialPlayback();
     const next: PresentedObserverFrame = {
       ...identity,
       source: this.source,
@@ -1676,6 +1816,9 @@ class OwnedPresentationSession implements PresentationSession {
         : directorState.ingestedCursor,
       presentedCursor: directorState.presentedCursor,
       world: model.getView(),
+      ...(spatialPlayback === null
+        ? {}
+        : { spatialPlayback }),
       scene,
       utterances: directorState.utterances,
       staging: directorState.staging,
@@ -1707,6 +1850,30 @@ class OwnedPresentationSession implements PresentationSession {
     }
     if (recoveryAuthorized) this.refreshRecoveryChronicle();
     this.emit();
+  }
+
+  /** Snapshot the independent route clock for a renderer frame. */
+  private presentedSpatialPlayback(): PresentedObserverFrame["spatialPlayback"] | null {
+    const playback = this.spatialPlayback;
+    if (playback === null) return null;
+    const wallNow = this.clock.now();
+    const state = playback.snapshot();
+    return Object.freeze({
+      sampledAt: playback.sample(wallNow),
+      speed: state.speed,
+      paused: state.paused,
+    });
+  }
+
+  /** Keep route playback aligned with the viewer's actual play/pause state. */
+  private syncSpatialPlaybackPause(): void {
+    const playback = this.spatialPlayback;
+    if (playback === null) return;
+    const paused = this.recoveryLocked
+      || this.hidden
+      || this.held
+      || (this.owners?.director.getSnapshot().paused ?? true);
+    playback.setPaused(paused, this.clock.now());
   }
 
   private rawChronicle(): SanitizedChronicleData {
@@ -1984,6 +2151,7 @@ class OwnedPresentationSession implements PresentationSession {
 
   private beginRecoveryFreeze(): void {
     this.recoveryLocked = true;
+    this.syncSpatialPlaybackPause();
     this.recoveryChronicle = selectPresentedChronicle(
       this.getFrame(),
       this.rawChronicle(),
@@ -2001,6 +2169,7 @@ class OwnedPresentationSession implements PresentationSession {
   private clearRecoveryFreeze(): void {
     this.recoveryLocked = false;
     this.recoveryChronicle = null;
+    this.syncSpatialPlaybackPause();
   }
 
   private closeStream(): void {
@@ -2251,6 +2420,30 @@ function isRunStatus(value: string): value is RunMetadata["status"] {
   return (RUN_STATUSES as readonly string[]).includes(value);
 }
 
+/**
+ * Start a route clock only when this exact checkpoint declares the exporter-owned
+ * Nirvana map. Legacy recordings have no spatial authority to sample, and must
+ * retain their pre-pilot observer-frame behavior.
+ */
+function spatialPlaybackForSnapshot(
+  snapshot: WorldSnapshot,
+  anchorWallMs: number,
+  speed: PresentationSpeed,
+  paused: boolean,
+  anchorAt: number = snapshot.world_time,
+): SpatialPlaybackClock | null {
+  if (!snapshot.regions.some((region) => region.spatial !== undefined)) return null;
+  if (!Number.isFinite(anchorAt)) throw new RangeError("spatial playback anchor must be finite");
+  return createSpatialPlaybackClock({
+    // This exact reset or recovery checkpoint is the recorded anchor. Later
+    // checkpoints never advance an in-progress live or archive route clock.
+    anchorAt,
+    anchorWallMs,
+    speed,
+    paused,
+  });
+}
+
 function semanticPublicationKey(frame: PresentedObserverFrame): string {
   return JSON.stringify({
     runId: frame.runId,
@@ -2263,6 +2456,16 @@ function semanticPublicationKey(frame: PresentedObserverFrame): string {
     exactBaseCursor: frame.world.exactBaseCursor,
     projectedThroughCursor: frame.world.projectedThroughCursor,
     worldTime: frame.world.worldTime,
+    // The graph advances an adopted route anchor from its own frame clock.
+    // Sampling time is therefore draw-time data, not a new semantic observer
+    // publication.  Including it here would replace a pending consequence
+    // frame simply because a wall clock advanced.
+    spatialPlayback: frame.spatialPlayback === undefined
+      ? null
+      : {
+        speed: frame.spatialPlayback.speed,
+        paused: frame.spatialPlayback.paused,
+      },
     scene: frame.scene,
     // The overlay lane can be the ONLY thing that changed between two frames --
     // a being speaking while nothing holds the stage -- and a frame deduplicated
@@ -2402,7 +2605,28 @@ function validateArchiveWindow(window: ReplayPresentationWindow): void {
   const checkpointIdentity = window.checkpointLineNumber === null
     ? `index-${window.checkpointIndex}`
     : `line-${window.checkpointLineNumber}`;
-  const expectedSource = `archive:${encodeURIComponent(window.snapshot.run_id)}:${checkpointIdentity}:window-${window.firstCursor}-${window.lastCursor}`;
+  const historical = window.historical;
+  if (historical !== undefined) {
+    if (
+      !Number.isSafeInteger(historical.targetCursor)
+      || historical.targetCursor !== window.lastCursor
+      || !Number.isFinite(historical.targetWorldTime)
+    ) throw new Error("Historical archive replay must identify its exact target cursor and time");
+    let nextCursor = historical.targetCursor + 1;
+    let priorTimestamp = historical.targetWorldTime;
+    for (const entry of historical.continuation) {
+      if (
+        entry.cursor !== nextCursor
+        || !Number.isFinite(entry.event.timestamp)
+        || entry.event.timestamp < priorTimestamp
+      ) throw new RangeError("Historical archive continuation must be a time-ordered contiguous suffix");
+      nextCursor += 1;
+      priorTimestamp = entry.event.timestamp;
+    }
+  }
+  const expectedSource = historical === undefined
+    ? `archive:${encodeURIComponent(window.snapshot.run_id)}:${checkpointIdentity}:window-${window.firstCursor}-${window.lastCursor}`
+    : `archive:${encodeURIComponent(window.snapshot.run_id)}:${checkpointIdentity}:replay-${window.firstCursor}-${historical.targetCursor}`;
   if (window.sourceKey !== expectedSource) {
     throw new Error("Archive sourceKey must exactly match checkpoint and window identity");
   }

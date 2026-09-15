@@ -1,11 +1,11 @@
 """Hand-authored Ollama function schemas for the built-in tools (design DD3).
 
-Each built-in tool (see :data:`tools.builtin.BUILTIN_TOOLS`) has a corresponding
-entry in :data:`TOOL_SCHEMAS` describing its callable signature in the Ollama /
-OpenAI function-calling format. The schema *bodies* (parameter names, types, and
-which are required) are authored by hand, but the schema *set* must stay in
-lock-step with the built-in tool set: a parity test asserts
-``set(TOOL_SCHEMAS) == set(tools.builtin.BUILTIN_TOOLS)``.
+Each legacy built-in tool (see :data:`tools.builtin.BUILTIN_TOOLS`) has a
+corresponding entry in :data:`TOOL_SCHEMAS`; Physical walking tools mirror
+:data:`tools.builtin.SPATIAL_BUILTIN_TOOLS` in :data:`SPATIAL_TOOL_SCHEMAS`.
+The schema *bodies* (parameter names, types, and which are required) are
+authored by hand.  The two catalog-specific parity tests keep historical worlds
+byte-stable while allowing a spatial run to expose its extra actions.
 
 Resource-type parameters are constrained to the
 :class:`world.regions.ResourceTypes` string values so the model can only request
@@ -427,11 +427,48 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 """Tool name -> Ollama function schema; its key set mirrors ``BUILTIN_TOOLS``."""
 
+SPATIAL_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    "go_to": {
+        "type": "function",
+        "function": {
+            "name": "go_to",
+            "description": (
+                "Walk toward a named place in your current region. The walk continues while "
+                "you think, until you arrive, stop, or choose a different place."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination_id": {
+                        "type": "string",
+                        "description": "Id of a known place in your current region.",
+                    },
+                },
+                "required": ["destination_id"],
+            },
+        },
+    },
+    "stop_moving": {
+        "type": "function",
+        "function": {
+            "name": "stop_moving",
+            "description": (
+                "Come to rest at your current spot, cancelling any walking or regional journey."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+}
+"""Physical walking schemas; their key set mirrors ``SPATIAL_BUILTIN_TOOLS``."""
+
+_ALL_TOOL_SCHEMAS: dict[str, dict[str, Any]] = TOOL_SCHEMAS | SPATIAL_TOOL_SCHEMAS
+
 
 def schemas_for(
     names: Iterable[str],
     *,
     max_offspring: int = MATING_MAX_OFFSPRING,
+    spatial: bool = False,
 ) -> list[dict[str, Any]]:
     """Return the schemas for the named tools, in iteration order.
 
@@ -445,6 +482,7 @@ def schemas_for(
     Args:
         names: Tool names to look up (e.g. the names a registry exposes).
         max_offspring: This run's per-being offspring ceiling.
+        spatial: Whether to describe physical walking and local hearing rules.
 
     Returns:
         The matching schema objects, in the order of ``names``.
@@ -454,13 +492,43 @@ def schemas_for(
             invariant; surfaced loudly rather than silently dropping a tool).
     """
     ordered = list(names)  # ``names`` may be a one-shot iterator; it is read twice.
-    schemas = [TOOL_SCHEMAS[name] for name in ordered]
-    if max_offspring == MATING_MAX_OFFSPRING:
-        return schemas
-    return [
-        _with_offspring_cap(schema, max_offspring) if name == MATING_TOOL_NAME else schema
-        for name, schema in zip(ordered, schemas, strict=True)
-    ]
+    schemas = [_ALL_TOOL_SCHEMAS[name] for name in ordered]
+    result = []
+    for name, schema in zip(ordered, schemas, strict=True):
+        if name == MATING_TOOL_NAME and max_offspring != MATING_MAX_OFFSPRING:
+            schema = _with_offspring_cap(schema, max_offspring)
+        if spatial:
+            schema = _with_spatial_rules(schema, name)
+        result.append(schema)
+    return result
+
+
+def _with_spatial_rules(schema: dict[str, Any], name: str) -> dict[str, Any]:
+    """Describe physical rules without mutating the shared legacy schema catalog."""
+    descriptions = {
+        "harvest_resources": (
+            "Gather energy or materials into your stores only while stationary at a matching "
+            "resource site. Your current observations state what is harvestable here and give "
+            "destination IDs for matching sites. go_to starts a journey; harvesting requires "
+            "arrival and does not move you. Arrival ends walking automatically; no separate "
+            "stop_moving is needed. The amount must be positive and no greater than the current "
+            "shared regional supply of that resource."
+        ),
+        "move": (
+            "Travel to a connected region by walking to its exit "
+            "and entering at the matching entrance. "
+            f"Starting this journey costs {MOVE_ENERGY_COST:.0f} energy; repeating the same active "
+            "destination keeps it without another charge. You remain here until arrival."
+        ),
+        "speak": (
+            "Say something. Nearby beings within your local hearing range hear it; "
+            "with a target, only that being receives the whisper. "
+            f"Speaking costs {SPEAK_ENERGY_COST:g} energy."
+        ),
+    }
+    if name not in descriptions:
+        return schema
+    return {**schema, "function": {**schema["function"], "description": descriptions[name]}}
 
 
 def _with_offspring_cap(schema: dict[str, Any], max_offspring: int) -> dict[str, Any]:

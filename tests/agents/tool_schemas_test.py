@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agents.tool_schemas import TOOL_SCHEMAS, schemas_for
+from agents.tool_schemas import SPATIAL_TOOL_SCHEMAS, TOOL_SCHEMAS, schemas_for
 from core.constants import (
     ATTACK_DAMAGE,
     ATTACK_ENERGY_COST,
@@ -21,7 +21,7 @@ from core.constants import (
     SPEAK_ENERGY_COST,
 )
 from tests.agents.prompt_test import FORBIDDEN_TERMS
-from tools.builtin import BUILTIN_TOOLS
+from tools.builtin import BUILTIN_TOOLS, SPATIAL_BUILTIN_TOOLS
 from world.regions import ResourceTypes
 
 RESOURCE_VALUES: set[str] = {resource.value for resource in ResourceTypes}
@@ -29,10 +29,11 @@ RESOURCE_VALUES: set[str] = {resource.value for resource in ResourceTypes}
 
 def test_schema_set_matches_builtin_tools() -> None:
     assert set(TOOL_SCHEMAS) == set(BUILTIN_TOOLS)
+    assert set(SPATIAL_TOOL_SCHEMAS) == set(SPATIAL_BUILTIN_TOOLS)
 
 
 def test_every_schema_is_well_formed() -> None:
-    for name, schema in TOOL_SCHEMAS.items():
+    for name, schema in (TOOL_SCHEMAS | SPATIAL_TOOL_SCHEMAS).items():
         assert schema["type"] == "function"
         function = schema["function"]
         assert function["name"] == name
@@ -52,10 +53,31 @@ def test_resource_type_params_constrained_to_enum() -> None:
         assert set(props["resource_type"]["enum"]) == RESOURCE_VALUES
 
 
+def test_spatial_harvest_schema_states_site_and_arrival_rules() -> None:
+    """Spatial harvesting cannot advertise region-wide access or implicit travel."""
+    legacy = TOOL_SCHEMAS["harvest_resources"]["function"]["description"]
+    schema = schemas_for(["harvest_resources"], spatial=True)[0]
+    description = schema["function"]["description"]
+    assert "stationary" in description
+    assert "matching" in description
+    assert "go_to" in description
+    assert "does not move you" in description
+    assert "supply" in description
+    assert schemas_for(["harvest_resources"])[0]["function"]["description"] == legacy
+
+
 def test_schemas_for_returns_requested_schemas_in_order() -> None:
     names = ["speak", "move"]
     result: list[dict[str, Any]] = schemas_for(names)
     assert [schema["function"]["name"] for schema in result] == names
+
+
+def test_schemas_for_returns_spatial_schemas_when_the_registry_exposes_them() -> None:
+    """Nirvana runs can request schemas outside the frozen legacy catalog."""
+    names = ["go_to", "stop_moving"]
+    result = schemas_for(names)
+    assert [schema["function"]["name"] for schema in result] == names
+    assert result[0] is SPATIAL_TOOL_SCHEMAS["go_to"]
 
 
 def test_costed_action_schemas_state_their_energy_cost() -> None:
@@ -97,7 +119,7 @@ def test_no_schema_description_leaks_forbidden_dd9_language() -> None:
     DD9 guards can never silently drift apart, and scans EVERY schema so a future
     tool-schema edit can't reintroduce forbidden framing unnoticed.
     """
-    for name, schema in TOOL_SCHEMAS.items():
+    for name, schema in (TOOL_SCHEMAS | SPATIAL_TOOL_SCHEMAS).items():
         description = schema["function"]["description"].lower()
         for banned in FORBIDDEN_TERMS:
             assert banned not in description, f"{name!r} schema description leaks {banned!r}"

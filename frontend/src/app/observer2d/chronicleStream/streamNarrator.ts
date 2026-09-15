@@ -37,6 +37,8 @@ export interface StreamNarrationInput {
   readonly regionLabel: string | null;
   /** Being id to display name; must return a safe fallback for unknown ids. */
   readonly nameOf: (id: string) => string;
+  /** Exported landmark copy for a validated spatial journey, when its map is known. */
+  readonly spatialDestinationName?: string | null;
 }
 
 /** The narrated form of one canonical event, ready to render in a card. */
@@ -60,6 +62,9 @@ export const STREAM_VERBS: Readonly<Record<string, string>> = Object.freeze({
   agent_recovered: "revived",
   agent_left_region: "moved on",
   agent_entered_region: "arrived",
+  spatial_travel_started: "walking",
+  spatial_travel_cancelled: "rested",
+  spatial_travel_arrived: "arrived",
   speak: "spoke",
   self_talk: "thought",
   resource_changed: "gathered",
@@ -176,6 +181,30 @@ export function narrateStreamEvent(input: StreamNarrationInput): Narration {
       const label = toRegion !== null ? titleCase(toRegion) : regionLabel ?? "the region";
       return narration("agent_entered_region", `${actor} reached ${label}.`, [], null);
     }
+
+    case "spatial_travel_started":
+      return narration(
+        "spatial_travel_started",
+        `${actor} began walking to ${spatialDestinationLabel(payload, input.spatialDestinationName)}.`,
+        [],
+        null,
+      );
+
+    case "spatial_travel_cancelled":
+      return narration(
+        "spatial_travel_cancelled",
+        `${actor} came to rest on the way to ${spatialDestinationLabel(payload, input.spatialDestinationName)}.`,
+        [],
+        null,
+      );
+
+    case "spatial_travel_arrived":
+      return narration(
+        "spatial_travel_arrived",
+        `${actor} arrived at ${spatialDestinationLabel(payload, input.spatialDestinationName)}.`,
+        [],
+        null,
+      );
 
     case "speak": {
       const message = readString(payload, "message");
@@ -450,6 +479,19 @@ function titleCase(id: string): string {
   return words
     .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`)
     .join(" ");
+}
+
+/** Turns a backend destination key into readable anchor copy without printing arbitrary payload text. */
+function spatialDestinationLabel(
+  payload: Readonly<Record<string, unknown>>,
+  exportedName: string | null | undefined,
+): string {
+  if (typeof exportedName === "string" && exportedName.trim().length > 0) return exportedName;
+  const destinationId = readString(payload, "destination_id");
+  if (destinationId === null || !/^[a-z][a-z0-9_-]{0,79}$/iu.test(destinationId)) {
+    return "the destination";
+  }
+  return titleCase(destinationId);
 }
 
 /** Joins names in prose form: "A", "A and B", "A, B and C". */

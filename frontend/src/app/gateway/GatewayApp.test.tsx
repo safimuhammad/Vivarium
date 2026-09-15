@@ -105,6 +105,20 @@ async function click(label: string | RegExp): Promise<void> {
   });
 }
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((settle, fail) => {
+    resolve = settle;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("the landing page", () => {
   it("says this is a world that never ends, not something to be won", async () => {
     await mount({ client: stubClient() });
@@ -134,6 +148,218 @@ describe("the landing page", () => {
     await click("Browse saved runs");
     expect(container?.querySelector('[data-testid="recording"]')).toBeNull();
     expect(text()).toMatch(/no saved runs/i);
+  });
+
+  it("refreshes the current-world offer when returning from saved runs", async () => {
+    const getLifecycle = vi.fn()
+      .mockResolvedValueOnce({
+        run_id: "run-before-library",
+        status: "running",
+        raw_status: "running",
+      })
+      .mockResolvedValueOnce({
+        run_id: "run-after-library",
+        status: "running",
+        raw_status: "running",
+      });
+    await mount({ client: stubClient({ getLifecycle }) });
+
+    await click("Browse saved runs");
+    await click("Back to home");
+
+    expect(getLifecycle).toHaveBeenCalledTimes(2);
+    expect(text()).toContain("Return to current world");
+  });
+
+  it("refreshes the current-world offer when returning from configuration", async () => {
+    const getLifecycle = vi.fn()
+      .mockResolvedValueOnce({
+        run_id: "run-before-config",
+        status: "running",
+        raw_status: "running",
+      })
+      .mockResolvedValueOnce({
+        run_id: "run-after-config",
+        status: "running",
+        raw_status: "running",
+      });
+    await mount({ client: stubClient({ getLifecycle }) });
+
+    await click("Set the conditions");
+    await click("Back");
+
+    expect(getLifecycle).toHaveBeenCalledTimes(2);
+    expect(text()).toContain("Return to current world");
+  });
+
+  it("offers a read-only return path after reload and adopts the current world on click", async () => {
+    const getLifecycle = vi.fn(() => Promise.resolve<RunLifecycle>({
+      run_id: "run-current",
+      status: "running",
+      raw_status: "running",
+    }));
+    const start = vi.fn(() => Promise.resolve<RunStartAcknowledgement>({
+      run_id: "run-new",
+      status: "starting",
+      warnings: [],
+    }));
+    const stop = vi.fn(() => Promise.resolve<RunStartAcknowledgement>({
+      run_id: "run-current",
+      status: "stopping",
+      warnings: [],
+    }));
+    await mount({ client: stubClient({ getLifecycle, start, stop }) });
+
+    expect(getLifecycle).toHaveBeenCalledOnce();
+    expect(text()).toContain("Return to current world");
+    expect(container?.querySelector('[data-testid="observer"]')).toBeNull();
+    await click("Return to current world");
+
+    expect(getLifecycle).toHaveBeenCalledTimes(2);
+    expect(container?.querySelector('[data-testid="observer"]')?.textContent)
+      .toBe("run-current");
+    expect(start).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it.each(["unknown", "failed"] as const)(
+    "does not offer a phantom return when the initial lifecycle is %s",
+    async (status) => {
+      await mount({
+        client: stubClient({
+          getLifecycle: () => Promise.resolve<RunLifecycle>({
+            run_id: "run-current",
+            status,
+            raw_status: status,
+          }),
+        }),
+      });
+
+      expect(text()).not.toContain("Return to current world");
+      expect(container?.querySelector('[data-testid="observer"]')).toBeNull();
+    },
+  );
+
+  it.each([
+    ["unknown", "The current world could not be confirmed"],
+    ["failed", "The current world is no longer running"],
+  ] as const)(
+    "does not resume a discovered world when click-time lifecycle is %s",
+    async (status, message) => {
+      const getLifecycle = vi.fn()
+        .mockResolvedValueOnce({
+          run_id: "run-current",
+          status: "running",
+          raw_status: "running",
+        })
+        .mockResolvedValueOnce({
+          run_id: "run-current",
+          status,
+          raw_status: status,
+        });
+      await mount({ client: stubClient({ getLifecycle }) });
+
+      await click("Return to current world");
+
+      expect(container?.querySelector('[data-testid="observer"]')).toBeNull();
+      expect(text()).toContain(message);
+      expect(text()).not.toContain("Return to current world");
+    },
+  );
+
+  it("does not resume an old world when the current run changed before the click", async () => {
+    const getLifecycle = vi.fn()
+      .mockResolvedValueOnce({
+        run_id: "run-old",
+        status: "running",
+        raw_status: "running",
+      })
+      .mockResolvedValueOnce({
+        run_id: "run-new",
+        status: "running",
+        raw_status: "running",
+      });
+    await mount({ client: stubClient({ getLifecycle }) });
+
+    await click("Return to current world");
+
+    expect(container?.querySelector('[data-testid="observer"]')).toBeNull();
+    expect(text()).toContain("changed before it could be reopened");
+  });
+
+  it("keeps the gateway in place when the click-time lifecycle check is offline", async () => {
+    const getLifecycle = vi.fn()
+      .mockResolvedValueOnce({
+        run_id: "run-current",
+        status: "running",
+        raw_status: "running",
+      })
+      .mockRejectedValueOnce(new Error("offline"));
+    await mount({ client: stubClient({ getLifecycle }) });
+
+    await click("Return to current world");
+
+    expect(container?.querySelector('[data-testid="observer"]')).toBeNull();
+    expect(text()).toContain("could not be checked");
+  });
+
+  it("offers a usable retry after a transient lifecycle check failure", async () => {
+    const getLifecycle = vi.fn()
+      .mockResolvedValueOnce({
+        run_id: "run-current",
+        status: "running",
+        raw_status: "running",
+      })
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        run_id: "run-current",
+        status: "running",
+        raw_status: "running",
+      });
+    await mount({ client: stubClient({ getLifecycle }) });
+
+    await click("Return to current world");
+    expect(text()).toContain("Try again");
+    await click("Try again");
+
+    expect(getLifecycle).toHaveBeenCalledTimes(3);
+    expect(text()).toContain("Return to current world");
+  });
+
+  it("does not write a discovered world into an unmounted gateway", async () => {
+    const lifecycle = deferred<RunLifecycle>();
+    await mount({ client: stubClient({ getLifecycle: () => lifecycle.promise }) });
+
+    await act(async () => {
+      root?.unmount();
+      root = null;
+    });
+    lifecycle.resolve({ run_id: "run-current", status: "running", raw_status: "running" });
+    await act(async () => { await lifecycle.promise; });
+
+    expect(container?.textContent).toBe("");
+  });
+
+  it("does not write a click-time result into an unmounted gateway", async () => {
+    const lifecycle = deferred<RunLifecycle>();
+    const getLifecycle = vi.fn()
+      .mockResolvedValueOnce({
+        run_id: "run-current",
+        status: "running",
+        raw_status: "running",
+      })
+      .mockReturnValueOnce(lifecycle.promise);
+    await mount({ client: stubClient({ getLifecycle }) });
+
+    await click("Return to current world");
+    await act(async () => {
+      root?.unmount();
+      root = null;
+    });
+    lifecycle.resolve({ run_id: "run-current", status: "running", raw_status: "running" });
+    await act(async () => { await lifecycle.promise; });
+
+    expect(container?.textContent).toBe("");
   });
 });
 
@@ -504,9 +730,10 @@ describe("ending the run", () => {
     // and the way-in appearing is indistinguishable from something breaking.
     expect(text()).toContain("That world has ended");
 
-    // And nothing is still attached to the dead run.
+    // The landing visit performs one fresh, read-only discovery. It must not
+    // keep polling the ended run after that single answer.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); });
-    expect(getLifecycle.mock.calls.length).toBe(asked);
+    expect(getLifecycle.mock.calls.length).toBe(asked + 1);
 
     // The next world is set from the world's own dials, read again -- not from
     // the sheet the ended run was started with.

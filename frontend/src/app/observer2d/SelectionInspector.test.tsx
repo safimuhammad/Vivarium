@@ -17,6 +17,10 @@ describe("SelectionInspector", () => {
     expect(container.textContent).toContain("Observed; awaiting exact record");
     expect(container.textContent).toContain("EnergyUnknown");
     expect(container.innerHTML).not.toContain("raw_agent_id");
+    const portrait = container.querySelector<HTMLElement>("[data-being-portrait]");
+    expect(portrait).not.toBeNull();
+    expect(portrait?.getAttribute("aria-hidden")).toBe("true");
+    expect(portrait?.querySelector("canvas")).not.toBeNull();
     expect(container.textContent).not.toMatch(/attack|mate|move|build|command/i);
     expect(container.querySelector("[role='status'], [aria-live]")).toBeNull();
     expect(container.querySelector(".observer-drawer--quiet")).not.toBeNull();

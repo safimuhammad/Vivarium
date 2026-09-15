@@ -19,6 +19,7 @@ import {
   IDLE_FRAME,
   OUTPUT_JSON,
   OUTPUT_PNG,
+  SIDE_SOURCE_FACING_BY_CHARACTER,
   serializeJson,
   sourceDirFor,
 } from "./pack-being-chibi-atlas.mjs";
@@ -116,6 +117,24 @@ function alphaBoundsX({ data, info }, origin, frameWidth, frameHeight) {
   return maxX >= minX ? { minX, maxX } : null;
 }
 
+/**
+ * Extract the visible silhouette from decoded RGBA pixels.
+ *
+ * Palette PNGs are allowed to retain arbitrary RGB values below a zero alpha
+ * channel, and the production encoder quantizes opaque colors. The walk-side
+ * bearing contract concerns the painted shape, so compare alpha only.
+ *
+ * @param {Buffer} rgba - Decoded four-channel pixels.
+ * @returns {Buffer} One alpha byte per pixel.
+ */
+function alphaMask(rgba) {
+  const mask = Buffer.allocUnsafe(rgba.length / 4);
+  for (let index = 0, pixel = 0; index < rgba.length; index += 4, pixel += 1) {
+    mask[pixel] = rgba[index + 3];
+  }
+  return mask;
+}
+
 test("the feet anchor sits inside every frame's bounds, and every one of the 119 packed frames (17 x 7 characters) is centered on it", async () => {
   const { png, json } = await buildAtlas();
   assert.ok(json.feet.x >= 0 && json.feet.x < json.frameWidth, "feet.x must fall inside [0, frameWidth)");
@@ -137,6 +156,57 @@ test("the feet anchor sits inside every frame's bounds, and every one of the 119
     }
   }
   assert.equal(checked, 119, "expected to have checked all 17 x 7 = 119 packed frames");
+});
+
+test("normalizes every source side frame to the shared east-facing atlas convention", async () => {
+  // The roster was authored by more than one artist. f3 is the one approved
+  // source strip whose profile faces west; the renderer's one mirror rule
+  // assumes every packed side cell natively faces east. Keep that correction
+  // here at the pack boundary instead of making rendering character-specific.
+  assert.deepEqual(Object.keys(SIDE_SOURCE_FACING_BY_CHARACTER).sort(), [...CHARACTER_IDS].sort());
+  const { png, json } = await buildAtlas();
+
+  for (const characterId of CHARACTER_IDS) {
+    const sourcePath = path.join(sourceDirFor(characterId), "walk-side.png");
+    const metadata = await sharp(sourcePath).metadata();
+    assert.equal(metadata.height, FRAME_HEIGHT, `${characterId} side strip height`);
+    assert.ok(metadata.width && metadata.width % 4 === 0, `${characterId} side strip width`);
+    const nativeWidth = metadata.width / 4;
+    const offset = Math.round((FRAME_WIDTH - nativeWidth) / 2);
+
+    for (let frame = 0; frame < 4; frame += 1) {
+      let sourceFrame = sharp(sourcePath).extract({
+        left: frame * nativeWidth,
+        top: 0,
+        width: nativeWidth,
+        height: FRAME_HEIGHT,
+      });
+      if (SIDE_SOURCE_FACING_BY_CHARACTER[characterId] === "west") sourceFrame = sourceFrame.flop();
+      const expectedCell = await sharp({
+        create: {
+          width: FRAME_WIDTH,
+          height: FRAME_HEIGHT,
+          channels: 4,
+          background: { r: 0, g: 0, b: 0, alpha: 0 },
+        },
+      }).composite([{ input: await sourceFrame.png().toBuffer(), left: offset, top: 0 }])
+        .ensureAlpha()
+        .raw()
+        .toBuffer();
+      const origin = json.characters[characterId].frames[`walk-side-${frame}`];
+      const actualCell = await sharp(png).extract({
+        left: origin.x,
+        top: origin.y,
+        width: FRAME_WIDTH,
+        height: FRAME_HEIGHT,
+      }).ensureAlpha().raw().toBuffer();
+      assert.deepEqual(
+        alphaMask(actualCell),
+        alphaMask(expectedCell),
+        `${characterId}/walk-side-${frame} must preserve the east-facing visible silhouette`,
+      );
+    }
+  }
 });
 
 test("a character missing an entire source directory fails the pack", async () => {

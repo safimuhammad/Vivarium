@@ -26,10 +26,13 @@ can be resolved), or an event whose ``scope`` is not a known
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
+from dataclasses import replace
 
 from core.exceptions import EventBusError
 from core.logging import get_logger
 from observability.event_log import EventLog
+from world.spatial import SpatialPoint
 from world.world import WorldState
 
 from .events import Event, ScopeType
@@ -60,6 +63,7 @@ class EventBus:
         self.world_state: WorldState = world_state
         self.agent_queues: dict[str, asyncio.Queue[Event]] = {}
         self.event_log: EventLog | None = event_log
+        self._activity: dict[str, asyncio.Event] = {}
 
     def subscribe(self, agent_id: str) -> bool:
         """Create an inbox for an agent so it can receive events.
@@ -102,6 +106,9 @@ class EventBus:
         """
         if agent_id in self.agent_queues:
             del self.agent_queues[agent_id]
+            activity = self._activity.pop(agent_id, None)
+            if activity is not None:
+                activity.set()
             return True
         return False
 
@@ -130,6 +137,7 @@ class EventBus:
                 or if ``event.scope`` is not a known
                 :class:`~bus.events.ScopeType`.
         """
+        event = self._with_spatial_lifecycle(event)
         match event.scope:
             case ScopeType.LOCAL:
                 region = event.region
@@ -145,12 +153,14 @@ class EventBus:
                     region = source.current_position
                 await self._deliver_to_region(region, event)
             case ScopeType.GLOBAL:
-                for inbox in self.agent_queues.values():
+                for agent_id, inbox in self.agent_queues.items():
                     await inbox.put(event)
+                    self._notify_activity(agent_id, event)
             case ScopeType.TARGETED:
                 target = event.target
                 if target is not None and (queue := self.agent_queues.get(target)) is not None:
                     await queue.put(event)
+                    self._notify_activity(target, event)
                 else:
                     logger.debug(
                         "Dropping TARGETED event %r: target %r has no inbox",
@@ -173,6 +183,44 @@ class EventBus:
             except Exception:
                 logger.exception("event-log record failed for event %r; continuing", event.type)
 
+    def _with_spatial_lifecycle(self, event: Event) -> Event:
+        """Attach physical birth/arrival/home facts before inbox delivery and logging.
+
+        Replaces the envelope rather than changing the publisher's event. Explicit
+        null on departure clears spatial authority in replay until the next entry.
+        """
+        if not self.world_state.spatial_by_region:
+            return event
+        payload = dict(event.payload)
+        if event.type == "agent_left_region":
+            payload["spatial"] = None
+        elif event.type in {"agent_born", "agent_entered_region"}:
+            key = "child_id" if event.type == "agent_born" else "agent_id"
+            agent_id = payload.get(key, event.source)
+            spatial = (
+                self.world_state.spatial_for_agent(agent_id) if isinstance(agent_id, str) else None
+            )
+            payload["spatial"] = (
+                spatial.position_at(agent_id, event.timestamp)
+                if isinstance(agent_id, str) and spatial is not None
+                else None
+            )
+        elif event.type == "home_built":
+            home_id = payload.get("home_id")
+            home = self.world_state.get_home(home_id) if isinstance(home_id, str) else None
+            spatial = self.world_state.spatial_for_region(home.region) if home is not None else None
+            position = (
+                spatial.home_snapshot(home_id)
+                if spatial is not None and isinstance(home_id, str)
+                else None
+            )
+            if position is None:
+                return event
+            payload["home_spatial"] = position
+        else:
+            return event
+        return replace(event, payload=payload)
+
     async def _deliver_to_region(self, region_name: str, event: Event) -> None:
         """Enqueue ``event`` for every subscribed agent in a region.
 
@@ -183,10 +231,67 @@ class EventBus:
         Returns:
             None.
         """
+        # Loading the agents package imports its runtime, which itself uses
+        # EventBus. Defer this dependency until the bus is fully initialized.
+        from agents.spatial_perception import spatial_agent_visible
+
+        source_id = event.source
+        affected = event.payload.get("agent_id")
+        if self.world_state.get_agent(source_id) is None and isinstance(affected, str):
+            source_id = affected
+        source_point = None
+        home_id = event.payload.get("home_id")
+        spatial = self.world_state.spatial_for_region(region_name)
+        if event.type == "agent_left_region" and event.payload.get("authoritative_spatial") is True:
+            point = event.payload.get("source_position")
+            if isinstance(point, dict):
+                x, y = point.get("x"), point.get("y")
+                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                    source_point = SpatialPoint(float(x), float(y))
+        if spatial is not None and event.type.startswith("home_") and isinstance(home_id, str):
+            plot = spatial.home_plot(home_id)
+            if plot is not None:
+                source_point = plot.door
         for agent in self.world_state.get_agents_in_region(region_name):
             queue = self.agent_queues.get(agent.id)
-            if queue is not None:
+            if queue is not None and (
+                event.target == agent.id
+                or spatial_agent_visible(
+                    self.world_state,
+                    agent.id,
+                    source_id,
+                    self.world_state.now(),
+                    source_point=source_point,
+                )
+            ):
                 await queue.put(event)
+                self._notify_activity(agent.id, event)
+
+    def _notify_activity(self, agent_id: str, event: Event) -> None:
+        meaningful = event.type in {
+            "speak",
+            "attack",
+            "agent_died",
+            "agent_paralyzed",
+            "agent_recovered",
+            "resource_transferred",
+            "mating_initiated",
+            "home_built",
+            "home_collapsed",
+            "spatial_travel_arrived",
+            "spatial_travel_cancelled",
+        }
+        if meaningful and (event.source != agent_id or event.type.startswith("spatial_travel_")):
+            self._activity.setdefault(agent_id, asyncio.Event()).set()
+
+    async def wait_for_activity(self, agent_id: str, timeout: float) -> None:
+        """Wait for a meaningful delivered event or the normal breathing delay.
+
+        Does not consume inbox events or interrupt a decision already in progress.
+        """
+        activity = self._activity.setdefault(agent_id, asyncio.Event())
+        with suppress(TimeoutError):
+            await asyncio.wait_for(activity.wait(), timeout=max(0.0, timeout))
 
     def get_events(self, agent_id: str) -> list[Event]:
         """Drain and return all queued events for an agent (non-blocking).
@@ -202,6 +307,9 @@ class EventBus:
             or its inbox is empty.
         """
         events: list[Event] = []
+        activity = self._activity.get(agent_id)
+        if activity is not None:
+            activity.clear()
         queue = self.agent_queues.get(agent_id)
         if queue is not None:
             while not queue.empty():

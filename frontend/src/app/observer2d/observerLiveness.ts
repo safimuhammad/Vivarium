@@ -28,6 +28,8 @@ export type ObserverLivenessState =
   | "behind"
   /** The transport is not carrying events right now. */
   | "disconnected"
+  /** The observer is viewing a preserved historical world. */
+  | "replay"
   /** The run finished. Nothing more is coming. */
   | "ended";
 
@@ -80,6 +82,18 @@ export function resolveObserverLiveness(
   frame: PresentedObserverFrame,
   confirmedRunStatus: string | null = null,
 ): ObserverLivenessView {
+  // Archive transport is deliberately offline because it has no event stream,
+  // but its recorded clock may still be moving. Treating a historical replay as
+  // an ended or disconnected live run makes both the label and its instructions
+  // false.
+  if (frame.source === "archive") {
+    return Object.freeze({
+      state: "replay",
+      label: "Replay",
+      detail: "Viewing a recorded moment. Return to Live to view the current world.",
+      retryable: false,
+    });
+  }
   const runStatus = confirmedRunStatus ?? frame.liveness?.runStatus;
   if (runStatus !== undefined && ENDED_RUN_STATUSES.has(runStatus)) {
     return Object.freeze({

@@ -56,6 +56,59 @@ function entry(
   };
 }
 
+function spatialTravelEntry(
+  cursor: number,
+  type: "spatial_travel_started" | "spatial_travel_cancelled" | "spatial_travel_arrived",
+): EventEnvelopeEntry {
+  const route = [{ x: 32, y: 64 }, { x: 160, y: 64 }];
+  const moving = type === "spatial_travel_started";
+  const position = moving ? route[0]! : route[1]!;
+  return {
+    cursor,
+    event: {
+      type,
+      source: "wanderer_001",
+      payload: {
+        message: "",
+        agent_id: "wanderer_001",
+        region_id: "nirvana",
+        map_id: "nirvana:map-1",
+        layout_fingerprint: "map-1",
+        travel_id: "journey-1",
+        destination_id: "foraging_grove",
+        route,
+        started_at: 100,
+        arrives_at: 120,
+        position,
+        spatial: {
+          version: 1,
+          region_id: "nirvana",
+          map_id: "nirvana:map-1",
+          layout_fingerprint: "map-1",
+          x: position.x,
+          y: position.y,
+          observed_at: 100 + cursor,
+          at_landmark: moving ? null : "foraging_grove",
+          travel: moving ? {
+            id: "journey-1",
+            destination_id: "foraging_grove",
+            route,
+            started_at: 100,
+            arrives_at: 120,
+          } : null,
+        },
+        ...(type === "spatial_travel_cancelled" ? { reason: "requested" } : {}),
+      },
+      scope: "local",
+      region: "nirvana",
+      target: null,
+      timestamp: 1_000 + cursor,
+    },
+    resolved: { actor_id: "wanderer_001", region: "nirvana" },
+    snapshot_after: null,
+  };
+}
+
 function world(exactBaseCursor: number, projectedThroughCursor: number): PresentedWorldView {
   return {
     exactBaseCursor,
@@ -65,7 +118,24 @@ function world(exactBaseCursor: number, projectedThroughCursor: number): Present
       { completeness: "exact", value: { id: "wanderer_001", name: "Joe", position: "nirvana", status: "alive" } },
       { completeness: "exact", value: { id: "wanderer_003", name: "Dick", position: "nirvana", status: "alive" } },
     ],
-    regions: [],
+    regions: [{ completeness: "exact", value: {
+      name: "nirvana",
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:map-1",
+        layout_fingerprint: "map-1",
+        tile_size: 32,
+        landmarks: [{
+          id: "foraging_grove",
+          name: "Grove of Returns",
+          x: 160,
+          y: 64,
+          affordances: ["energy"],
+        }],
+        initial_pressure: { populationHighWater: 2, builtFootprintHighWater: 0 },
+      },
+    } }],
     homes: [],
     ruins: [],
     pendingProposals: [],
@@ -178,6 +248,28 @@ describe("ChronicleKillfeed event timestamps", () => {
 });
 
 describe("ChronicleKillfeed retained history", () => {
+  it("shows spatial walking, stop, and arrival cards with a named replay route", async () => {
+    const stream = makeStream([
+      [0, [spatialTravelEntry(1, "spatial_travel_started")]],
+      [200, [spatialTravelEntry(2, "spatial_travel_cancelled")]],
+      [400, [spatialTravelEntry(3, "spatial_travel_arrived")]],
+    ]);
+    const props = defaultProps(stream);
+    await render(props);
+
+    const cardCopy = cards().map((card) => card.textContent).join(" ");
+    expect(cardCopy).toContain("Joe began walking to Grove of Returns.");
+    expect(cardCopy).toContain("Joe came to rest on the way to Grove of Returns.");
+    expect(cardCopy).toContain("Joe arrived at Grove of Returns.");
+    const route = container.querySelector('[data-event-cursor="1"] [data-travel-route]');
+    expect(route?.textContent).toContain("Nirvana");
+    expect(route?.textContent).toContain("Grove of Returns");
+    expect(route?.textContent).toContain("walking");
+
+    await act(async () => button("Replay from Joe began walking to Grove of Returns.").click());
+    expect(props.onViewCursor).toHaveBeenCalledWith(1);
+  });
+
   it("keeps every retained event available in chronological reading order", async () => {
     const entries = Array.from({ length: 28 }, (_, index) => entry(
       index + 1,
@@ -344,6 +436,34 @@ describe("ChronicleKillfeed reader controls", () => {
 
     await act(async () => button("Resume auto-scroll").click());
     expect(reader.scrollTop).toBe(500);
+  });
+
+  it("keeps following new cards when the bounded feed replaces an old card", async () => {
+    const at = (cursor: number) => defaultProps(makeStream([[0, [
+      entry(cursor, "speak", { message: `Moment ${cursor}.` },
+        { actor_id: "wanderer_001", region: "nirvana" }),
+    ]]]));
+    await render(at(1));
+    const reader = container.querySelector<HTMLDivElement>(".chronicle-killfeed__reader")!;
+    Object.defineProperties(reader, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 500 },
+    });
+    reader.scrollTop = 400;
+    Object.defineProperty(reader, "scrollHeight", { configurable: true, value: 700 });
+
+    // Retention evicted one row as another arrived: count is still one, but
+    // the newer, taller card must remain attached to the live edge.
+    await render(at(2));
+    expect(cards()).toHaveLength(1);
+    expect(reader.scrollTop).toBe(700);
+    expect(reader.dataset["autoscroll"]).toBe("on");
+
+    reader.scrollTop = 40;
+    await act(async () => reader.dispatchEvent(new Event("scroll", { bubbles: true })));
+    await render(at(3));
+    expect(reader.scrollTop).toBe(40);
+    expect(reader.dataset["autoscroll"]).toBe("paused");
   });
 });
 
@@ -560,6 +680,46 @@ describe("ChronicleKillfeed", () => {
     expect(behind?.textContent).toContain("1 event received since");
     // The feed itself re-derives: the later strike is no longer on screen.
     expect(cards()).toHaveLength(1);
+  });
+
+  it("follows a restored historical source without applying the old feed seek twice", async () => {
+    const stream = makeStream([
+      [0, [entry(1, "speak", { message: "Hold." }, { actor_id: "wanderer_001", region: "nirvana" })]],
+      [9_000, [entry(2, "attack", { damage: 30 }, { actor_id: "wanderer_001", target_id: "wanderer_003", region: "nirvana" })]],
+    ]);
+    const props = defaultProps(stream);
+    const onReturnLive = vi.fn();
+    await render(props);
+    await act(async () => button("Replay from Joe spoke at Nirvana.").click());
+    expect(cards()).toHaveLength(1);
+
+    // The session has restored its own clock and releases only evidence true
+    // at that clock. The old feed offset must not filter it a second time.
+    await render({ ...props, historicalSourceKey: "archive:recording:replay-1", onReturnLive });
+    expect(cards()).toHaveLength(2);
+    expect(container.querySelector(".chronicle-killfeed__behind")?.textContent)
+      .toContain("Recorded moment");
+    expect(container.querySelector(".chronicle-killfeed__behind")?.textContent)
+      .not.toContain("Behind live");
+    expect(container.querySelector(".chronicle-killfeed__reader")?.getAttribute("data-autoscroll"))
+      .toBe("on");
+    expect(container.querySelector(".chronicle-killfeed__still")).toBeNull();
+    await act(async () => button("Return to current view").click());
+    expect(onReturnLive).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a repeated spatial replay to its world clock even when the source key is reused", async () => {
+    const stream = makeStream([
+      [0, [spatialTravelEntry(1, "spatial_travel_started")]],
+      [9_000, [spatialTravelEntry(2, "spatial_travel_cancelled")]],
+    ]);
+    const props = { ...defaultProps(stream), historicalSourceKey: "archive:recording:replay-1" };
+    await render(props);
+    await act(async () => button("Replay from Joe began walking to Grove of Returns.").click());
+    await render(props);
+    expect(props.onViewCursor).toHaveBeenCalledWith(1);
+    // Only the authoritative replacement stream may remove the later stop.
+    expect(cards()).toHaveLength(2);
   });
 
   it("returns to the leading edge as a jump when LIVE is pressed", async () => {

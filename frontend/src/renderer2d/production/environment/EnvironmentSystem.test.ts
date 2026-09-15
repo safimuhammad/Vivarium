@@ -50,6 +50,7 @@ import {
   textFadeAlpha,
   TRANSIENT_SMOKE_SLOTS,
   type EnvironmentEffectRequest,
+  type OverlayViewport,
 } from "./EnvironmentSystem";
 
 type SpeechRequest = Extract<EnvironmentEffectRequest, { kind: "speech-bubble" }>;
@@ -267,6 +268,31 @@ describe("EnvironmentSystem", () => {
     reduced.dispose();
   });
 
+  it("does not schedule wakes for neutral ambient slots or frames whose atlas lease is absent", () => {
+    const recipe = recipeFor(world[0]!);
+    const missingLease = new EnvironmentSystem({
+      regionId: recipe.regionId,
+      recipe,
+      condition: { energyRatio: 0.7, materialsRatio: 0.5 },
+      manifest: PRODUCTION_ASSET_MANIFEST,
+      atlasLeases: new Map(),
+    });
+    missingLease.advanceTo(2_000);
+    expect(missingLease.nextDeadlineMs()).toBeNull();
+    missingLease.dispose();
+
+    const ash = recipeFor(world[3]!);
+    const first = ash.animatedEnvironment[0]!;
+    const neutralOnly = {
+      ...ash,
+      animatedEnvironment: [{ ...first, kind: "water" as const }],
+    } satisfies RegionMapRecipeV1;
+    const neutral = createSystem(neutralOnly);
+    neutral.advanceTo(2_000);
+    expect(neutral.nextDeadlineMs()).toBeNull();
+    neutral.dispose();
+  });
+
   it("owns no RAF, timer, listener, or hidden global clock", () => {
     const source = readFileSync(
       resolve(process.cwd(), "src/renderer2d/production/environment/EnvironmentSystem.ts"),
@@ -321,6 +347,54 @@ describe("EnvironmentSystem", () => {
     system.draw(canvas.context, "air");
 
     expect(canvas.draws.some((draw) => draw[5] === destination.x && draw[6] === destination.y)).toBe(false);
+    system.dispose();
+  });
+
+  it("culls ambient water and air frames outside the world viewport while retaining a one-pixel edge intersection", () => {
+    const recipe = recipeFor(world[1]!);
+    const system = createSystem(recipe);
+    const water = recipe.animatedEnvironment.find(({ kind }) => kind === "water")!;
+    const air = recipe.animatedEnvironment.find(({ kind }) => kind !== "water")!;
+    const waterAt = { x: water.tile.column * 32, y: water.tile.row * 32 };
+    const airAt = { x: air.tile.column * 32, y: air.tile.row * 32 };
+    const waterFrame = PRODUCTION_ASSET_MANIFEST.regions[recipe.kit].animatedFrames[water.kind];
+    const airFrame = PRODUCTION_ASSET_MANIFEST.regions[recipe.kit].animatedFrames[air.kind];
+
+    const waterEdge = recordingContext();
+    system.draw(waterEdge.context, "ground", viewportAt({
+      x: waterAt.x + waterFrame.rect.width - 1,
+      y: waterAt.y + waterFrame.rect.height - 1,
+      width: 1,
+      height: 1,
+    }));
+    expect(waterEdge.draws.some((draw) => draw[5] === waterAt.x && draw[6] === waterAt.y)).toBe(true);
+
+    const waterOutside = recordingContext();
+    system.draw(waterOutside.context, "ground", viewportAt({
+      x: waterAt.x + waterFrame.rect.width + 1,
+      y: waterAt.y + waterFrame.rect.height + 1,
+      width: 1,
+      height: 1,
+    }));
+    expect(waterOutside.draws.some((draw) => draw[5] === waterAt.x && draw[6] === waterAt.y)).toBe(false);
+
+    const airEdge = recordingContext();
+    system.draw(airEdge.context, "air", viewportAt({
+      x: airAt.x + airFrame.rect.width - 1,
+      y: airAt.y + airFrame.rect.height - 1,
+      width: 1,
+      height: 1,
+    }));
+    expect(airEdge.draws.some((draw) => draw[5] === airAt.x && draw[6] === airAt.y)).toBe(true);
+
+    const airOutside = recordingContext();
+    system.draw(airOutside.context, "air", viewportAt({
+      x: airAt.x + airFrame.rect.width + 1,
+      y: airAt.y + airFrame.rect.height + 1,
+      width: 1,
+      height: 1,
+    }));
+    expect(airOutside.draws.some((draw) => draw[5] === airAt.x && draw[6] === airAt.y)).toBe(false);
     system.dispose();
   });
 
@@ -852,6 +926,101 @@ describe("EnvironmentSystem", () => {
     expect(box.x).toBeGreaterThan(200);
     expect(system.diagnostics().activeMarkers).toBe(1);
     system.advanceTo(ANCHOR_DEPARTURE_GRACE_MS * 4);
+    system.dispose();
+  });
+
+  it("focuses moved owner, target, mark, and gather anchors at their live positions", () => {
+    const system = createSystem(recipeFor(world[0]!));
+    const emittedOwner = { x: 90, y: 120 };
+    const emittedTarget = { x: 240, y: 260 };
+    const emittedMarkOwner = { x: 300, y: 320 };
+    const emittedGatherOwner = { x: 400, y: 420 };
+    const liveOwner = { x: 1_000, y: 900 };
+    const liveTarget = { x: 1_100, y: 800 };
+    const liveMarkOwner = { x: 1_200, y: 700 };
+    const liveGatherOwner = { x: 1_300, y: 600 };
+    system.setAnchorPositions(new Map([
+      ["aster", emittedOwner],
+      ["briar", emittedTarget],
+      ["cedar", emittedMarkOwner],
+      ["dune", emittedGatherOwner],
+    ]));
+
+    system.emit({
+      ...speech("aster", "The bridge is lifting.", "briar"),
+      at: emittedOwner,
+      thread: {
+        to: emittedTarget,
+        toId: "briar",
+        mode: "aim",
+        accent: "#a35f69",
+        hue: "#43607f",
+      },
+    }, 0);
+    system.emit({
+      kind: "event-mark",
+      at: emittedMarkOwner,
+      ownerId: "cedar",
+      glyph: "propose",
+      family: "bond",
+      tier: "beat",
+      threads: [{
+        to: emittedTarget,
+        toId: "briar",
+        mode: "aim",
+        accent: "#a35f69",
+        hue: "#43607f",
+      }],
+    }, 0);
+    system.emit({ kind: "event-gather", at: emittedGatherOwner, ownerId: "dune" }, 0);
+    system.setAnchorPositions(new Map([
+      ["aster", liveOwner],
+      ["briar", liveTarget],
+      ["cedar", liveMarkOwner],
+      ["dune", liveGatherOwner],
+    ]));
+
+    expect(system.overlayFocusRect()).toEqual({ x: 1_000, y: 600, width: 300, height: 300 });
+    system.dispose();
+  });
+
+  it("suppresses missing-being anchors while retaining an unnamed home's emitted fallback", () => {
+    const system = createSystem(recipeFor(world[0]!));
+    const liveOwner = { x: 600, y: 700 };
+    const home = { x: 900, y: 880 };
+    system.setAnchorPositions(new Map([["briar", liveOwner]]));
+
+    // The live owner remains the only valid end of this thread: its target has
+    // left the published roster, so the target's emitted point is not a focus
+    // anchor any more.
+    system.emit({
+      ...speech("briar", "The missing addressee is gone.", "missing-target"),
+      at: { x: 80, y: 80 },
+      thread: {
+        to: { x: 120, y: 100 },
+        toId: "missing-target",
+        mode: "aim",
+        accent: "#a35f69",
+        hue: "#43607f",
+      },
+    }, 0);
+    // These owners are also absent, so their authored points must not pull the
+    // camera toward grass where no being is standing.
+    system.emit({ ...speech("aster", "I left."), at: { x: 60, y: 60 } }, 0);
+    system.emit({ kind: "event-gather", at: { x: 180, y: 180 }, ownerId: "cedar" }, 0);
+    // Structures have no live movement to follow; an unnamed home keeps its
+    // emitted doorstep point as the honest fallback.
+    system.emit({
+      kind: "event-mark",
+      at: home,
+      ownerId: "shelter_004",
+      ownerKind: "structure",
+      glyph: "build",
+      family: "dwell",
+      tier: "beat",
+    }, 0);
+
+    expect(system.overlayFocusRect()).toEqual({ x: 600, y: 700, width: 300, height: 180 });
     system.dispose();
   });
 
@@ -1724,6 +1893,16 @@ function createSystem(
     atlasLeases: new Map([[atlasId, lease]]),
     reducedMotion,
   });
+}
+
+function viewportAt(rect: Rect): OverlayViewport {
+  return {
+    zoom: 1,
+    originX: -rect.x,
+    originY: -rect.y,
+    width: rect.width,
+    height: rect.height,
+  };
 }
 
 /**

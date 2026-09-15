@@ -164,6 +164,29 @@ export function createProductionSceneCommandResolver(
     }
     beingNames = names;
   };
+  /** True only for an actor whose feet come from a validated backend route. */
+  const isSpatialActor = (frame: PresentedObserverFrame, actorId: string): boolean => frame.world.agents
+    .some(({ value }) => value.id === actorId && value.spatial !== undefined);
+  /**
+   * Keep stationary expression/action commands, but erase every choreography
+   * mechanism that would claim a spatial actor's feet or hide its real body.
+   * The scene graph repeats this as its authoritative defense-in-depth gate.
+   */
+  const withoutSpatialRelocation = (
+    frame: PresentedObserverFrame,
+    commands: readonly ProductionSceneCommand[],
+  ): readonly ProductionSceneCommand[] => commands.filter((command) => {
+    if (command.kind === "actor") {
+      if (!isSpatialActor(frame, command.actorId)) return true;
+      return command.command.kind !== "move"
+        && command.command.kind !== "reposition"
+        && command.command.kind !== "set-offset";
+    }
+    if (command.kind === "presence-fade" || command.kind === "retain-traveler"
+      || command.kind === "stage-arrival") return !isSpatialActor(frame, command.actorId);
+    if (command.kind === "placement-hint") return !isSpatialActor(frame, command.agentId);
+    return true;
+  });
   const raisedUtterances = new Set<string>();
   const rememberUtterance = (key: string): void => {
     raisedUtterances.add(key);
@@ -285,7 +308,7 @@ export function createProductionSceneCommandResolver(
         return overlay.length === 0 ? null : deepFreeze({
           identity: identityOf(frame),
           sceneToken: lastSceneToken,
-          commands: overlay,
+          commands: withoutSpatialRelocation(frame, overlay),
         });
       }
       const completed = activeExecution;
@@ -293,13 +316,13 @@ export function createProductionSceneCommandResolver(
       return deepFreeze({
         identity: identityOf(frame),
         sceneToken: completed.sceneToken,
-        commands: [
+        commands: withoutSpatialRelocation(frame, [
           {
             kind: "clear-scene",
             commandId: `${completed.programId}:clear-scene`,
           },
           ...overlay,
-        ],
+        ]),
       });
     }
     if (
@@ -343,7 +366,7 @@ export function createProductionSceneCommandResolver(
       return overlay.length === 0 ? null : deepFreeze({
         identity: identityOf(frame),
         sceneToken: execution.sceneToken,
-        commands: overlay,
+        commands: withoutSpatialRelocation(frame, overlay),
       });
     }
     const commands: ProductionSceneCommand[] = [
@@ -374,7 +397,7 @@ export function createProductionSceneCommandResolver(
     // resolver's prior, permissive behaviour.
     const spreadGrid = scene.regionId === null ? null : options.getNavigationGrid?.(scene.regionId) ?? null;
     const spreadTargets = spreadCoincidentTargets(
-      relocationTargets(scene.actorIntents),
+      relocationTargets(scene.actorIntents.filter((intent) => !isSpatialActor(frame, intent.actorId))),
       spreadGrid === null ? () => true : (point) => groundTerrainPointIsOpen(spreadGrid, point),
     );
     scene.actorIntents.forEach((intent, index) => {
@@ -436,7 +459,7 @@ export function createProductionSceneCommandResolver(
     return deepFreeze({
       identity: identityOf(frame),
       sceneToken: execution.sceneToken,
-      commands,
+      commands: withoutSpatialRelocation(frame, commands),
     });
   };
 }

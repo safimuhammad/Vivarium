@@ -42,6 +42,10 @@ describe("Nirvana exact static-scene provider", () => {
     // layer with macro landmarks now, foot-sorted together.
     const sceneryCount = chunks.reduce((total, chunk) => total + chunk.scenery.length, 0);
     const sceneryLayerCount = landmarkVisualCount + sceneryCount;
+    // The painter's authored grounding pass emits one deterministic image-only
+    // accent for each eligible scenery placement. Keep this explicit so a
+    // missing/duplicated accent changes the exact-plan contract visibly.
+    const groundingAccentCount = 230;
 
     expect(NIRVANA_STATIC_SCENE_PROVIDER.kind).toBe("nirvana-v2");
     // owner-authorised re-baseline, plan §P3 — landmark recovery
@@ -52,7 +56,9 @@ describe("Nirvana exact static-scene provider", () => {
     expect(plan.cacheIdentity).toBe(
       `nirvana-v2:2:${recipe.identityHash}:${recipe.presentationProfile!.staticSceneHash}`,
     );
-    expect(plan.operations).toHaveLength(terrainLayerCount + sceneryLayerCount + 64);
+    expect(plan.operations.filter(({ stableId }) => stableId.startsWith("grounding:")))
+      .toHaveLength(groundingAccentCount);
+    expect(plan.operations).toHaveLength(terrainLayerCount + sceneryLayerCount + groundingAccentCount + 64);
     expect(plan.operations.slice(0, terrainBaseCount).every(({ stableId, layer }) =>
       stableId.startsWith("terrain:") && layer === "terrain")).toBe(true);
     expect(plan.operations.slice(
@@ -72,9 +78,9 @@ describe("Nirvana exact static-scene provider", () => {
       stableId.startsWith("road:") && layer === "terrain")).toBe(true);
     expect(plan.operations.slice(
       terrainLayerCount,
-      terrainLayerCount + sceneryLayerCount,
+      terrainLayerCount + sceneryLayerCount + groundingAccentCount,
     ).every(({ stableId, layer, pivotY }) =>
-      (stableId.startsWith("landmark:") || stableId.startsWith("scenery:"))
+      (stableId.startsWith("landmark:") || stableId.startsWith("scenery:") || stableId.startsWith("grounding:"))
       && layer === "scenery" && pivotY !== undefined)).toBe(true);
     expect(plan.operations.slice(-64).every(({ stableId, layer }) =>
       stableId.startsWith("continuation:") && layer === "continuation")).toBe(true);

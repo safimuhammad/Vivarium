@@ -1055,6 +1055,96 @@ describe("PresentationSession", () => {
     harness.session.dispose();
   });
 
+  it("keeps legacy snapshots free of the spatial playback clock", async () => {
+    const client = new FakeClient(
+      makeRun({ run_id: "run-a", event_cursor: 0 }),
+      [makeWorld({ run_id: "run-a", event_cursor: 0 })],
+    );
+    const harness = liveHarness(client);
+    await harness.session.ready;
+
+    // The legacy fixture has no exporter-owned Nirvana map.  Attaching a route
+    // clock would turn unrelated renderer retries into new observer revisions.
+    expect(harness.session.getFrame().spatialPlayback).toBeUndefined();
+    harness.session.controls().setSpeed(2);
+    expect(harness.session.getFrame().spatialPlayback).toBeUndefined();
+
+    harness.session.dispose();
+  });
+
+  it("publishes the route clock only from an exporter-owned spatial map", async () => {
+    const base = makeWorld({ run_id: "run-spatial", event_cursor: 0 });
+    const snapshot: WorldSnapshot = {
+      ...base,
+      event_cursor: 0,
+      agents: [{
+        ...base.agents[0]!,
+        position: "nirvana",
+        home_id: null,
+        spatial: {
+          version: 1,
+          region_id: "nirvana",
+          map_id: "nirvana:test-layout",
+          layout_fingerprint: "test-layout",
+          x: 20,
+          y: 40,
+          observed_at: base.world_time,
+          at_landmark: null,
+          travel: {
+            id: "journey-east",
+            destination_id: "east-gate",
+            route: [{ x: 20, y: 40 }, { x: 120, y: 40 }],
+            started_at: base.world_time,
+            arrives_at: base.world_time + 20,
+          },
+        },
+      }],
+      regions: [{
+        ...base.regions[0]!,
+        name: "nirvana",
+        connections: [],
+        spatial: {
+          version: 1,
+          region_id: "nirvana",
+          map_id: "nirvana:test-layout",
+          layout_fingerprint: "test-layout",
+          tile_size: 32,
+          landmarks: [{ id: "east-gate", name: "East gate", x: 120, y: 40, affordances: ["travel"] }],
+          initial_pressure: { populationHighWater: 1, builtFootprintHighWater: 0 },
+        },
+      }],
+      homes: [],
+      ruins: [],
+      pending_proposals: [],
+      region_pressure: [{
+        region: "nirvana",
+        population_high_water: 1,
+        built_footprint_high_water: 0,
+      }],
+    };
+    const client = new FakeClient(
+      makeRun({ run_id: "run-spatial", event_cursor: 0 }),
+      [snapshot],
+    );
+    const harness = liveHarness(client);
+    await harness.session.ready;
+
+    expect(harness.session.getFrame().spatialPlayback).toEqual({
+      sampledAt: base.world_time,
+      speed: 1,
+      paused: false,
+    });
+    harness.clock.advanceBy(2_000);
+    harness.session.controls().pause();
+    expect(harness.session.getFrame().spatialPlayback).toEqual({
+      sampledAt: base.world_time + 2,
+      speed: 1,
+      paused: true,
+    });
+
+    harness.session.dispose();
+  });
+
   it("validates public reset identity, revision monotonicity, and one replacement stream", async () => {
     const client = new FakeClient(
       makeRun({ run_id: "run-a", event_cursor: 5 }),
@@ -2963,6 +3053,69 @@ describe("PresentationSession", () => {
     }
   });
 
+  it("replays an authoritative start into the historical world and gates its later stop by the replay clock", () => {
+    const snapshot = spatialReplaySnapshot("spatial-replay", 0, 0);
+    const start = spatialReplayEntry("spatial_travel_started", 1, 10);
+    const stop = spatialReplayEntry("spatial_travel_cancelled", 2, 20);
+    const window: ReplayPresentationWindow = {
+      sourceKey: "archive:spatial-replay:line-1:replay-0-1",
+      checkpointIndex: 0,
+      checkpointLineNumber: 1,
+      checkpointReason: "recorded snapshot",
+      checkpointWorldTime: 0,
+      firstCursor: 0,
+      lastCursor: 1,
+      snapshot,
+      entries: [start],
+      historical: {
+        targetCursor: 1,
+        targetWorldTime: 10,
+        continuation: [stop],
+      },
+    };
+    const clock = createManualPresentationClock();
+    const session = createArchivePresentationSession({
+      window,
+      clockFactory: () => clock,
+      runtimeFactory: () => new ClocklessRuntime(),
+    });
+
+    // This is a real archive presentation, not a callback spy: its model has
+    // already applied only the selected start and the route clock is anchored
+    // at the card's recorded time rather than the checkpoint's time.
+    session.controls().pause();
+    expect(session.getFrame()).toMatchObject({
+      source: "archive",
+      presentedCursor: 1,
+      spatialPlayback: { sampledAt: 10, paused: true },
+    });
+    expect(agentRecord(session.getFrame().world, "agent_001")?.value.spatial).toMatchObject({
+      x: 20,
+      y: 40,
+      travel: { id: "journey-east", destination_id: "east-gate" },
+    });
+
+    clock.advanceBy(60_000);
+    expect(session.getFrame().spatialPlayback).toMatchObject({ sampledAt: 10, paused: true });
+    expect(agentRecord(session.getFrame().world, "agent_001")?.value.spatial?.travel).not.toBeNull();
+
+    session.controls().resume();
+    session.controls().setSpeed(2);
+    clock.advanceBy(4_999);
+    expect(agentRecord(session.getFrame().world, "agent_001")?.value.spatial?.travel).not.toBeNull();
+    clock.advanceBy(1);
+    expect(session.getFrame()).toMatchObject({
+      presentedCursor: 2,
+      spatialPlayback: { sampledAt: 20, speed: 2, paused: false },
+    });
+    expect(agentRecord(session.getFrame().world, "agent_001")?.value.spatial).toMatchObject({
+      x: 120,
+      y: 40,
+      travel: null,
+    });
+    session.dispose();
+  });
+
   it("buffers reentrant session emission and stops peer notification after terminal disposal", async () => {
     const client = new FakeClient(
       makeRun({ run_id: "run-a", event_cursor: 4 }),
@@ -3690,6 +3843,103 @@ function archiveWindow(runId: string, cursor: number, lastCursor: number): Repla
 
 function archiveSource(runId: string, cursor: number, lastCursor: number): string {
   return `archive:${encodeURIComponent(runId)}:line-1:window-${cursor}-${lastCursor}`;
+}
+
+function spatialReplaySnapshot(
+  runId: string,
+  eventCursor: number,
+  worldTime: number,
+): WorldSnapshot {
+  const base = makeWorld({ run_id: runId, event_cursor: eventCursor, world_time: worldTime });
+  return {
+    ...base,
+    agents: [{
+      ...base.agents[0]!,
+      position: "nirvana",
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        x: 20,
+        y: 40,
+        observed_at: 0,
+        at_landmark: null,
+        travel: null,
+      },
+    }],
+    regions: [{
+      ...base.regions[0]!,
+      name: "nirvana",
+      connections: [],
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        tile_size: 32,
+        landmarks: [{ id: "east-gate", name: "East Gate", x: 120, y: 40, affordances: ["travel"] }],
+        initial_pressure: { populationHighWater: 1, builtFootprintHighWater: 0 },
+      },
+    }],
+    homes: [],
+    ruins: [],
+    region_pressure: [{ region: "nirvana", population_high_water: 1, built_footprint_high_water: 0 }],
+    pending_proposals: [],
+  };
+}
+
+function spatialReplayEntry(
+  type: "spatial_travel_started" | "spatial_travel_cancelled",
+  cursor: number,
+  timestamp: number,
+): EventEnvelopeEntry {
+  const traveling = type === "spatial_travel_started";
+  const position = traveling ? { x: 20, y: 40 } : { x: 120, y: 40 };
+  const route = [{ x: 20, y: 40 }, { x: 120, y: 40 }];
+  return {
+    cursor,
+    event: {
+      type,
+      source: "agent_001",
+      scope: "local",
+      region: "nirvana",
+      target: null,
+      timestamp,
+      payload: {
+        message: "Aster follows the east path.",
+        agent_id: "agent_001",
+        region_id: "nirvana",
+        map_id: "nirvana:test-layout",
+        layout_fingerprint: "test-layout",
+        travel_id: "journey-east",
+        destination_id: "east-gate",
+        route,
+        started_at: 10,
+        arrives_at: 20,
+        position,
+        spatial: {
+          version: 1,
+          region_id: "nirvana",
+          map_id: "nirvana:test-layout",
+          layout_fingerprint: "test-layout",
+          ...position,
+          observed_at: timestamp,
+          at_landmark: traveling ? null : "east-gate",
+          travel: traveling ? {
+            id: "journey-east",
+            destination_id: "east-gate",
+            route,
+            started_at: 10,
+            arrives_at: 20,
+          } : null,
+        },
+        ...(traveling ? {} : { reason: "stopped" }),
+      },
+    },
+    resolved: { actor_id: "agent_001", region: "nirvana" },
+    snapshot_after: null,
+  };
 }
 
 function checkpoint(line: number, snapshot: WorldSnapshot): ClassifiedCheckpointRecord {

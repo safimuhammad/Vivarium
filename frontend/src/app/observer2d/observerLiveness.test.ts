@@ -8,6 +8,19 @@ import { makeWorld } from "../../test/fixtures";
 import { resolveObserverLiveness } from "./observerLiveness";
 
 describe("resolveObserverLiveness", () => {
+  it("calls an isolated historical world a replay even if its recorded run ended", () => {
+    expect(resolveObserverLiveness(frame({
+      source: "archive",
+      connection: "offline",
+      liveness: liveness({ runStatus: "stopped" }),
+    }))).toEqual({
+      state: "replay",
+      label: "Replay",
+      detail: "Viewing a recorded moment. Return to Live to view the current world.",
+      retryable: false,
+    });
+  });
+
   it("reads a finished run as ended whatever the socket is doing", () => {
     expect(resolveObserverLiveness(frame({
       liveness: liveness({ runStatus: "stopped" }),
@@ -111,6 +124,7 @@ function liveness(
 }
 
 function frame(options: {
+  source?: PresentedObserverFrame["source"];
   connection?: PresentedObserverFrame["transport"]["connection"];
   retryable?: boolean;
   backlogState?: PresentedObserverFrame["backlog"]["state"];
@@ -124,7 +138,7 @@ function frame(options: {
     revision: 1,
     firstCursor: 4,
     lastCursor: 4,
-    source: "live",
+    source: options.source ?? "live",
     ingestedCursor: 4,
     presentedCursor: 4,
     world: {

@@ -236,7 +236,8 @@ export interface ProductionAssetManifest {
   readonly budgets: Readonly<{
     coreCompressedMax: 786_432;
     regionCompressedMax: 196_608;
-    activeCompressedMax: 1_310_720;
+    /** Native allowance plus explicitly budgeted optional scene-art extensions. */
+    activeCompressedMax: number;
     currentUiCompressedBytes: number;
     currentUiDecodedBytes: number;
     coreMetadataCompressedBytes: number;
@@ -984,9 +985,9 @@ const BEING_CHIBI_ATLAS: PackedAtlasData = {
   cellHeight: 48,
   columns: 5,
   rows: 28,
-  compressedBytes: 13136,
+  compressedBytes: 13269,
   decodedBytes: 591360,
-  sha256: "119e71437fcf626aa28f866565f2fa3a0a433aa3016f62bc9c6e018122052d27",
+  sha256: "bb9ff63d872687cbc157555b3e898626440d60cc287213d45e6ecec25d018fde",
 };
 
 const allPackedData: readonly PackedAtlasData[] = [

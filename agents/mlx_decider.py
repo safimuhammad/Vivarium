@@ -264,7 +264,7 @@ class _NativeMlxBackend:
         tools: list[ToolSchema],
         cancelled: threading.Event,
     ) -> Decision:
-        """Load once, generate one response, and parse it without network access."""
+        """Generate offline, retrying one malformed response with unchanged input."""
         self._raise_if_cancelled(cancelled)
         native_model, tokenizer = self._ensure_loaded(model)
         self._raise_if_cancelled(cancelled)
@@ -295,48 +295,74 @@ class _NativeMlxBackend:
             del processed, total
             self._raise_if_cancelled(cancelled)
 
-        stream = self._bindings.stream_generate(
-            native_model,
-            tokenizer,
-            prompt=prompt,
-            max_tokens=min(output_limit, available_output),
-            sampler=sampler,
-            logits_processors=logits_processors,
-            prompt_progress_callback=check_prefill_cancelled,
-        )
-        segments: list[str] = []
-        prompt_tokens = 0
-        completion_tokens = 0
-        try:
-            for response in stream:
-                self._raise_if_cancelled(cancelled)
-                segments.append(response.text)
-                prompt_tokens = response.prompt_tokens
-                completion_tokens = response.generation_tokens
-        finally:
-            close = getattr(stream, "close", None)
-            if callable(close):
-                close()
-
+        # A malformed answer has executed no tools. Give native generation one
+        # fresh attempt with exactly the same input, without repairing delimiters
+        # or promoting unfinished reasoning into speech or executable actions.
         parser = cast(ToolParser | None, getattr(tokenizer, "tool_parser", None))
-        # Qwen's thinking template already placed the opener in the prompt. Restore
-        # exactly that prefix for strict parsing; a missing close must fail rather
-        # than expose unfinished reasoning as speech.
-        raw = (_THINK_START if self._enable_thinking else "") + "".join(segments)
-        decision = parse_mlx_response(
-            raw,
-            tools=tools,
-            tool_parser=parser,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
+        attempt = 0
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        while True:
+            self._raise_if_cancelled(cancelled)
+            attempt += 1
+            stream = self._bindings.stream_generate(
+                native_model,
+                tokenizer,
+                prompt=prompt,
+                max_tokens=min(output_limit, available_output),
+                sampler=sampler,
+                logits_processors=logits_processors,
+                prompt_progress_callback=check_prefill_cancelled,
+            )
+            segments: list[str] = []
+            prompt_tokens = 0
+            completion_tokens = 0
+            try:
+                for response in stream:
+                    self._raise_if_cancelled(cancelled)
+                    segments.append(response.text)
+                    prompt_tokens = response.prompt_tokens
+                    completion_tokens = response.generation_tokens
+            finally:
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    close()
+
+            total_prompt_tokens += prompt_tokens
+            total_completion_tokens += completion_tokens
+            # Qwen's template places the opener in the prompt. Only that prefix
+            # is restored; missing or duplicate delimiters remain invalid.
+            raw = (_THINK_START if self._enable_thinking else "") + "".join(segments)
+            try:
+                decision = parse_mlx_response(
+                    raw,
+                    tools=tools,
+                    tool_parser=parser,
+                    prompt_tokens=total_prompt_tokens,
+                    completion_tokens=total_completion_tokens,
+                )
+            except MlxResponseError as error:
+                logger.warning(
+                    "MLX response format rejected attempt=%d/2 error=%s "
+                    "think_open=%d think_close=%d tool_open=%d tool_close=%d",
+                    attempt,
+                    error,
+                    raw.count(_THINK_START),
+                    raw.count(_THINK_END),
+                    raw.count(_TOOL_CALL_START),
+                    raw.count(_TOOL_CALL_END),
+                )
+                if attempt >= 2:
+                    raise
+                continue
+            break
         logger.info(
             "MLX decision thinking=%s tools=%s text_chars=%d prompt_tokens=%d completion_tokens=%d",
             self._enable_thinking,
             [call.name for call in decision.tool_calls],
             len(decision.text),
-            prompt_tokens,
-            completion_tokens,
+            total_prompt_tokens,
+            total_completion_tokens,
         )
         return decision
 

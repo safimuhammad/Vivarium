@@ -16,7 +16,11 @@ import {
   type LayeredHumanLayerSnapshot,
   type ProductionActorSignal,
 } from "./LayeredHumanActor";
-import type { ProductionHumanActor, ProductionHumanActorSnapshot } from "./ProductionHumanActor";
+import type {
+  AuthoritativeMotionSample,
+  ProductionHumanActor,
+  ProductionHumanActorSnapshot,
+} from "./ProductionHumanActor";
 
 type TestLease = ProductionAssetLease<ImageBitmap> & { readonly release: Mock<() => void> };
 
@@ -95,6 +99,8 @@ function fakeSnapshot(id: string): ProductionHumanActorSnapshot {
 class FakeProductionHumanActor implements ProductionHumanActor {
   readonly appliedCommands: HumanPrimitiveCommand[] = [];
   disposeCalls = 0;
+
+  sampleAuthoritativeMotion(_sample: AuthoritativeMotionSample, _nowMs: number): void {}
 
   apply(command: HumanPrimitiveCommand, _nowMs: number): void {
     this.appliedCommands.push(command);

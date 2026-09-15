@@ -148,4 +148,47 @@ describe("ProductionCanvasSceneFactory", () => {
     expect(sourceY).toBe(expectedRect.y);
     actor.dispose();
   });
+
+  it("keeps the newborn's visual identity when a later persona-bearing record arrives", () => {
+    const id = "newborn-persona-arrival";
+    const drawRecord = (persona: string | undefined) => {
+      let sourceX = 0;
+      let sourceY = 0;
+      let accessoryPixels = 0;
+      const context = {
+        imageSmoothingEnabled: true,
+        globalCompositeOperation: "source-over" as GlobalCompositeOperation,
+        globalAlpha: 1,
+        fillStyle: "#000000",
+        save: (): void => undefined,
+        restore: (): void => undefined,
+        translate: (): void => undefined,
+        scale: (): void => undefined,
+        rotate: (): void => undefined,
+        drawImage: (_image: CanvasImageSource, ...values: number[]): void => {
+          sourceX = values[0]!;
+          sourceY = values[1]!;
+        },
+        fillRect: (): void => {
+          accessoryPixels += 1;
+        },
+      } as unknown as CanvasRenderingContext2D;
+      const actor = PRODUCTION_SCENE_FACTORIES.createActor({
+        record: { completeness: "exact", value: { id, name: "Newborn", persona } },
+        position: { x: 0, y: 0 },
+        facing: "south",
+        manifest: PRODUCTION_ASSET_MANIFEST,
+        atlasLeases: new Map([[BEING_CHIBI_ATLAS_ID, { value: {} as ImageBitmap, release: vi.fn() }]]),
+        reducedMotion: false,
+      });
+      actor.draw(context);
+      actor.dispose();
+      return { sourceX, sourceY, accessoryPixels };
+    };
+
+    const projected = drawRecord(undefined);
+    const exact = drawRecord("A patient cartographer");
+    expect(exact).toEqual(projected);
+    expect(projected.accessoryPixels).toBeGreaterThan(0);
+  });
 });

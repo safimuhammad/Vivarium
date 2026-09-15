@@ -28,10 +28,11 @@ import {
   type ObserverShellRuntimeOptions,
 } from "../observer2d/observerShellRuntime";
 import {
+  createRecordedCheckpointFeedHub,
   createRecordedRunBridge,
   createRecordedRunDriver,
+  createRecordedReplayArtifactClient,
   fetchRecordedRun,
-  inertRecordedCheckpointFeed,
   type RecordedRun,
 } from "./recordedRunClient";
 
@@ -84,26 +85,31 @@ export function RecordedRunObserver({
       (recording) => {
         if (cancelled) return;
         const bridge = createRecordedRunBridge(recording.run, recording.firstSnapshot);
+        const checkpointFeeds = createRecordedCheckpointFeedHub(recording);
         const driver = createRecordedRunDriver({
-          recording, bridge, rate,
-          onComplete: () => {
+          recording, bridge, checkpointFeed: checkpointFeeds, rate,
+          onComplete: (worldTime) => {
             if (cancelled) return;
-            const last = recording.entries.at(-1);
-            bridge.heartbeat(last?.event.timestamp ?? recording.firstSnapshot.world_time, "stopped");
+            bridge.heartbeat(worldTime, "stopped");
             setFinished(true);
           },
         });
+        const recordedReplayClient = createRecordedReplayArtifactClient(recording);
         const createRuntime: CreateRuntime = (options) => createObserverShellRuntime({
           ...options,
           createLiveBundle: () => createProductionObserverSession({
             clientFactory: () => bridge.client,
-            checkpointFeedFactory: inertRecordedCheckpointFeed,
+            checkpointFeedFactory: () => checkpointFeeds.createFeed(),
           }),
+          ...(recordedReplayClient === null
+            ? {}
+            : { createReplayArtifactClient: () => recordedReplayClient }),
         });
         const timer = window.setTimeout(() => driver.start(), DRIVER_START_DELAY_MS);
         releaseResources = (): void => {
           window.clearTimeout(timer);
           driver.stop();
+          checkpointFeeds.dispose();
           bridge.dispose();
         };
         setState({ status: "ready", createRuntime });

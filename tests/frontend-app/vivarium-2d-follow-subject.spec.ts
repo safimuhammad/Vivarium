@@ -8,9 +8,9 @@
  *    pursuit vetoed itself whenever the camera was already the viewer's (`free`), which it is
  *    after any pan and after every Atlas island click, because choosing a PLACE requests Free by
  *    design. The veto was silent: no request reached the renderer and no notice was posted.
- * 2. *"for the automatic, can we for now establish that it is not allowed to move region but
- *    stick within the region"* — automatic framing was carrying the camera between regions on
- *    every beat.
+ * 2. Automatic framing previously moved between regions on every beat. The current
+ *    Quiet Observatory policy holds routine activity for 30 seconds, then permits
+ *    regional visits; important events have an earlier cut and returns have a cooldown.
  *
  * Both are live-wiring defects, and the shell's own unit suite mocks the stage away, so it was
  * green throughout. These run the real shell, the real stage and the real production Canvas
@@ -159,43 +159,43 @@ test.describe("follow subject", () => {
     await fixture.dispose();
   });
 
-  test("automatic framing holds the region the viewer is in, while their own travel still moves it", async ({ page }) => {
-    test.setTimeout(180_000);
+  test("Auto holds the viewed region for routine activity, then may visit a later event", async ({ page }) => {
+    test.setTimeout(90_000);
     const errors = collectErrors(page);
     const fixture = await bootChronicle(page);
-
     await observeRegionFromAtlas(page, "warm_springs");
-    // Back to the director, by the canvas's own Story shortcut. Handing framing back must not
-    // itself relocate the viewer: returning to Automatic means "you choose what to show me
-    // HERE", not "take me to wherever the story is".
     await page.getByLabel("Vivarium world").focus();
+    const returnedToAutoAt = Date.now();
     await page.keyboard.press("s");
     await settle(page);
-    await expect(page.locator(".vivarium-2d-app")).toHaveAttribute("data-camera-mode", "story");
-    expect(await readProbe(page)).toMatchObject({
-      visibleRegionId: "warm_springs",
-      worldNavigation: { scope: "region" },
-    });
 
-    // Five beats elsewhere. Under automatic framing the camera holds: the Chronicle already
-    // carries every region's events, so nothing is lost by staying where the viewer chose to be.
-    const reached = await playBeatsElsewhere(page, fixture, (probe, cursor) => {
-      expect(probe, `a beat at cursor ${cursor} moved the director's camera`).toMatchObject({
+    // Only routine speech/resource events: cursor 3 is an important home event,
+    // which may legitimately cut after eight seconds under the current policy.
+    await fixture.dispatchRange(1, 2);
+    let reached = 0;
+    while (Date.now() - returnedToAutoAt < 29_000) {
+      expect(await readProbe(page)).toMatchObject({
         visibleRegionId: "warm_springs",
         camera: { mode: "story" },
       });
-    });
-    expect(reached, "the beats must actually have played")
-      .toBeGreaterThanOrEqual(MINIMUM_BEATS_PERFORMED);
+      reached = Math.max(reached, Number(
+        await page.locator(".vivarium-2d-app").getAttribute("data-presented-cursor") ?? 0,
+      ));
+      await expect(page.locator(".presentation-world-stage__failure")).toHaveCount(0);
+      await settle(page);
+    }
+    expect(reached, "routine events really played while Auto held the view").toBe(2);
 
-    await page.screenshot({
-      path: path.join(OUTPUT_DIRECTORY, "automatic-held-in-region.png"),
-      animations: "disabled",
-    });
+    // Auto is allowed to visit another region after its ordinary dwell; it is
+    // no longer permanently locked to the region the viewer last selected.
+    await page.waitForTimeout(Math.max(0, 30_100 - (Date.now() - returnedToAutoAt)));
+    await fixture.dispatchRange(3, 3);
+    await expect.poll(async () => (await readProbe(page)).visibleRegionId, {
+      timeout: 20_000,
+    }).toBe("nirvana");
 
-    // The restriction is on the DIRECTOR only. The viewer's own way between regions still works.
-    await observeRegionFromAtlas(page, "nirvana");
-    expect((await readProbe(page)).visibleRegionId).toBe("nirvana");
+    await observeRegionFromAtlas(page, "warm_springs");
+    expect((await readProbe(page)).visibleRegionId).toBe("warm_springs");
     expect(errors).toEqual([]);
     await fixture.dispose();
   });

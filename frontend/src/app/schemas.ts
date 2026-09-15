@@ -33,6 +33,86 @@ export const RUN_STATUSES: readonly RunStatus[] = [
 export type AgentStatus = "alive" | "paralyzed" | "dead";
 export type HomeStatus = "standing" | "ruin";
 
+/** One absolute pixel coordinate from the authoritative region navigation map. */
+export interface SpatialPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** A backend-recorded route currently being traversed by one being. */
+export interface SpatialTravelSnapshot {
+  readonly id: string;
+  readonly destination_id: string;
+  /** Present only when the destination is a matched gate in another region. */
+  readonly destination_region?: string;
+  /** Absolute map feet, in travel order, never a presentation-generated path. */
+  readonly route: readonly SpatialPoint[];
+  /** Simulation-clock seconds at which the route started. */
+  readonly started_at: number;
+  /** Simulation-clock seconds at which the route completes. */
+  readonly arrives_at: number;
+}
+
+/** Optional spatial authority for a being in one frozen regional map. */
+export interface AgentSpatialSnapshot {
+  readonly version: 1;
+  readonly region_id: string;
+  readonly map_id: string;
+  /** Frozen serialized-map identity shared with the frontend recipe exporter. */
+  readonly layout_fingerprint: string;
+  readonly x: number;
+  readonly y: number;
+  readonly observed_at: number;
+  readonly at_landmark: string | null;
+  readonly travel: SpatialTravelSnapshot | null;
+}
+
+/**
+ * Presentation-only evidence retained between an authoritative departure and
+ * arrival event. It is never inferred as a route and is absent from snapshots.
+ */
+export interface AgentSpatialMigration {
+  readonly from_region: string;
+  readonly to_region: string;
+  readonly source_position: SpatialPoint;
+}
+
+/** A landmark that the backend's navigation world can name as a destination. */
+export interface RegionSpatialLandmarkSnapshot extends SpatialPoint {
+  readonly id: string;
+  readonly name: string;
+  readonly affordances: readonly string[];
+}
+
+/** Optional exported navigation-map identity for one spatial region. */
+export interface RegionSpatialSnapshot {
+  readonly version: 1;
+  readonly region_id: string;
+  readonly map_id: string;
+  /** Shared navigation export hash, not a presentation-derived substitute. */
+  readonly layout_fingerprint: string;
+  readonly tile_size: number;
+  readonly landmarks: readonly RegionSpatialLandmarkSnapshot[];
+  /** Frozen at live-world creation and used to reproduce the matching recipe. */
+  readonly initial_pressure: Readonly<{
+    readonly populationHighWater: number;
+    readonly builtFootprintHighWater: number;
+  }>;
+}
+
+/** Optional fixed production shelter placement for one spatial home or ruin. */
+export interface HomeSpatialSnapshot {
+  readonly version: 1;
+  readonly region_id: string;
+  readonly map_id: string;
+  readonly plot_id: string;
+  /** Existing production shelter origin, in absolute map feet. */
+  readonly x: number;
+  readonly y: number;
+  /** Existing production shelter doorway, in absolute map feet. */
+  readonly door: SpatialPoint;
+}
+
 export interface RunMetadata {
   schema: 1;
   run_id: string;
@@ -89,6 +169,10 @@ export interface AgentSnapshot {
   died_at: number | null;
   home_id: string | null;
   is_hoarding: boolean;
+  /** Absent for legacy recordings and every non-spatial region. */
+  spatial?: AgentSpatialSnapshot;
+  /** Client-projected gate evidence retained only between migration event halves. */
+  spatial_migration?: AgentSpatialMigration;
 }
 
 export interface RegionSnapshot {
@@ -101,6 +185,8 @@ export interface RegionSnapshot {
   current_materials: number;
   max_energy: number;
   max_materials: number;
+  /** Absent for legacy recordings and regions without a v1 spatial map. */
+  spatial?: RegionSpatialSnapshot;
 }
 
 export interface HomeSnapshot {
@@ -119,6 +205,8 @@ export interface HomeSnapshot {
   remnant_materials: number;
   breachers: string[];
   is_hoarding: boolean;
+  /** Absent on legacy homes; supplied spatial homes keep their reserved plot through ruin. */
+  spatial?: HomeSpatialSnapshot;
 }
 
 export interface PendingProposalSnapshot {
@@ -246,6 +334,7 @@ export function parseWorldSnapshot(value: unknown): WorldSnapshot {
     ruins,
     pending_proposals: pendingProposals,
   };
+  validateSpatialWorldSnapshot(snapshot);
   return {
     ...snapshot,
     region_pressure: normalizeRegionPressure(input.region_pressure, snapshot),
@@ -375,6 +464,53 @@ export function parseAgentSnapshot(
     died_at: nullableNumberOf(input.died_at, "agent.died_at"),
     home_id: nullableStringOf(input.home_id, "agent.home_id"),
     is_hoarding: booleanOf(input.is_hoarding, "agent.is_hoarding"),
+    ...(input.spatial === undefined ? {} : { spatial: parseAgentSpatialSnapshot(input.spatial) }),
+  };
+}
+
+/** Parse optional backend spatial truth without filling in any presentation defaults. */
+export function parseAgentSpatialSnapshot(value: unknown): AgentSpatialSnapshot {
+  const input = objectOf(value, "agent.spatial");
+  expectSpatialVersion(input, "agent.spatial");
+  const travel = input.travel === null
+    ? null
+    : parseSpatialTravelSnapshot(input.travel);
+  return {
+    version: 1,
+    region_id: nonEmptyStringOf(input.region_id, "agent.spatial.region_id"),
+    map_id: nonEmptyStringOf(input.map_id, "agent.spatial.map_id"),
+    layout_fingerprint: nonEmptyStringOf(
+      input.layout_fingerprint,
+      "agent.spatial.layout_fingerprint",
+    ),
+    x: numberOf(input.x, "agent.spatial.x"),
+    y: numberOf(input.y, "agent.spatial.y"),
+    observed_at: numberOf(input.observed_at, "agent.spatial.observed_at"),
+    at_landmark: nullableStringOf(input.at_landmark, "agent.spatial.at_landmark"),
+    travel,
+  };
+}
+
+/** Parse one atomic backend navigation state. */
+export function parseSpatialTravelSnapshot(value: unknown): SpatialTravelSnapshot {
+  const input = objectOf(value, "agent.spatial.travel");
+  const startedAt = numberOf(input.started_at, "agent.spatial.travel.started_at");
+  const arrivesAt = numberOf(input.arrives_at, "agent.spatial.travel.arrives_at");
+  if (arrivesAt < startedAt) {
+    throw new Error("agent.spatial.travel.arrives_at must not precede started_at");
+  }
+  const route = arrayOf(input.route, parseSpatialPoint, "agent.spatial.travel.route");
+  if (route.length === 0) throw new Error("agent.spatial.travel.route must not be empty");
+  const destinationRegion = input.destination_region === undefined
+    ? undefined
+    : nonEmptyStringOf(input.destination_region, "agent.spatial.travel.destination_region");
+  return {
+    id: nonEmptyStringOf(input.id, "agent.spatial.travel.id"),
+    destination_id: nonEmptyStringOf(input.destination_id, "agent.spatial.travel.destination_id"),
+    ...(destinationRegion === undefined ? {} : { destination_region: destinationRegion }),
+    route,
+    started_at: startedAt,
+    arrives_at: arrivesAt,
   };
 }
 
@@ -401,7 +537,131 @@ function parseRegionSnapshot(value: unknown): RegionSnapshot {
     current_materials: numberOf(input.current_materials, "region.current_materials"),
     max_energy: numberOf(input.max_energy, "region.max_energy"),
     max_materials: numberOf(input.max_materials, "region.max_materials"),
+    ...(input.spatial === undefined ? {} : { spatial: parseRegionSpatialSnapshot(input.spatial) }),
   };
+}
+
+/** Parse one regional navigation-map identity supplied by the spatial exporter. */
+export function parseRegionSpatialSnapshot(value: unknown): RegionSpatialSnapshot {
+  const input = objectOf(value, "region.spatial");
+  expectSpatialVersion(input, "region.spatial");
+  const tileSize = numberOf(input.tile_size, "region.spatial.tile_size");
+  if (!Number.isSafeInteger(tileSize) || tileSize <= 0) {
+    throw new Error("region.spatial.tile_size must be a positive safe integer");
+  }
+  const landmarks = arrayOf(input.landmarks, parseRegionSpatialLandmark, "region.spatial.landmarks");
+  const ids = new Set<string>();
+  for (const landmark of landmarks) {
+    if (ids.has(landmark.id)) throw new Error(`region.spatial.landmarks contains duplicate ${landmark.id}`);
+    ids.add(landmark.id);
+  }
+  return {
+    version: 1,
+    region_id: nonEmptyStringOf(input.region_id, "region.spatial.region_id"),
+    map_id: nonEmptyStringOf(input.map_id, "region.spatial.map_id"),
+    layout_fingerprint: nonEmptyStringOf(
+      input.layout_fingerprint,
+      "region.spatial.layout_fingerprint",
+    ),
+    tile_size: tileSize,
+    landmarks,
+    initial_pressure: parseInitialSpatialPressure(input.initial_pressure),
+  };
+}
+
+function parseInitialSpatialPressure(value: unknown): RegionSpatialSnapshot["initial_pressure"] {
+  const input = objectOf(value, "region.spatial.initial_pressure");
+  return Object.freeze({
+    populationHighWater: nonNegativeSafeIntegerOf(
+      input.populationHighWater,
+      "region.spatial.initial_pressure.populationHighWater",
+    ),
+    builtFootprintHighWater: nonNegativeSafeIntegerOf(
+      input.builtFootprintHighWater,
+      "region.spatial.initial_pressure.builtFootprintHighWater",
+    ),
+  });
+}
+
+function parseRegionSpatialLandmark(value: unknown): RegionSpatialLandmarkSnapshot {
+  const input = objectOf(value, "region.spatial.landmark");
+  return {
+    id: nonEmptyStringOf(input.id, "region.spatial.landmark.id"),
+    name: nonEmptyStringOf(input.name, "region.spatial.landmark.name"),
+    x: numberOf(input.x, "region.spatial.landmark.x"),
+    y: numberOf(input.y, "region.spatial.landmark.y"),
+    affordances: arrayOf(
+      input.affordances,
+      (item) => nonEmptyStringOf(item, "region.spatial.landmark.affordance"),
+      "region.spatial.landmark.affordances",
+    ),
+  };
+}
+
+function parseSpatialPoint(value: unknown): SpatialPoint {
+  const input = objectOf(value, "agent.spatial.travel.route point");
+  return {
+    x: numberOf(input.x, "agent.spatial.travel.route.x"),
+    y: numberOf(input.y, "agent.spatial.travel.route.y"),
+  };
+}
+
+/** Refuse cross-record map mismatches instead of guessing a spatial placement. */
+function validateSpatialWorldSnapshot(
+  snapshot: Pick<WorldSnapshot, "agents" | "regions" | "homes" | "ruins">,
+): void {
+  const spatialRegions = new Map<string, RegionSpatialSnapshot>();
+  for (const region of snapshot.regions) {
+    const spatial = region.spatial;
+    if (spatial === undefined) continue;
+    if (spatial.region_id !== region.name) {
+      throw new Error("region.spatial.region_id must exactly match its region");
+    }
+    if (spatial.map_id !== `${region.name}:${spatial.layout_fingerprint}`) {
+      throw new Error("region.spatial.map_id must exactly match region_id:layout_fingerprint");
+    }
+    if (spatialRegions.has(spatial.map_id)) {
+      throw new Error(`region.spatial.map_id ${spatial.map_id} is duplicated`);
+    }
+    spatialRegions.set(spatial.map_id, spatial);
+  }
+  for (const agent of snapshot.agents) {
+    const spatial = agent.spatial;
+    if (spatial === undefined) continue;
+    const region = spatialRegions.get(spatial.map_id);
+    if (region === undefined || agent.position !== region.region_id || spatial.region_id !== agent.position) {
+      throw new Error(`agent.spatial.map_id ${spatial.map_id} has no matching current region`);
+    }
+    if (spatial.layout_fingerprint !== region.layout_fingerprint) {
+      throw new Error(`agent.spatial.layout_fingerprint does not match ${spatial.map_id}`);
+    }
+    const landmarks = new Set(region.landmarks.map(({ id }) => id));
+    if (spatial.at_landmark !== null && !landmarks.has(spatial.at_landmark)) {
+      throw new Error(`agent.spatial.at_landmark ${spatial.at_landmark} is unknown to ${spatial.map_id}`);
+    }
+    if (spatial.travel !== null && !landmarks.has(spatial.travel.destination_id)) {
+      throw new Error(`agent.spatial.travel.destination_id ${spatial.travel.destination_id} is unknown to ${spatial.map_id}`);
+    }
+  }
+  const occupiedPlots = new Set<string>();
+  for (const home of [...snapshot.homes, ...snapshot.ruins]) {
+    const spatial = home.spatial;
+    if (spatial === undefined) continue;
+    const region = spatialRegions.get(spatial.map_id);
+    if (
+      region === undefined
+      || home.region !== region.region_id
+      || spatial.region_id !== home.region
+      || spatial.map_id !== `${region.region_id}:${region.layout_fingerprint}`
+    ) {
+      throw new Error(`home.spatial.map_id ${spatial.map_id} has no matching current region`);
+    }
+    const key = `${spatial.map_id}\u0000${spatial.plot_id}`;
+    if (occupiedPlots.has(key)) {
+      throw new Error(`home.spatial.plot_id ${spatial.plot_id} is already reserved on ${spatial.map_id}`);
+    }
+    occupiedPlots.add(key);
+  }
 }
 
 function parseHomeSnapshot(value: unknown): HomeSnapshot {
@@ -430,6 +690,30 @@ function parseHomeSnapshot(value: unknown): HomeSnapshot {
       "home.breachers",
     ),
     is_hoarding: booleanOf(input.is_hoarding, "home.is_hoarding"),
+    ...(input.spatial === undefined ? {} : { spatial: parseHomeSpatialSnapshot(input.spatial) }),
+  };
+}
+
+/** Parse one exact backend-owned regional shelter location. */
+export function parseHomeSpatialSnapshot(value: unknown): HomeSpatialSnapshot {
+  const input = objectOf(value, "home.spatial");
+  expectSpatialVersion(input, "home.spatial");
+  return {
+    version: 1,
+    region_id: nonEmptyStringOf(input.region_id, "home.spatial.region_id"),
+    map_id: nonEmptyStringOf(input.map_id, "home.spatial.map_id"),
+    plot_id: nonEmptyStringOf(input.plot_id, "home.spatial.plot_id"),
+    x: numberOf(input.x, "home.spatial.x"),
+    y: numberOf(input.y, "home.spatial.y"),
+    door: parseHomeSpatialPoint(input.door),
+  };
+}
+
+function parseHomeSpatialPoint(value: unknown): SpatialPoint {
+  const input = objectOf(value, "home.spatial.door");
+  return {
+    x: numberOf(input.x, "home.spatial.door.x"),
+    y: numberOf(input.y, "home.spatial.door.y"),
   };
 }
 
@@ -495,6 +779,16 @@ function stringOf(value: unknown, label: string): string {
     throw new Error(`${label} must be a string`);
   }
   return value;
+}
+
+function nonEmptyStringOf(value: unknown, label: string): string {
+  const parsed = stringOf(value, label);
+  if (parsed.trim().length === 0) throw new Error(`${label} must not be empty`);
+  return parsed;
+}
+
+function expectSpatialVersion(input: Record<string, unknown>, label: string): void {
+  if (input.version !== 1) throw new Error(`${label}.version must be 1`);
 }
 
 function nullableStringOf(value: unknown, label: string): string | null {

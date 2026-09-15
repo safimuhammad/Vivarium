@@ -708,14 +708,22 @@ def _fit_event_records(
     Returns:
         The kept records, oldest first (possibly the whole list, possibly empty).
     """
-    if not records:
+    if len(records) < 2:
         return records
-    kept = records
-    while len(kept) > 1 and _encoded_event_page_size(run_id, after, count, kept) > (
-        REPLAY_RESPONSE_MAX_BYTES
-    ):
-        kept = kept[:-1]
-    return kept
+    if _encoded_event_page_size(run_id, after, count, records) <= REPLAY_RESPONSE_MAX_BYTES:
+        return records
+
+    record_sizes = [_encoded_size(record) for record in records]
+    content_size = sum(record_sizes) + len(records) - 1
+    for last_index in range(len(records) - 2, -1, -1):
+        content_size -= record_sizes[last_index + 1] + 1
+        next_after = cast(int, records[last_index]["cursor"])
+        if (
+            _event_page_overhead_size(run_id, after, count, next_after) + content_size
+            <= REPLAY_RESPONSE_MAX_BYTES
+        ):
+            return records[: last_index + 1]
+    return records[:1]
 
 
 def _encoded_event_page_size(
@@ -735,6 +743,21 @@ def _encoded_event_page_size(
             "has_more": next_after < count,
             "truncated": True,
             "events": records,
+        }
+    )
+
+
+def _event_page_overhead_size(run_id: str, after: int, count: int, next_after: int) -> int:
+    """Return exact event-envelope bytes other than its JSON list contents."""
+    return _encoded_size(
+        {
+            "schema": 1,
+            "run_id": run_id,
+            "after": after,
+            "next_after": next_after,
+            "has_more": next_after < count,
+            "truncated": True,
+            "events": [],
         }
     )
 
@@ -831,14 +854,22 @@ def _fit_checkpoint_records(
     Returns:
         The kept records, oldest first (possibly the whole list, possibly empty).
     """
-    if not records:
+    if len(records) < 2:
         return records
-    kept = records
-    while len(kept) > 1 and _encoded_page_size(run_id, effective_before, kept) > (
-        REPLAY_RESPONSE_MAX_BYTES
-    ):
-        kept = kept[1:]
-    return kept
+    if _encoded_page_size(run_id, effective_before, records) <= REPLAY_RESPONSE_MAX_BYTES:
+        return records
+
+    record_sizes = [_encoded_size(record) for record in records]
+    content_size = sum(record_sizes) + len(records) - 1
+    for first_index in range(1, len(records)):
+        content_size -= record_sizes[first_index - 1] + 1
+        next_before = cast(int, records[first_index]["line"])
+        if (
+            _checkpoint_page_overhead_size(run_id, effective_before, next_before) + content_size
+            <= REPLAY_RESPONSE_MAX_BYTES
+        ):
+            return records[first_index:]
+    return records[-1:]
 
 
 def _encoded_page_size(
@@ -857,6 +888,25 @@ def _encoded_page_size(
             "has_more": bool(records) and next_before > 1,
             "truncated": True,
             "checkpoints": records,
+        }
+    )
+
+
+def _checkpoint_page_overhead_size(
+    run_id: str,
+    effective_before: int,
+    next_before: int,
+) -> int:
+    """Return exact checkpoint-envelope bytes other than its JSON list contents."""
+    return _encoded_size(
+        {
+            "schema": 1,
+            "run_id": run_id,
+            "before": effective_before,
+            "next_before": next_before,
+            "has_more": next_before > 1,
+            "truncated": True,
+            "checkpoints": [],
         }
     )
 

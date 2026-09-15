@@ -25,6 +25,7 @@ import {
   type ProductionStaticScenePlan,
   type ProductionStaticScenePreparation,
 } from "../staticScene/ProductionStaticScene";
+import { createGroundingAccentOperation } from "../staticScene/StaticPainterAccents";
 
 export interface NirvanaCamera {
   readonly x: number;
@@ -44,6 +45,7 @@ interface LandmarkDraw {
   readonly operation: ProductionStaticDrawOperation;
   readonly pivotX: number;
   readonly pivotY: number;
+  readonly sortPriority: number;
   readonly stableId: string;
 }
 
@@ -249,6 +251,7 @@ function* nirvanaPaintOperations(
   scenery.sort((left, right) => (
     left.pivotY - right.pivotY
     || left.pivotX - right.pivotX
+    || left.sortPriority - right.sortPriority
     || left.stableId.localeCompare(right.stableId)
   ));
   for (const { operation } of scenery) yield operation;
@@ -338,6 +341,7 @@ function collectLandmarks(
           ),
           pivotX: worldX + frame.pivot.x * visual.scale,
           pivotY,
+          sortPriority: 1,
           stableId,
         });
       }
@@ -361,6 +365,21 @@ function collectScenery(
       const worldY = originY + sprite.at.y;
       const stableId = `scenery:${chunk.coord.column},${chunk.coord.row}:${sprite.id}`;
       const pivotY = originY + sprite.foot.y;
+      if (isGroundingAccentScenery(sprite.frameId)) {
+        const accent = createGroundingAccentOperation(
+          `grounding:${stableId}`,
+          frame,
+          originX + sprite.foot.x,
+          pivotY,
+        );
+        result.push({
+          operation: accent,
+          pivotX: originX + sprite.foot.x,
+          pivotY,
+          sortPriority: 0,
+          stableId: accent.stableId,
+        });
+      }
       result.push({
         operation: frameOperation(
           stableId,
@@ -374,11 +393,38 @@ function collectScenery(
         ),
         pivotX: originX + sprite.foot.x,
         pivotY,
+        sortPriority: 1,
         stableId,
       });
     }
   }
   return result;
+}
+
+/** Existing authored object families whose lower atlas edge reads as a grounding accent. */
+function isGroundingAccentScenery(frameId: string): boolean {
+  return [
+    "s.willow.",
+    "s.birch.",
+    "s.broadleaf.",
+    "s.conifer.",
+    "s.boulder.",
+    "s.scarpface.",
+    "s.scarpcornerin.",
+    "s.scarpcornerout.",
+    "s.bridgedeckh.",
+    "s.bridgedeckv.",
+    "s.bridgewornh.",
+    "s.bridgewornv.",
+    "s.bridgeramph.",
+    "s.bridgerampv.",
+    "s.bridgeposth.",
+    "s.bridgepostv.",
+    "s.bridgearchh.",
+    "s.bridgearchv.",
+    "s.bridgearchpier.",
+    "s.bridgepier.",
+  ].some((prefix) => frameId.startsWith(prefix));
 }
 
 function requiredFrame(assets: NirvanaAtlasAssets, id: string): NirvanaAtlasFrame {

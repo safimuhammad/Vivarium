@@ -8,6 +8,7 @@ import {
   PRODUCTION_ASSET_MANIFEST,
   type ProductionAssetLease,
 } from "../assets/productionManifest";
+import { DEPTH_SCENERY_ATLAS_ID, DEPTH_SCENERY_FRAMES } from "../depth/DepthSceneryAssets";
 import {
   HomeActor,
   type HomeActorSnapshot,
@@ -37,6 +38,12 @@ interface StrokeCall {
   readonly args: readonly number[];
 }
 
+interface FillCall {
+  readonly kind: "rect" | "circle";
+  readonly args: readonly number[];
+  readonly fillStyle: string | CanvasGradient | CanvasPattern;
+}
+
 class FakeContext {
   imageSmoothingEnabled = true;
   strokeStyle: string | CanvasGradient | CanvasPattern = "#000";
@@ -44,6 +51,8 @@ class FakeContext {
   lineCap: CanvasLineCap = "butt";
   readonly drawCalls: DrawCall[] = [];
   readonly strokeCalls: StrokeCall[] = [];
+  readonly fillCalls: FillCall[] = [];
+  fillStyle: string | CanvasGradient | CanvasPattern = "#000";
   #pathStart: readonly [number, number] | null = null;
 
   save(): void {}
@@ -73,6 +82,16 @@ class FakeContext {
   }
 
   stroke(): void {}
+
+  fillRect(...args: number[]): void {
+    this.fillCalls.push({ kind: "rect", args, fillStyle: this.fillStyle });
+  }
+
+  arc(x: number, y: number, radius: number, startAngle: number, endAngle: number): void {
+    this.fillCalls.push({ kind: "circle", args: [x, y, radius, startAngle, endAngle], fillStyle: this.fillStyle });
+  }
+
+  fill(): void {}
 }
 
 function exactHome(overrides: Partial<HomeSnapshot> = {}): HomeSnapshot {
@@ -135,7 +154,7 @@ function input(
   };
 }
 
-function leasesFor(kit = "worn-heartland") {
+function leasesFor(kit = "worn-heartland", includeCottage = false) {
   const home = PRODUCTION_ASSET_MANIFEST.regions[kit as keyof typeof PRODUCTION_ASSET_MANIFEST.regions].homeManifest;
   const releases = new Map<string, ReturnType<typeof vi.fn>>();
   const leases = new Map<string, ProductionAssetLease>();
@@ -143,6 +162,14 @@ function leasesFor(kit = "worn-heartland") {
     const release = vi.fn();
     releases.set(atlasId, release);
     leases.set(atlasId, { value: { atlasId } as FakeBitmap, release });
+  }
+  if (includeCottage) {
+    const release = vi.fn();
+    releases.set(DEPTH_SCENERY_ATLAS_ID, release);
+    leases.set(DEPTH_SCENERY_ATLAS_ID, {
+      value: { atlasId: DEPTH_SCENERY_ATLAS_ID } as FakeBitmap,
+      release,
+    });
   }
   return { leases, releases };
 }
@@ -339,6 +366,76 @@ describe("HomeActor", () => {
     ]);
     expect([0, 192]).toContain(calls[0]!.args[0]);
     expect(yardDraws(home, "front")).toEqual([]);
+  });
+
+  it("uses the optional cottage lease for an intact standing exterior at the door contact", () => {
+    const supplied = leasesFor("worn-heartland", true);
+    const { actor: home } = actor(input(exactRecord({ is_hoarding: false }), {
+      plot: { x: 96, y: 128 },
+      door: { x: 160, y: 224 },
+    }), supplied);
+
+    const front = draw(home, "front");
+    const cottageCalls = front.drawCalls.filter(({ atlasId }) => atlasId === DEPTH_SCENERY_ATLAS_ID);
+
+    expect(cottageCalls).toHaveLength(1);
+    expect(cottageCalls[0]!.args).toEqual([
+      DEPTH_SCENERY_FRAMES.cottage.x,
+      DEPTH_SCENERY_FRAMES.cottage.y,
+      DEPTH_SCENERY_FRAMES.cottage.width,
+      DEPTH_SCENERY_FRAMES.cottage.height,
+      88, 106, 128, 122,
+    ]);
+    expect(front.fillCalls).toEqual([
+      { kind: "circle", args: [159, 171, 5, 0, Math.PI * 2], fillStyle: "rgba(20, 22, 20, 0.48)" },
+    ]);
+    expect(draw(home, "back").drawCalls.some(({ atlasId }) => atlasId === DEPTH_SCENERY_ATLAS_ID)).toBe(false);
+  });
+
+  it("keeps the cottage shell through persistent door and hearth state with source-aligned overlays", () => {
+    const supplied = leasesFor("worn-heartland", true);
+    const { actor: home } = actor(input(exactRecord({ is_hoarding: false }), {
+      plot: { x: 96, y: 128 },
+      door: { x: 160, y: 224 },
+    }), supplied);
+    home.apply({ kind: "door", state: "open" }, 0);
+    home.apply({ kind: "hearth", state: "warm" }, 1);
+
+    const context = draw(home, "front");
+
+    expect(context.drawCalls.filter(({ atlasId }) => atlasId === DEPTH_SCENERY_ATLAS_ID)).toHaveLength(1);
+    expect(context.drawCalls.filter(({ atlasId }) => atlasId.endsWith("home-components"))).toEqual([]);
+    expect(context.fillCalls).toEqual([
+      { kind: "circle", args: [159, 171, 5, 0, Math.PI * 2], fillStyle: "rgba(255, 181, 72, 0.42)" },
+      { kind: "rect", args: [180, 165, 11, 24], fillStyle: "rgba(14, 17, 15, 0.82)" },
+    ]);
+  });
+
+  it("keeps the native construction and damage transitions instead of painting a finished cottage", () => {
+    const supplied = leasesFor("worn-heartland", true);
+    const { actor: home } = actor(input(exactRecord({ is_hoarding: false })), supplied);
+
+    home.apply({ kind: "build", durationMs: 1_000 }, 0);
+    expect(draw(home, "front").drawCalls.some(({ atlasId }) => atlasId === DEPTH_SCENERY_ATLAS_ID)).toBe(false);
+    home.advanceTo(1_000);
+    expect(draw(home, "front").drawCalls.some(({ atlasId }) => atlasId === DEPTH_SCENERY_ATLAS_ID)).toBe(true);
+
+    home.apply({ kind: "damage", durationMs: 1_000 }, 2_000);
+    expect(draw(home, "front").drawCalls.some(({ atlasId }) => atlasId === DEPTH_SCENERY_ATLAS_ID)).toBe(false);
+    expect(home.snapshot().visual.frontComponents).toContain("roof-damaged");
+  });
+
+  it("never uses the cottage lease for ruins and releases an optional lease exactly once", () => {
+    const supplied = leasesFor("worn-heartland", true);
+    const { actor: home } = actor(input(exactRecord({
+      status: "ruin", integrity: 0, remnant_materials: 0, ruined_at: 5,
+    })), supplied);
+
+    expect(draw(home, "back").drawCalls.some(({ atlasId }) => atlasId === DEPTH_SCENERY_ATLAS_ID)).toBe(false);
+    expect(draw(home, "front").drawCalls.some(({ atlasId }) => atlasId === DEPTH_SCENERY_ATLAS_ID)).toBe(false);
+    home.dispose();
+    home.dispose();
+    expect(supplied.releases.get(DEPTH_SCENERY_ATLAS_ID)).toHaveBeenCalledTimes(1);
   });
 
   it("keeps provisional and unknown sites empty until a visible foundation exists", () => {

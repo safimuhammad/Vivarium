@@ -10,7 +10,7 @@ import type {
   RendererSemanticSubject,
   SemanticSubjectKind,
 } from "../../renderer2d/production/semantics";
-import { frameEntityIdDenylist, safePublicEntityName } from "./publicCopy";
+import { frameEntityIdDenylist, safePublicCopy, safePublicEntityName } from "./publicCopy";
 import { formatRuinAge } from "./ruinAge";
 
 const TILE_SIZE = 32;
@@ -54,6 +54,8 @@ interface OwnedSubjectToken {
 
 interface SemanticProjectionIndexes {
   readonly agentNames: ReadonlyMap<string, string>;
+  /** Backend-owned journey labels for actors whose semantic pose has no action. */
+  readonly agentSpatialActions: ReadonlyMap<string, string>;
   readonly agentCompleteness: ReadonlyMap<string, "exact" | "projected-partial">;
   readonly regionCompleteness: ReadonlyMap<string, "exact" | "projected-partial">;
   readonly homeCompleteness: ReadonlyMap<string, "exact" | "projected-partial">;
@@ -214,7 +216,9 @@ function projectSubject(
     name,
     status: publicStatus(subject, completeness, observedRegionId, indexes),
     position: publicPosition(subject, completeness),
-    currentAction: publicAction(subject.action),
+    currentAction: subject.kind === "agent"
+      ? indexes.agentSpatialActions.get(subject.selection.id) ?? publicAction(subject.action)
+      : publicAction(subject.action),
     selected: sameSelection(frame.selection, subject.selection),
     canFollow: subject.kind === "agent"
       || (subject.kind === "home" && subject.status.toLowerCase() === "standing"),
@@ -298,7 +302,23 @@ function subjectCompleteness(
 
 function buildProjectionIndexes(frame: PresentedObserverFrame): SemanticProjectionIndexes {
   const deniedIds = frameEntityIdDenylist(frame);
+  const regionCompleteness = new Map<string, "exact" | "projected-partial">();
+  const landmarkNames = new Map<string, string>();
+  for (const record of frame.world.regions) {
+    if (typeof record.value.name !== "string") continue;
+    retainFirst(regionCompleteness, record.value.name, record.completeness);
+    const spatial = record.value.spatial;
+    if (spatial === undefined) continue;
+    for (const landmark of spatial.landmarks) {
+      retainFirst(
+        landmarkNames,
+        spatialLandmarkKey(spatial.region_id, spatial.map_id, landmark.id),
+        safePublicCopy(landmark.name, "the destination", deniedIds),
+      );
+    }
+  }
   const agentNames = new Map<string, string>();
+  const agentSpatialActions = new Map<string, string>();
   const agentCompleteness = new Map<string, "exact" | "projected-partial">();
   for (const record of frame.world.agents) {
     if (typeof record.value.id !== "string") continue;
@@ -308,11 +328,12 @@ function buildProjectionIndexes(frame: PresentedObserverFrame): SemanticProjecti
       safePublicEntityName(deniedIds, record.value.name),
     );
     retainFirst(agentCompleteness, record.value.id, record.completeness);
-  }
-  const regionCompleteness = new Map<string, "exact" | "projected-partial">();
-  for (const record of frame.world.regions) {
-    if (typeof record.value.name !== "string") continue;
-    retainFirst(regionCompleteness, record.value.name, record.completeness);
+    const spatial = record.value.spatial;
+    if (spatial?.travel === null || spatial === undefined) continue;
+    const destination = landmarkNames.get(
+      spatialLandmarkKey(spatial.region_id, spatial.map_id, spatial.travel.destination_id),
+    ) ?? spatialDestinationName(spatial.travel.destination_id, deniedIds);
+    retainFirst(agentSpatialActions, record.value.id, `Walking to ${destination}`);
   }
   const homeCompleteness = new Map<string, "exact" | "projected-partial">();
   const homeOwnerIds = new Map<string, string | null>();
@@ -323,6 +344,7 @@ function buildProjectionIndexes(frame: PresentedObserverFrame): SemanticProjecti
   indexHomes(frame.world.ruins, ruinCompleteness, ruinOwnerIds, ruinedAt);
   return {
     agentNames,
+    agentSpatialActions,
     agentCompleteness,
     regionCompleteness,
     homeCompleteness,
@@ -333,6 +355,19 @@ function buildProjectionIndexes(frame: PresentedObserverFrame): SemanticProjecti
     worldTime: frame.world.worldTime,
     activeRegionId: frame.scene?.regionId ?? null,
   };
+}
+
+function spatialLandmarkKey(regionId: string, mapId: string, landmarkId: string): string {
+  return `${regionId}\u0000${mapId}\u0000${landmarkId}`;
+}
+
+function spatialDestinationName(destinationId: string, deniedIds: ReturnType<typeof frameEntityIdDenylist>): string {
+  if (!/^[a-z][a-z0-9_-]{0,79}$/iu.test(destinationId)) return "the destination";
+  return safePublicCopy(
+    titleWords(destinationId.replace(/[_-]+/gu, " ")),
+    "the destination",
+    deniedIds,
+  );
 }
 
 function hasCanonicalSubjectOrder(subjects: readonly RendererSemanticSubject[]): boolean {

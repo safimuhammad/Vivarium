@@ -194,6 +194,10 @@ export type EnvironmentEffectRequest =
  * what unit tests observe.
  */
 export interface OverlayViewport {
+  /** Atlas land marks own agents, homes and events; suppress raw regional coordinates together. */
+  readonly regionContentVisible?: boolean;
+  /** Atlas insets own miniature scenery; omit the live world props at that scale. */
+  readonly depthSceneryVisible?: boolean;
   /** Optional display-resolution surface; coordinates remain in CSS pixels. */
   readonly overlayTarget?: Readonly<{
     context: CanvasRenderingContext2D;
@@ -1182,11 +1186,11 @@ export class EnvironmentSystem {
     context.save();
     context.globalAlpha = ambientAlpha(this.presentation.vitality);
     if (pass === "ground") {
-      this.drawAmbientPool(context, this.water);
+      this.drawAmbientPool(context, this.water, view);
       this.drawEffects(context, this.footsteps);
     } else {
-      this.drawAmbientPool(context, this.wind);
-      this.drawAmbientPool(context, this.smoke);
+      this.drawAmbientPool(context, this.wind, view);
+      this.drawAmbientPool(context, this.smoke, view);
       this.drawEffects(context, this.smoke);
       this.drawFlyingItems(context);
     }
@@ -1244,25 +1248,39 @@ export class EnvironmentSystem {
     let minY = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY;
     let maxY = Number.NEGATIVE_INFINITY;
-    const consider = (point: Vec2 | undefined): void => {
-      if (point === undefined || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+    const consider = (point: Vec2 | null | undefined): void => {
+      if (point === null || point === undefined
+        || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
       minX = Math.min(minX, point.x);
       minY = Math.min(minY, point.y);
       maxX = Math.max(maxX, point.x);
       maxY = Math.max(maxY, point.y);
     };
+    const considerThreadTarget = (thread: OverlayThread): void => {
+      const target = thread.toId === undefined
+        ? thread.to
+        : this.liveAnchorFor(thread.toId, thread.to, thread.toKind ?? "being");
+      consider(target);
+    };
     for (const slot of this.texts) {
       if (slot === null) continue;
-      consider(slot.at);
-      consider(slot.thread?.to);
+      const owner = this.liveAnchorFor(slot.ownerId, slot.at, overlayOwnerKind(slot));
+      if (owner === null) continue;
+      consider(owner);
+      if (slot.thread !== null) considerThreadTarget(slot.thread);
     }
     for (const slot of this.marks) {
       if (slot === null) continue;
-      consider(slot.at);
-      for (const thread of slot.threads) consider(thread.to);
+      const owner = this.liveAnchorFor(slot.ownerId, slot.at, overlayOwnerKind(slot));
+      if (owner === null) continue;
+      consider(owner);
+      for (const thread of slot.threads) considerThreadTarget(thread);
     }
     for (const slot of this.bursts) if (slot !== null) consider(slot.at);
-    for (const slot of this.gathers) if (slot !== null) consider(slot.at);
+    for (const slot of this.gathers) {
+      if (slot === null) continue;
+      consider(this.liveAnchorFor(slot.ownerId, slot.at, "being"));
+    }
     for (const item of this.flyingItems) {
       if (item === null) continue;
       consider(item.from);
@@ -1277,9 +1295,9 @@ export class EnvironmentSystem {
     if (this.disposed) return null;
     let deadline: number | null = null;
     if (!this.reducedMotion) {
-      deadline = minimumAmbientDeadline(this.water, deadline, this.nowMs);
-      deadline = minimumAmbientDeadline(this.wind, deadline, this.nowMs);
-      deadline = minimumAmbientDeadline(this.smoke, deadline, this.nowMs);
+      deadline = minimumAmbientDeadline(this.water, deadline, this.nowMs, this.atlasLeases);
+      deadline = minimumAmbientDeadline(this.wind, deadline, this.nowMs, this.atlasLeases);
+      deadline = minimumAmbientDeadline(this.smoke, deadline, this.nowMs, this.atlasLeases);
     }
     const hasActiveEffect = hasEffect(this.smoke) || hasEffect(this.footsteps);
     deadline = minimumEffectDeadline(this.smoke, deadline, this.nowMs);
@@ -1379,9 +1397,32 @@ export class EnvironmentSystem {
   private drawAmbientPool(
     context: CanvasRenderingContext2D,
     pool: readonly (AmbientSlot | EffectSlot | null)[],
+    view?: OverlayViewport,
   ): void {
+    const viewWidth = view?.width;
+    const viewHeight = view?.height;
+    const hasViewport = view !== undefined
+      && viewWidth !== undefined
+      && viewHeight !== undefined
+      && Number.isFinite(view.zoom)
+      && view.zoom > 0
+      && Number.isFinite(view.originX)
+      && Number.isFinite(view.originY)
+      && Number.isFinite(viewWidth)
+      && Number.isFinite(viewHeight);
+    const viewportLeft = hasViewport ? -view.originX / view.zoom : 0;
+    const viewportTop = hasViewport ? -view.originY / view.zoom : 0;
+    const viewportRight = hasViewport ? viewportLeft + viewWidth / view.zoom : 0;
+    const viewportBottom = hasViewport ? viewportTop + viewHeight / view.zoom : 0;
     for (const value of pool) {
       if (!isAmbient(value)) continue;
+      const frame = value.frame;
+      const width = frame?.rect.width ?? 32;
+      const height = frame?.rect.height ?? 32;
+      if (hasViewport && (value.at.x + width <= viewportLeft
+        || value.at.x >= viewportRight
+        || value.at.y + height <= viewportTop
+        || value.at.y >= viewportBottom)) continue;
       if (value.neutralDiagnostic) {
         if (!this.intersectsExclusion({ x: value.at.x, y: value.at.y, width: 32, height: 32 })) {
           context.fillStyle = NEUTRAL_DIAGNOSTIC_TINT;
@@ -1389,7 +1430,6 @@ export class EnvironmentSystem {
         }
         continue;
       }
-      const frame = value.frame;
       if (!frame) continue;
       if (this.intersectsExclusion({
         x: value.at.x,
@@ -2085,11 +2125,13 @@ function minimumAmbientDeadline(
   pool: readonly (AmbientSlot | EffectSlot | null)[],
   current: number | null,
   nowMs: number,
+  atlasLeases: ReadonlyMap<string, ProductionAssetLease>,
 ): number | null {
   let deadline = current;
   for (const slot of pool) {
-    if (!isAmbient(slot)) continue;
-    const frameDuration = slot.frame?.durationMs ?? 240;
+    if (!isAmbient(slot) || slot.neutralDiagnostic || slot.frame === null
+      || !atlasLeases.has(slot.frame.atlasId)) continue;
+    const frameDuration = slot.frame.durationMs;
     deadline = minimumFuture(deadline, nextPhaseDeadline(nowMs, slot.phaseSeed, frameDuration), nowMs);
   }
   return deadline;

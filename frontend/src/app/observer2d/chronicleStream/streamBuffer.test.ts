@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { EventEnvelopeEntry } from "../../schemas";
 import type { PresentedRecord, PresentedWorldView } from "../../../presentation/contracts";
-import type { AgentSnapshot, HomeSnapshot } from "../../schemas";
+import type { AgentSnapshot, HomeSnapshot, RegionSnapshot } from "../../schemas";
 import { frameEntityIdDenylist } from "../publicCopy";
 import { createChronicleStreamBuffer, DEFAULT_STREAM_BUFFER_MS } from "./streamBuffer";
 
@@ -30,6 +30,60 @@ function entry(
       timestamp: 1_000 + cursor,
     },
     resolved,
+    snapshot_after: null,
+  };
+}
+
+function spatialTravelEntry(
+  cursor: number,
+  type: "spatial_travel_started" | "spatial_travel_cancelled" | "spatial_travel_arrived",
+): EventEnvelopeEntry {
+  const route = [{ x: 32, y: 64 }, { x: 160, y: 64 }];
+  const moving = type === "spatial_travel_started";
+  const position = moving ? route[0]! : route[1]!;
+  const spatial = {
+    version: 1,
+    region_id: "nirvana",
+    map_id: "nirvana:map-1",
+    layout_fingerprint: "map-1",
+    x: position.x,
+    y: position.y,
+    observed_at: 100 + cursor,
+    at_landmark: moving ? null : "foraging_grove",
+    travel: moving ? {
+      id: "travel-1",
+      destination_id: "foraging_grove",
+      route,
+      started_at: 100,
+      arrives_at: 120,
+    } : null,
+  };
+  return {
+    cursor,
+    event: {
+      type,
+      source: "wanderer_001",
+      payload: {
+        message: "",
+        agent_id: "wanderer_001",
+        region_id: "nirvana",
+        map_id: "nirvana:map-1",
+        layout_fingerprint: "map-1",
+        travel_id: "travel-1",
+        destination_id: "foraging_grove",
+        route,
+        started_at: 100,
+        arrives_at: 120,
+        position,
+        spatial,
+        ...(type === "spatial_travel_cancelled" ? { reason: "requested" } : {}),
+      },
+      scope: "local",
+      region: "nirvana",
+      target: null,
+      timestamp: 1_000 + cursor,
+    },
+    resolved: { actor_id: "wanderer_001", region: "nirvana" },
     snapshot_after: null,
   };
 }
@@ -73,6 +127,30 @@ function home(overrides: Partial<HomeSnapshot>): HomeSnapshot {
   };
 }
 
+function spatialRegion(landmarkName: string): PresentedRecord<RegionSnapshot> {
+  return {
+    completeness: "exact",
+    value: {
+      name: "nirvana",
+      spatial: {
+        version: 1,
+        region_id: "nirvana",
+        map_id: "nirvana:map-1",
+        layout_fingerprint: "map-1",
+        tile_size: 32,
+        landmarks: [{
+          id: "foraging_grove",
+          name: landmarkName,
+          x: 160,
+          y: 64,
+          affordances: ["energy"],
+        }],
+        initial_pressure: { populationHighWater: 2, builtFootprintHighWater: 0 },
+      },
+    },
+  };
+}
+
 function world(
   exactBaseCursor: number,
   projectedThroughCursor: number,
@@ -92,6 +170,77 @@ function world(
 }
 
 describe("createChronicleStreamBuffer", () => {
+  it("locates legacy thoughts from earlier presence and preserves their historical regions", () => {
+    const buffer = createChronicleStreamBuffer({ now: () => 0 });
+    const ingest = (view: PresentedWorldView, entries: EventEnvelopeEntry[]) =>
+      buffer.ingest({ sourceKey: "s1", world: view, entries, deniedIds: NO_DENIED_IDS });
+    ingest(world(0, 0), []);
+    const thought = (cursor: number) => entry(cursor, "self_talk", { message: "I wonder." }, { actor_id: "wanderer_001" });
+    ingest(world(0, 3), [
+      thought(1),
+      entry(2, "agent_entered_region", {}, { actor_id: "wanderer_001", region: "warm_springs" }),
+      thought(3),
+    ]);
+    expect(buffer.getEvents().filter(event => event.type === "self_talk").map(event => event.regionId))
+      .toEqual(["nirvana", "warm_springs"]);
+    ingest(world(4, 4, { agents: [agent({ position: "nirvana_west" })] }), []);
+    expect(buffer.getEvents().filter(event => event.type === "self_talk").map(event => event.regionId))
+      .toEqual(["nirvana", "warm_springs"]);
+  });
+
+  it("does not borrow a future or already-projected position for an older thought", () => {
+    for (const view of [
+      world(5, 5, { agents: [agent({ position: "warm_springs" })] }),
+      world(0, 5, { agents: [agent({ position: "warm_springs" })] }),
+      world(0, 0, { agents: [] }),
+    ]) {
+      const buffer = createChronicleStreamBuffer({ now: () => 0 });
+      buffer.ingest({ sourceKey: "s1", world: view, deniedIds: NO_DENIED_IDS,
+        entries: [entry(1, "self_talk", { message: "I wonder." }, { actor_id: "wanderer_001" })] });
+      expect(buffer.getEvents()[0]?.regionId).toBeNull();
+    }
+  });
+
+  it("preserves explicit thought locations and does not infer other event locations", () => {
+    const buffer = createChronicleStreamBuffer({ now: () => 0 });
+    buffer.ingest({ sourceKey: "s1", world: world(0, 0), deniedIds: NO_DENIED_IDS, entries: [] });
+    buffer.ingest({ sourceKey: "s1", world: world(0, 2), deniedIds: NO_DENIED_IDS, entries: [
+      entry(1, "self_talk", { message: "I wonder." }, { actor_id: "wanderer_001", region: "warm_springs" }),
+      entry(2, "speak", { message: "Hello." }, { actor_id: "wanderer_001" }),
+    ] });
+    expect(buffer.getEvents().map(event => event.regionId)).toEqual(["warm_springs", null]);
+  });
+
+  it("keeps valid authoritative travel events as readable, replayable Chronicle evidence", () => {
+    const buffer = createChronicleStreamBuffer({ now: () => 0 });
+    buffer.ingest({
+      sourceKey: "s1",
+      world: world(0, 3, { regions: [spatialRegion("Grove of Returns")] }),
+      entries: [
+        spatialTravelEntry(1, "spatial_travel_started"),
+        spatialTravelEntry(2, "spatial_travel_cancelled"),
+        spatialTravelEntry(3, "spatial_travel_arrived"),
+      ],
+      deniedIds: NO_DENIED_IDS,
+    });
+
+    expect(buffer.getEvents().map((event) => event.type)).toEqual([
+      "spatial_travel_started",
+      "spatial_travel_cancelled",
+      "spatial_travel_arrived",
+    ]);
+    expect(buffer.getEvents().map((event) => event.narration.line)).toEqual([
+      "Joe began walking to Grove of Returns.",
+      "Joe came to rest on the way to Grove of Returns.",
+      "Joe arrived at Grove of Returns.",
+    ]);
+    expect(buffer.getEvents().map((event) => event.actorId)).toEqual([
+      "wanderer_001",
+      "wanderer_001",
+      "wanderer_001",
+    ]);
+  });
+
   it("stamps events on the feed clock and keeps them in cursor order", () => {
     let now = 0;
     const buffer = createChronicleStreamBuffer({ now: () => now });

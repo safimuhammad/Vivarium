@@ -1,0 +1,81 @@
+
+> vivarium-frontend@0.1.0 build
+> tsc --noEmit && vite build
+
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 1977 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                         0.81 kB │ gzip:   0.49 kB
+dist/nirvana.html                                       0.88 kB │ gzip:   0.40 kB
+dist/assets/landmarks-D9nmX6pp.png                      4.27 kB
+dist/assets/landmarks-C_DAGoPI.png                      4.82 kB
+dist/assets/landmarks-NiJkjx21.png                      8.37 kB
+dist/assets/yards-1kvkEge0.png                          8.94 kB
+dist/assets/nirvana-tile-atlas-BTU147nu.png             9.05 kB
+dist/assets/human-held-jIJhdS8Y.png                    12.57 kB
+dist/assets/being-chibi-CIeq_Evc.png                   13.27 kB
+dist/assets/human-clothing-04-DU9fon0z.png             17.72 kB
+dist/.vite/manifest.json                               20.07 kB │ gzip:   2.65 kB
+dist/assets/scenery-OVRc1Ebc.png                       20.34 kB
+dist/assets/scenery-ggUiT9mB.png                       22.53 kB
+dist/assets/human-clothing-03-C7AhnPUC.png             22.95 kB
+dist/assets/human-clothing-02-DFnr1OnB.png             23.24 kB
+dist/assets/human-clothing-05-rL06FK3I.png             24.32 kB
+dist/assets/scenery-C8T0r-eL.png                       24.46 kB
+dist/assets/scenery-Clb8GaEs.png                       25.27 kB
+dist/assets/human-clothing-06-C7uPlwqB.png             25.30 kB
+dist/assets/scenery-BGzkpixJ.png                       25.42 kB
+dist/assets/ruins-Rju2AxYf.png                         25.54 kB
+dist/assets/scenery-DsJrEqun.png                       26.02 kB
+dist/assets/scenery-C6O8lpGV.png                       26.76 kB
+dist/assets/shelter-slice-atlas-D4qBmlDm.png           28.18 kB
+dist/assets/human-clothing-07-DUuh_tXO.png             29.14 kB
+dist/assets/human-clothing-01-r0MgxV7I.png             31.61 kB
+dist/assets/components-JVtQcBH0.png                    32.04 kB
+dist/assets/human-clothing-00-yumLNpo2.png             33.78 kB
+dist/assets/landmarks-DBz-doKV.png                     39.85 kB
+dist/assets/human-body-atlas-DUq9ygaK.png              44.35 kB
+dist/assets/scenery-nRjGKdU7.png                       48.01 kB
+dist/assets/human-hair-iw-kJI1a.png                    50.64 kB
+dist/assets/scenery-DJBaYCUc.png                       76.35 kB
+dist/assets/human-body-rigs-p9OipFTW.png              101.16 kB
+dist/assets/terrain-_dUx8wjm.png                      104.77 kB
+dist/assets/terrain-DR6-JlhR.png                      105.81 kB
+dist/assets/terrain-u6EOcF46.png                      106.43 kB
+dist/assets/terrain-CycjDlyV.png                      109.91 kB
+dist/assets/quiet-vivarium-tree-Dto5Qcxu.webp         197.77 kB
+dist/assets/atlas-bridge-materials-v1-B0n5RgFa.webp   271.06 kB
+dist/assets/depth-details-v1-D4qo7yXh.webp            512.05 kB
+dist/assets/RecordedRunObserver-DC0jR6DO.css            1.03 kB │ gzip:   0.53 kB
+dist/assets/nirvana-3A7f3lWl.css                        2.35 kB │ gzip:   1.01 kB
+dist/assets/CanvasWorldStage-nTQyJJWa.css               3.83 kB │ gzip:   1.34 kB
+dist/assets/GatewayApp-Cf_XF6gN.css                    28.47 kB │ gzip:   6.32 kB
+dist/assets/index-Ui5D15bA.css                         54.80 kB │ gzip:  10.09 kB
+dist/assets/Vivarium2DApp-Bh70iCF6.css                 81.84 kB │ gzip:  14.74 kB
+dist/assets/RegionPresentationTopology-C_wyrvUn.js      0.68 kB │ gzip:   0.31 kB
+dist/assets/regionMap-BbFZQRgh.js                       3.75 kB │ gzip:   1.05 kB
+dist/assets/nirvana-BVFrK8KB.js                         3.89 kB │ gzip:   1.77 kB
+dist/assets/eventVisualCatalog-DU6kirC8.js              4.49 kB │ gzip:   1.10 kB
+dist/assets/index-DdmgQKgc.js                           5.01 kB │ gzip:   2.03 kB
+dist/assets/replayArtifactClient-BIL61-Dn.js            8.60 kB │ gzip:   3.01 kB
+dist/assets/beingChibiAtlas-BSTpRlOf.js                 8.67 kB │ gzip:   2.05 kB
+dist/assets/runLifecycleClient-CBGHA0p0.js              9.35 kB │ gzip:   3.35 kB
+dist/assets/RecordedRunObserver-BdZQdqSH.js             9.90 kB │ gzip:   3.94 kB
+dist/assets/Camera2D-D2K5i5_H.js                       10.54 kB │ gzip:   3.80 kB
+dist/assets/eventDemoSource-BkF-nO-X.js                11.90 kB │ gzip:   3.28 kB
+dist/assets/WorldPresencePanel-Zlh591wx.js             12.53 kB │ gzip:   3.74 kB
+dist/assets/client-Cncfb4Ik.js                         14.37 kB │ gzip:   4.38 kB
+dist/assets/SavedBeingPortrait-CQr7ORlP.js             20.47 kB │ gzip:   7.15 kB
+dist/assets/replaySession-BzvaE5Sh.js                  35.30 kB │ gzip:   8.86 kB
+dist/assets/NirvanaPainter-DBew5Bzy.js                 40.51 kB │ gzip:  11.70 kB
+dist/assets/GatewayApp-Dthw1d6E.js                     46.61 kB │ gzip:  14.39 kB
+dist/assets/CanvasWorldStage-4w8Xk0Fk.js               64.08 kB │ gzip:  23.67 kB
+dist/assets/LivingAtlasApp-CJQ9N_QU.js                126.51 kB │ gzip:  35.22 kB
+dist/assets/NirvanaRootChunk-jByvKugx.js              187.48 kB │ gzip:  67.14 kB
+dist/assets/client-D_4IY7PA.js                        193.08 kB │ gzip:  60.51 kB
+dist/assets/ProductionCanvasSceneFactory-DD29zvKg.js  341.84 kB │ gzip: 104.27 kB
+dist/assets/Vivarium2DApp-CUhou_AW.js                 650.56 kB │ gzip: 184.43 kB
+dist/assets/WorldRenderer-DyCz7R1q.js                 738.10 kB │ gzip: 193.01 kB
+✓ built in 2.05s

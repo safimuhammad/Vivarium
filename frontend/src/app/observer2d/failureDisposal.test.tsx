@@ -200,7 +200,7 @@ describe("production observer failure and lifecycle composition", () => {
     expect(createRenderer.mock.calls[1]![0].signal).not.toBe(
       createRenderer.mock.calls[0]![0].signal,
     );
-    expect(container.querySelectorAll("canvas")).toHaveLength(2);
+    expect(container.querySelectorAll(".presentation-world-stage canvas")).toHaveLength(2);
     expect(required(".presentation-world-stage").getAttribute("data-ready")).toBe("true");
   });
 
@@ -390,6 +390,7 @@ function runtimeFixture(label: string): Readonly<{
     holdCurrentMoment: vi.fn(),
     viewMoment: vi.fn(),
     viewCursor: vi.fn(),
+    replayCursor: vi.fn(async () => false),
     retryRecovery: vi.fn(async () => undefined),
     reconnectStream: vi.fn(),
     setCameraMode: vi.fn(),
@@ -467,6 +468,7 @@ function mutableRuntimeFixture(label: string): Readonly<{
     holdCurrentMoment: vi.fn(),
     viewMoment: vi.fn(),
     viewCursor: vi.fn(),
+    replayCursor: vi.fn(async () => false),
     retryRecovery: vi.fn(async () => undefined),
     reconnectStream: vi.fn(),
     setCameraMode,

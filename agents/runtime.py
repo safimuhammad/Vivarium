@@ -40,10 +40,11 @@ from agents.compaction import (
     estimate_tokens,
     truncate_to_tokens,
 )
-from agents.decider import Decider, Decision, ToolCall
+from agents.decider import Decider, Decision, SerializingDecider, ToolCall
 from agents.prompt import build_system_prompt
 from agents.recall import RECALL_TOOL_NAME, RECALL_TOOL_SCHEMA, render_recall
 from agents.reflection import REFLECTION_TOOL_SCHEMAS, build_reflection_messages, render_recap
+from agents.spatial_perception import SpatialAwareness
 from agents.tool_schemas import schemas_for
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
@@ -61,6 +62,7 @@ from core.constants import (
     PROMPT_BUDGET_TOKENS,
     RECALL_K,
     REFLECT_RECAP_TURNS,
+    SPATIAL_ACTIVITY_MIN_PAUSE_SECONDS,
     compaction_budgets,
 )
 from core.exceptions import EventBusError, ToolError
@@ -190,6 +192,8 @@ class Agent:
         self._recap_installed: bool = False
         self._last_prompt_tokens: int = 0  # actual prompt size of the last decide (safety net)
         self._last_breath_private_tools_only: bool = False
+        self._spatial_awareness = SpatialAwareness(world, agent_id)
+        self._perception_events: list[Event] = []
 
         self.event_bus.subscribe(self.agent_id)
         self._load_system_prompt()
@@ -246,6 +250,8 @@ class Agent:
     def _offered_tool_names(self) -> list[str]:
         """Return registry tool names visible to the decider for this decision."""
         tool_names = self._tool_names()
+        if self.world.spatial_for_agent(self.agent_id) is None:
+            tool_names = [name for name in tool_names if name not in {"go_to", "stop_moving"}]
         if not self._suppress_private_tools_for_decision():
             return tool_names
         public_tool_names = [name for name in tool_names if name not in PRIVATE_REREAD_TOOL_NAMES]
@@ -270,6 +276,7 @@ class Agent:
         schemas = schemas_for(
             tool_names,
             max_offspring=self.world.run_settings.mating_max_offspring,
+            spatial=self.world.spatial_for_agent(self.agent_id) is not None,
         )
         if self.memory is not NULL_MEMORY and not suppress_private_tools:
             schemas.append(RECALL_TOOL_SCHEMA)
@@ -367,6 +374,7 @@ class Agent:
         return build_system_prompt(
             persona,
             tool_names if tool_names is not None else self._tool_names(),
+            spatial=self.world.spatial_for_agent(self.agent_id) is not None,
         )
 
     # ---- the four steps of a breath --------------------------------------
@@ -390,6 +398,7 @@ class Agent:
         """
         events = self.event_bus.get_events(self.agent_id)
         events.sort(key=lambda event: event.timestamp)
+        self._perception_events = events
         perception = self._render_perception(events)
         self.lifecycle_history.append({"role": "user", "content": perception})
 
@@ -409,14 +418,45 @@ class Agent:
             failed (the failure is logged).
         """
         try:
-            decision = await self.decider.decide(self._decision_messages(), self._action_schemas())
+            if isinstance(self.decider, SerializingDecider):
+                decision = await self.decider.decide_fresh(self._prepare_fresh_decision)
+            else:
+                messages, tools = self._prepare_fresh_decision()
+                decision = await self.decider.decide(messages, tools)
         except Exception:
             logger.exception("Decider failed for agent %r; ending breath gracefully", self.agent_id)
             self._rollback_perception()
             return None
         self.lifecycle_history.append(self._assistant_message(decision))
+        self._spatial_awareness.commit()
         self._record_usage("breath", decision)
         return decision
+
+    def _prepare_fresh_decision(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Refresh physical senses at inference start, preserving one perception turn."""
+        stored_system = dict(self.lifecycle_history[0]) if self.lifecycle_history else None
+        if (
+            bool(self.world.spatial_by_region)
+            and self.lifecycle_history
+            and self.lifecycle_history[-1].get("role") == "user"
+        ):
+            self._perception_events.extend(self.event_bus.get_events(self.agent_id))
+            self._perception_events.sort(key=lambda event: event.timestamp)
+            self.lifecycle_history[-1]["content"] = self._render_perception(self._perception_events)
+        if self.lifecycle_history and self.lifecycle_history[0].get("role") == "system":
+            self.lifecycle_history[0]["content"] = self._system_prompt(self._offered_tool_names())
+        tools = self._action_schemas()
+        self._enforce_prompt_budget(tools)
+        messages = [dict(message) for message in self.lifecycle_history]
+        # Retain the stable resident system turn when it fits. The outgoing copy
+        # keeps its exact offered actions and must never be rebuilt after sizing.
+        if (
+            stored_system is not None
+            and estimate_tokens([stored_system, *self.lifecycle_history[1:]], tools)
+            <= self._prompt_budget
+        ):
+            self.lifecycle_history[0] = stored_system
+        return messages, tools
 
     def _record_usage(self, kind: str, decision: Decision) -> None:
         """Record a decision's token usage to the usage log, if one is attached.
@@ -521,18 +561,21 @@ class Agent:
 
         Side effects:
             Publishes one ``"self_talk"`` :class:`~bus.events.Event`
-            (:attr:`~bus.events.ScopeType.PRIVATE`, stamped ``world.now()``) when
-            ``decision`` is text-only; otherwise none.
+            (:attr:`~bus.events.ScopeType.PRIVATE`, stamped ``world.now()`` and
+            the being's current region) when ``decision`` is text-only;
+            otherwise none. Location metadata does not broaden delivery.
         """
         stripped = decision.text.strip()
         if decision.tool_calls or not stripped or self._tool_like_text_name(stripped) is not None:
             return
+        agent_state = self.world.get_agent(self.agent_id)
         await self.event_bus.publish(
             Event(
                 type="self_talk",
                 source=self.agent_id,
                 payload={"message": stripped, "agent_id": self.agent_id},
                 scope=ScopeType.PRIVATE,
+                region=agent_state.current_position if agent_state is not None else None,
                 timestamp=self.world.now(),
             )
         )
@@ -1088,7 +1131,14 @@ class Agent:
                 delay = max(self.pace, DECIDE_BACKOFF_SECONDS)
             else:
                 delay = self.pace
-            await asyncio.sleep(delay)
+            if bool(self.world.spatial_by_region) and not self._last_decide_failed and delay > 0:
+                # A short minimum pause bounds event storms; no active inference is interrupted.
+                minimum = min(SPATIAL_ACTIVITY_MIN_PAUSE_SECONDS, delay)
+                await asyncio.sleep(minimum)
+                if delay > minimum:
+                    await self.event_bus.wait_for_activity(self.agent_id, delay - minimum)
+            else:
+                await asyncio.sleep(delay)
 
     def _can_continue(self, max_breaths: int | None) -> bool:
         """Return whether the loop may take another breath.
@@ -1245,26 +1295,30 @@ class Agent:
             lines.append(f"Around you lies {region.name}: {region.description}")
             paths = ", ".join(region.connections) if region.connections else "nowhere from here"
             lines.append(f"- Paths lead to: {paths}")
-            others = [
-                self._describe_neighbor(other)
-                for other in self.world.get_agents_in_region(region.name)
-                if other.id != self.agent_id
-            ]
-            lines.append(f"- Also here: {', '.join(others) if others else 'no one else'}")
-            # Region capacity + regeneration (Finding 5): the bare current level
-            # cannot tell a rich place from a near-exhausted one, nor whether what is
-            # taken will return. Surfacing the ceiling and the renewal rate lets an
-            # agent judge whether a place is worth staying in or harvesting from.
-            lines.append(
-                f"- Energy in this place: {region.current_energy} "
-                f"(of up to {region.max_energy}; the land renews about "
-                f"{region.energy_rate} each moment)"
-            )
-            lines.append(
-                f"- Materials in this place: {region.current_materials} "
-                f"(of up to {region.max_materials}; the land renews about "
-                f"{region.materials_rate} each moment)"
-            )
+            spatial_view = self._spatial_awareness.render(self.world.now())
+            if spatial_view:
+                lines.append(spatial_view)
+            else:
+                others = [
+                    self._describe_neighbor(other)
+                    for other in self.world.get_agents_in_region(region.name)
+                    if other.id != self.agent_id
+                ]
+                lines.append(f"- Also here: {', '.join(others) if others else 'no one else'}")
+                # Region capacity + regeneration (Finding 5): the bare current level
+                # cannot tell a rich place from a near-exhausted one, nor whether what is
+                # taken will return. Surfacing the ceiling and the renewal rate lets an
+                # agent judge whether a place is worth staying in or harvesting from.
+                lines.append(
+                    f"- Energy in this place: {region.current_energy} "
+                    f"(of up to {region.max_energy}; the land renews about "
+                    f"{region.energy_rate} each moment)"
+                )
+                lines.append(
+                    f"- Materials in this place: {region.current_materials} "
+                    f"(of up to {region.max_materials}; the land renews about "
+                    f"{region.materials_rate} each moment)"
+                )
         else:
             lines.append("The place around you is indistinct.")
 
@@ -1296,8 +1350,23 @@ class Agent:
 
         lines.append("")
         if events:
-            lines.append("Lately you have noticed:")
-            lines.extend(f"- {self._render_event(event)}" for event in events)
+            lines.append(
+                "Recent events and speech reports (past observations, not current positions):"
+                if bool(self.world.spatial_by_region)
+                else "Lately you have noticed:"
+            )
+            if bool(self.world.spatial_by_region):
+                lines.extend(
+                    f"- {max(0.0, self.world.now() - event.timestamp):.0f}s ago: "
+                    f"{self._render_event(event)}"
+                    for event in events[-32:]
+                )
+                if len(events) > 32:
+                    lines.append(
+                        f"- {len(events) - 32} earlier events preceded this recent window."
+                    )
+            else:
+                lines.extend(f"- {self._render_event(event)}" for event in events)
         else:
             lines.append("Nothing else stirs nearby.")
         return "\n".join(lines)

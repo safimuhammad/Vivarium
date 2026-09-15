@@ -47,25 +47,41 @@ def serialize_world_snapshot(
         A JSON-ready dict matching the Layer 2b frontend contract.
     """
     home_ids_by_agent = _home_ids_by_agent(world)
-    home_snapshots = [serialize_home(home) for home in _sorted_homes(world)]
+    home_snapshots = [
+        serialize_home(
+            home,
+            spatial=spatial.home_snapshot(home.home_id)
+            if (spatial := world.spatial_for_region(home.region)) is not None
+            else None,
+        )
+        for home in _sorted_homes(world)
+    ]
+    agents: list[JsonObject] = []
+    for agent in sorted(world.get_all_agents(), key=lambda item: item.id):
+        serialized_agent = serialize_agent(
+            agent,
+            home_id=home_ids_by_agent.get(agent.id),
+            seed_persona=seed_persona,
+        )
+        if (spatial := world.spatial_for_agent(agent.id)) is not None:
+            serialized_agent["spatial"] = spatial.position_at(agent.id, world.now())
+        agents.append(serialized_agent)
+
+    regions: list[JsonObject] = []
+    for region in sorted(world.get_all_regions(), key=lambda item: item.name):
+        serialized_region = serialize_region(region)
+        if (spatial := world.spatial_for_region(region.name)) is not None:
+            serialized_region["spatial"] = spatial.spatial_metadata()
+        regions.append(serialized_region)
+
     return {
         "schema": 1,
         "run_id": run_id,
         "world_time": world.now(),
         "event_cursor": event_cursor,
         "seed_persona": seed_persona,
-        "agents": [
-            serialize_agent(
-                agent,
-                home_id=home_ids_by_agent.get(agent.id),
-                seed_persona=seed_persona,
-            )
-            for agent in sorted(world.get_all_agents(), key=lambda item: item.id)
-        ],
-        "regions": [
-            serialize_region(region)
-            for region in sorted(world.get_all_regions(), key=lambda item: item.name)
-        ],
+        "agents": agents,
+        "regions": regions,
         "homes": [home for home in home_snapshots if home["status"] == HomeStatus.STANDING.value],
         "ruins": [home for home in home_snapshots if home["status"] == HomeStatus.RUIN.value],
         "pending_proposals": serialize_pending_proposals(world),
@@ -141,9 +157,18 @@ def serialize_region(region: Region) -> JsonObject:
     }
 
 
-def serialize_home(home: Home) -> JsonObject:
-    """Return a JSON-ready standing-home or ruin snapshot."""
-    return {
+def serialize_home(home: Home, *, spatial: JsonObject | None = None) -> JsonObject:
+    """Return a JSON-ready standing-home or ruin snapshot.
+
+    Args:
+        home: Standing home or ruin to serialize.
+        spatial: Optional assigned production-plot metadata. ``None`` retains the
+            legacy home shape exactly.
+
+    Returns:
+        A detached home record, including spatial placement only when present.
+    """
+    snapshot: JsonObject = {
         "home_id": home.home_id,
         "owner_id": home.owner_id,
         "region": home.region,
@@ -160,6 +185,9 @@ def serialize_home(home: Home) -> JsonObject:
         "breachers": sorted(home.breachers),
         "is_hoarding": home_is_hoarding(home),
     }
+    if spatial is not None:
+        snapshot["spatial"] = spatial
+    return snapshot
 
 
 def serialize_pending_proposals(world: WorldState) -> list[JsonObject]:

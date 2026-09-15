@@ -5,6 +5,7 @@ import {
   AUTO_CAMERA_QUIET_MS,
   AUTO_CAMERA_RETURN_COOLDOWN_MS,
   createAutoCameraDirectorState,
+  rebaseAutoCameraDirector,
   resolveAutoCamera,
   type AutoCameraDirectorState,
 } from "./AutoCameraDirector";
@@ -38,6 +39,43 @@ function advance(
 }
 
 describe("AutoCameraDirector", () => {
+  it("keeps an explicit initial Auto rebase through the first live lineage", () => {
+    const rebased = rebaseAutoCameraDirector(createAutoCameraDirectorState(), "spring", 100);
+    const bound = advance(rebased, {
+      nowMs: 101,
+      currentRegionId: "spring",
+      activity: activity("worn", "remote-1", "resource_changed"),
+    });
+    expect(bound.decision).toMatchObject({
+      regionId: "spring", switchRequested: false, reason: "dwell",
+    });
+    expect(bound.next.enteredAtMs).toBe(100);
+    expect(bound.next.lineageKey).toBe("live:run-a");
+
+    const later = advance(bound.next, {
+      nowMs: 100 + AUTO_CAMERA_DWELL_MS,
+      currentRegionId: "spring",
+      activity: activity("worn", "remote-2", "resource_changed"),
+    });
+    expect(later.decision).toMatchObject({ regionId: "worn", switchRequested: true });
+  });
+
+  it("starts fresh for a different known run after a viewer rebase", () => {
+    const firstRun = advance(createAutoCameraDirectorState(), {
+      nowMs: 0, currentRegionId: "spring",
+    });
+    const rebased = rebaseAutoCameraDirector(firstRun.next, "spring", 100);
+    const newRun = resolveAutoCamera(rebased, {
+      lineageKey: "live:run-b",
+      nowMs: 101,
+      currentRegionId: "spring",
+      activity: activity("worn", "new-run-first", "agent_left_region"),
+    });
+    expect(newRun.decision).toMatchObject({
+      regionId: "worn", switchRequested: true, reason: "initial",
+    });
+  });
+
   it("uses the first typed action to establish initial framing over a stale mounted region", () => {
     const initial = advance(createAutoCameraDirectorState(), {
       nowMs: 0,

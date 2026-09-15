@@ -143,9 +143,18 @@ export function resolveAutoCamera(
   }>,
 ): ResolveAutoCameraResult {
   const startsLineage = input.lineageKey !== previous.lineageKey;
-  let state = !startsLineage
-    ? cloneState(previous)
-    : { ...createAutoCameraDirectorState(), lineageKey: input.lineageKey };
+  let state = cloneState(previous);
+  if (startsLineage) {
+    // Free/Follow can hand a viewed region back to Auto before any typed event
+    // has bound the director to a run. Bind that explicit rebase without losing
+    // its dwell. A change from an already known lineage still starts fresh.
+    const hasUnboundViewerRebase = previous.lineageKey === null
+      && previous.activeRegionId !== null;
+    state = {
+      ...(hasUnboundViewerRebase ? state : createAutoCameraDirectorState()),
+      lineageKey: input.lineageKey,
+    };
+  }
 
   // A stale terrain can be mounted before the first typed scene reaches Auto. Establish that
   // scene's region before beginning dwell; otherwise an arbitrary bootstrap region would hold

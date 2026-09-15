@@ -210,6 +210,15 @@ async def harvest_resources(
     curr_region = world.get_region(agent_state.current_position)
     if curr_region is None:
         return f"Error: Region {agent_state.current_position!r} does not exist."
+    spatial_site = None
+    spatial = world.spatial_for_agent(agent_id)
+    if spatial is not None:
+        spatial_site = spatial.can_gather(agent_id, req_resource.value, world.now())
+        if spatial_site is None:
+            return (
+                f"Invalid: You can gather {req_resource.value} only after arriving and "
+                "stopping at a matching resource site."
+            )
 
     status, resource = _resource_handler_by_region(curr_region, req_resource, quantity)
     if not status:
@@ -256,6 +265,8 @@ async def harvest_resources(
             f"from Region {curr_region.name}"
         ),
     }
+    if spatial_site is not None:
+        payload["site_id"] = spatial_site.id
     event_message = Event(
         "resource_changed",
         agent_id,

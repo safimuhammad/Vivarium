@@ -16,6 +16,32 @@ import {
 } from "./publicViewModels";
 
 describe("observer public view-model boundary", () => {
+  it("shows a named physical journey using the presented clock, including pause and arrival", () => {
+    const base = makeFrame();
+    const spatial = { version: 1 as const, region_id: "nirvana" as const,
+      map_id: "nirvana:123", layout_fingerprint: "123", x: 16, y: 16,
+      observed_at: 100, at_landmark: null,
+      travel: { id: "journey-1", destination_id: "energy-1", started_at: 100, arrives_at: 110,
+        route: [{ x: 16, y: 16 }, { x: 336, y: 16 }] } };
+    const frame = makeFrame({ ...base, selection: { kind: "agent", id: "agent_001" },
+      spatialPlayback: { sampledAt: 105, speed: 1, paused: true },
+      world: { ...base.world,
+        agents: [{ completeness: "exact", value: { ...base.world.agents[0]!.value, position: "nirvana", spatial } }],
+        regions: [{ completeness: "exact", value: { name: "nirvana", spatial: {
+          version: 1, region_id: "nirvana", map_id: "nirvana:123", layout_fingerprint: "123",
+          tile_size: 32, initial_pressure: { populationHighWater: 2, builtFootprintHighWater: 0 },
+          landmarks: [{ id: "energy-1", name: "Foraging grove", x: 336, y: 16, affordances: ["energy"] }],
+        } } }],
+      } });
+    expect(projectSelection(frame, makeChronicle())?.facts).toContainEqual({
+      label: "Journey", value: "Walking to Foraging grove · 5s remaining · view paused",
+    });
+    expect(projectSelection({ ...frame, spatialPlayback: { sampledAt: 110, speed: 1, paused: false } }, makeChronicle())?.facts)
+      .toContainEqual({ label: "Journey", value: "At Foraging grove" });
+    expect(projectSelection(makeFrame({ selection: { kind: "agent", id: "agent_001" } }), makeChronicle())?.facts
+      .some((fact) => fact.label === "Journey")).toBe(false);
+  });
+
   it("shows a ruin's age from the presented frame instead of a raw epoch timestamp", () => {
     const base = makeFrame();
     const at = 1_789_298_433.351244;
@@ -432,6 +458,19 @@ describe("observer public view-model boundary", () => {
       story,
       cards: [agent, home, ruin, region].map(({ key: _key, ...card }) => card),
     })).not.toMatch(/mystic_007|raider_12|newcomer_3/);
+  });
+
+  it("formats selected being resources without exposing floating-point tails", () => {
+    const base = makeFrame();
+    const frame = makeFrame({
+      world: { ...base.world, agents: base.world.agents.map((record) => record.value.id === "agent_001"
+        ? { ...record, value: { ...record.value, materials: 24.0308336019516, energy: 148.19999999999996 } }
+        : record) },
+      selection: { kind: "agent", id: "agent_001" },
+    });
+    const being = projectSelection(frame, makeChronicle())!;
+    expect(being.facts).toContainEqual({ label: "Materials", value: "24" });
+    expect(being.facts).toContainEqual({ label: "Energy", value: "148.2" });
   });
 
   it("formats fractional region resource ratios without floating-point noise", () => {

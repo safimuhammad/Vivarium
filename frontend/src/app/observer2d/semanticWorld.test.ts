@@ -110,6 +110,64 @@ describe("semantic world public boundary", () => {
     expect(view?.subjects[3]?.status).toBe("Ruin, 1m 5s old");
   });
 
+  it("names an authoritative spatial journey when the renderer has no active action", () => {
+    const base = presentedFrame();
+    const frame: PresentedObserverFrame = {
+      ...base,
+      world: {
+        ...base.world,
+        agents: [{ completeness: "exact", value: {
+          ...base.world.agents[0]!.value,
+          spatial: {
+            version: 1,
+            region_id: "nirvana",
+            map_id: "nirvana:map-1",
+            layout_fingerprint: "map-1",
+            x: 64,
+            y: 96,
+            observed_at: 42,
+            at_landmark: null,
+            travel: {
+              id: "journey-1",
+              destination_id: "foraging_grove",
+              route: [{ x: 64, y: 96 }, { x: 160, y: 96 }],
+              started_at: 40,
+              arrives_at: 60,
+            },
+          },
+        } }],
+        regions: [{ completeness: "exact", value: {
+          ...base.world.regions[0]!.value,
+          spatial: {
+            version: 1,
+            region_id: "nirvana",
+            map_id: "nirvana:map-1",
+            layout_fingerprint: "map-1",
+            tile_size: 32,
+            landmarks: [{
+              id: "foraging_grove",
+              name: "Foraging Grove",
+              x: 160,
+              y: 96,
+              affordances: ["forage"],
+            }],
+            initial_pressure: { populationHighWater: 2, builtFootprintHighWater: 0 },
+          },
+        } }],
+      },
+    };
+    const snapshot = semanticSnapshot({
+      subjects: semanticSnapshot().subjects.map((subject) => subject.kind === "agent"
+        ? { ...subject, action: null }
+        : subject),
+    });
+
+    const view = projectSemanticWorld(frame, snapshot, new SemanticSubjectTokenRegistry(), "nirvana");
+
+    expect(view?.subjects.find((subject) => subject.kind === "agent")?.currentAction)
+      .toBe("Walking to Foraging Grove");
+  });
+
   it("retains opaque tokens through updates, does not reorder on position, and resolves callbacks privately", () => {
     const frame = presentedFrame();
     const registry = new SemanticSubjectTokenRegistry();

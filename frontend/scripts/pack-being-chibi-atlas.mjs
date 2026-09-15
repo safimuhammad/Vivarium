@@ -66,6 +66,24 @@ export const IDLE_FRAME = "walk-down-1";
 /** The full 7-character roster, in packed (vertical stacking) order. `m1` is the shipped base. */
 export const CHARACTER_IDS = Object.freeze(["m1", "f1", "f2", "f3", "m2", "m3", "m4"]);
 
+/**
+ * Native bearing of each authored side-walk strip.
+ *
+ * The runtime has one simple convention: a packed side frame natively faces
+ * east and the renderer mirrors it only for west. The approved f3 source is
+ * the exceptional west-facing strip, so normalize it at this pack boundary
+ * rather than putting a character-specific exception in the actor renderer.
+ */
+export const SIDE_SOURCE_FACING_BY_CHARACTER = Object.freeze({
+  m1: "east",
+  f1: "east",
+  f2: "east",
+  f3: "west",
+  m2: "east",
+  m3: "east",
+  m4: "east",
+});
+
 /** Walk cycle source strips, in the exact row order they are packed within one character's block. */
 const WALK_STRIPS = Object.freeze([
   Object.freeze({ direction: "down", file: "walk-down.png" }),
@@ -220,8 +238,11 @@ export async function buildCharacterGroup(characterId, rowOffset = 0, options = 
 
   for (const [row, strip] of WALK_STRIPS.entries()) {
     const { frames: stripFrames, nativeFrameWidth } = await extractWalkFrames(path.join(sourceDir, strip.file));
+    const framesForAtlas = strip.direction === "side" && SIDE_SOURCE_FACING_BY_CHARACTER[characterId] === "west"
+      ? await Promise.all(stripFrames.map((buffer) => sharp(buffer).flop().png().toBuffer()))
+      : stripFrames;
     const offset = centerOffset(nativeFrameWidth);
-    stripFrames.forEach((buffer, column) => {
+    framesForAtlas.forEach((buffer, column) => {
       const name = `walk-${strip.direction}-${column}`;
       const x = column * FRAME_WIDTH;
       const y = (rowOffset + row) * FRAME_HEIGHT;

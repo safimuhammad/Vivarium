@@ -1787,6 +1787,7 @@ function runtimeFixture(options: Readonly<{
     holdCurrentMoment: vi.fn(),
     viewMoment: vi.fn(),
     viewCursor: vi.fn(),
+    replayCursor: vi.fn(async () => false),
     retryRecovery: vi.fn(async () => undefined),
     reconnectStream: vi.fn(),
     setCameraMode: vi.fn(),

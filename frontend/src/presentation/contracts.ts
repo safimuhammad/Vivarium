@@ -434,6 +434,20 @@ export interface PresentationIngressSnapshot {
   readonly gaps: readonly PresentationIngressFault[];
 }
 
+/**
+ * The presentation playback sample used to draw backend-recorded spatial
+ * routes.  It is intentionally separate from `world.worldTime`: that value is
+ * an exact checkpoint fact and must not become an advancing archive clock.
+ */
+export interface PresentedSpatialPlayback {
+  /** Simulation seconds sampled from the session's real playback clock. */
+  readonly sampledAt: number;
+  /** Current viewer playback multiplier. */
+  readonly speed: number;
+  /** True while the viewer has frozen playback. */
+  readonly paused: boolean;
+}
+
 export interface PresentedObserverFrame extends FrameIdentity {
   readonly source: PresentationSource;
   /** Actual run metadata; omitted where a recording does not identify its model. */
@@ -441,6 +455,8 @@ export interface PresentedObserverFrame extends FrameIdentity {
   readonly ingestedCursor: number;
   readonly presentedCursor: number;
   readonly world: PresentedWorldView;
+  /** Present only while the exact session snapshot declares a spatial map. */
+  readonly spatialPlayback?: PresentedSpatialPlayback;
   readonly scene: PresentedSceneView | null;
   /**
    * The overlay lane: display-only beats published without a stage lease.

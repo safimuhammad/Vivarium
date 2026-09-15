@@ -50,7 +50,7 @@ import {
   reduceLaunch,
   type LaunchPhase,
 } from "./startSequence";
-import type { RunConfig, RunDefaults } from "./runConfig";
+import type { RunConfig, RunDefaults, RunLifecycle } from "./runConfig";
 import { SavedRunsScreen } from "./SavedRunsScreen";
 import { fetchSavedRuns, type SavedRunSummary } from "./savedRunsClient";
 import "./gateway.css";
@@ -116,10 +116,59 @@ export function GatewayApp({
   const [savedError, setSavedError] = useState<string | null>(null);
   const [savedRevision, setSavedRevision] = useState(0);
   const [chosenRecording, setChosenRecording] = useState<SavedRunSummary | null>(null);
+  /** A run adopted from the landing page after a reload, rather than started here. */
+  const [adoptedRunId, setAdoptedRunId] = useState<string | null>(null);
+  /** The run discovered by the read-only landing probe, when it is still current. */
+  const [currentWorldRunId, setCurrentWorldRunId] = useState<string | null>(null);
+  /** A truthful explanation when a discovered run changes before it can be reopened. */
+  const [currentWorldMessage, setCurrentWorldMessage] = useState<string | null>(null);
+  const [rejoiningCurrentWorld, setRejoiningCurrentWorld] = useState(false);
+  const [landingProbeRevision, setLandingProbeRevision] = useState(0);
   /** Set only on the way back from a run this viewer ended; cleared on the way out. */
   const [endedNote, setEndedNote] = useState<string | null>(null);
   const nowRef = useRef(now);
   nowRef.current = now;
+  const viewRef = useRef<GatewayView>(view);
+  viewRef.current = view;
+  /** Invalidates a probe or click that belongs to a previous landing state. */
+  const lifecycleProbeRef = useRef(0);
+  const rejoinAttemptRef = useRef(0);
+
+  /** A pending read must never write into a component that has gone away. */
+  useEffect(() => () => {
+    lifecycleProbeRef.current += 1;
+    rejoinAttemptRef.current += 1;
+  }, []);
+
+  /**
+   * Discovers an already-running world without changing its lifecycle.
+   *
+   * This is one read each time the landing page is entered. The landing page
+   * never starts polling a world the viewer has not asked to watch; each visit
+   * gets one fresh answer, and the button performs a second read before it
+   * adopts it.
+   */
+  useEffect(() => {
+    if (view !== "landing") return undefined;
+    const probe = ++lifecycleProbeRef.current;
+    let live = true;
+    void resolvedClient.getLifecycle()
+      .then((lifecycle) => {
+        if (!live || lifecycleProbeRef.current !== probe || viewRef.current !== "landing") return;
+        setCurrentWorldRunId(readableRunningRunId(lifecycle));
+        setCurrentWorldMessage(null);
+      })
+      .catch(() => {
+        if (!live || lifecycleProbeRef.current !== probe || viewRef.current !== "landing") return;
+        // A socket that is offline is not evidence that a world can be resumed.
+        setCurrentWorldRunId(null);
+        setCurrentWorldMessage(null);
+      });
+    return () => {
+      live = false;
+      rejoinAttemptRef.current += 1;
+    };
+  }, [landingProbeRevision, resolvedClient, view]);
 
   useEffect(() => {
     if (view !== "saved") return;
@@ -134,6 +183,12 @@ export function GatewayApp({
   }, [listRecordings, savedRevision, view]);
 
   const openConfiguration = useCallback(() => {
+    lifecycleProbeRef.current += 1;
+    rejoinAttemptRef.current += 1;
+    setCurrentWorldRunId(null);
+    setCurrentWorldMessage(null);
+    setRejoiningCurrentWorld(false);
+    setAdoptedRunId(null);
     setEndedNote(null);
     setView("configuring");
     setDefaultsState((current) => (current.kind === "ready" ? current : { kind: "loading" }));
@@ -153,11 +208,64 @@ export function GatewayApp({
    * the sheet the last one was started with.
    */
   const returnToGateway = useCallback((): void => {
+    lifecycleProbeRef.current += 1;
+    rejoinAttemptRef.current += 1;
+    setCurrentWorldRunId(null);
+    setCurrentWorldMessage(null);
+    setRejoiningCurrentWorld(false);
+    setAdoptedRunId(null);
     dispatch({ kind: "reset" });
     setDefaultsState({ kind: "idle" });
     setView("landing");
     setEndedNote(RUN_ENDED_NOTE);
   }, []);
+
+  /**
+   * Re-checks the exact run found on mount before entering the observer.
+   *
+   * The second read is the race boundary: a run may have ended or been replaced
+   * while this page sat open. Only the same non-empty run id still reporting
+   * `running` is adopted; every other answer leaves the gateway in place.
+   */
+  const returnToCurrentWorld = useCallback((): void => {
+    const expectedRunId = currentWorldRunId;
+    if (expectedRunId === null || rejoiningCurrentWorld) return;
+    const attempt = ++rejoinAttemptRef.current;
+    lifecycleProbeRef.current += 1;
+    setRejoiningCurrentWorld(true);
+    setCurrentWorldMessage(null);
+    void resolvedClient.getLifecycle()
+      .then((lifecycle) => {
+        if (attempt !== rejoinAttemptRef.current || viewRef.current !== "landing") return;
+        if (lifecycle.status === "running" && lifecycle.run_id === expectedRunId) {
+          setCurrentWorldRunId(null);
+          setCurrentWorldMessage(null);
+          setRejoiningCurrentWorld(false);
+          setAdoptedRunId(expectedRunId);
+          setView("observing");
+          return;
+        }
+        setCurrentWorldRunId(null);
+        setRejoiningCurrentWorld(false);
+        setCurrentWorldMessage(rejoinFailureMessage(expectedRunId, lifecycle));
+      })
+      .catch(() => {
+        if (attempt !== rejoinAttemptRef.current || viewRef.current !== "landing") return;
+        setCurrentWorldRunId(null);
+        setRejoiningCurrentWorld(false);
+        setCurrentWorldMessage("The current world could not be checked. Try again in a moment.");
+      });
+  }, [currentWorldRunId, rejoiningCurrentWorld, resolvedClient]);
+
+  /** Retries a failed or raced landing check without starting or stopping a run. */
+  const retryCurrentWorld = useCallback((): void => {
+    if (viewRef.current !== "landing" || rejoiningCurrentWorld) return;
+    lifecycleProbeRef.current += 1;
+    rejoinAttemptRef.current += 1;
+    setCurrentWorldRunId(null);
+    setCurrentWorldMessage(null);
+    setLandingProbeRevision((revision) => revision + 1);
+  }, [rejoiningCurrentWorld]);
 
   useEffect(() => {
     if (defaultsState.kind !== "loading") return;
@@ -176,6 +284,7 @@ export function GatewayApp({
 
   const goLive = useCallback(() => {
     if (defaultsState.kind !== "ready") return;
+    setAdoptedRunId(null);
     const config = defaultsState.config;
     dispatch({ kind: "submit" });
     void resolvedClient.start(config)
@@ -247,9 +356,10 @@ export function GatewayApp({
       );
   }
 
-  if (view === "observing" && launch.kind === "live") {
+  const observedRunId = launch.kind === "live" ? launch.runId : adoptedRunId;
+  if (view === "observing" && observedRunId !== null) {
     return renderObserver !== undefined
-      ? <>{renderObserver(launch.runId, returnToGateway)}</>
+      ? <>{renderObserver(observedRunId, returnToGateway)}</>
       : (
         <Suspense fallback={<GatewayLoading label="Opening the world" />}>
           {/*
@@ -315,8 +425,18 @@ export function GatewayApp({
   return (
     <LandingScreen
       note={endedNote}
+      currentWorldNote={currentWorldMessage}
+      onRetryCurrentWorld={currentWorldMessage === null ? null : retryCurrentWorld}
+      onReturnToCurrentWorld={currentWorldRunId === null ? null : returnToCurrentWorld}
+      returningToCurrentWorld={rejoiningCurrentWorld}
       onConfigure={openConfiguration}
       onWatchRecording={() => {
+        lifecycleProbeRef.current += 1;
+        rejoinAttemptRef.current += 1;
+        setCurrentWorldRunId(null);
+        setCurrentWorldMessage(null);
+        setRejoiningCurrentWorld(false);
+        setAdoptedRunId(null);
         setEndedNote(null);
         setView("saved");
       }}
@@ -438,4 +558,23 @@ function defaultClient(): RunLifecycleClient {
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function readableRunningRunId(lifecycle: RunLifecycle): string | null {
+  return lifecycle.status === "running" && lifecycle.run_id.trim().length > 0
+    ? lifecycle.run_id
+    : null;
+}
+
+function rejoinFailureMessage(expectedRunId: string, lifecycle: RunLifecycle): string {
+  if (lifecycle.status === "running" && lifecycle.run_id !== expectedRunId) {
+    return "The current world changed before it could be reopened.";
+  }
+  if (lifecycle.status === "starting") {
+    return "The current world is still coming to life. Try again in a moment.";
+  }
+  if (lifecycle.status === "stopping" || lifecycle.status === "stopped" || lifecycle.status === "failed") {
+    return "The current world is no longer running.";
+  }
+  return "The current world could not be confirmed. Try again in a moment.";
 }

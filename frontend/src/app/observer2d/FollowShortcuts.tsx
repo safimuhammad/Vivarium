@@ -22,6 +22,7 @@ import {
 import type { StreamEvent } from "./chronicleStream/streamEvent";
 import type { FollowRosterView } from "./followSubject";
 import type { FrameIdentity } from "../../presentation/contracts";
+import { SavedBeingPortrait } from "../gateway/SavedBeingPortrait";
 import {
   deriveAutoFollowSlots,
   MAX_AUTO_FOLLOW_SLOTS,
@@ -301,8 +302,11 @@ const FollowShortcutCard = memo(function FollowShortcutCard({
         onFocus={onFocus}
         onBlur={onBlur}
       >
-        <span className="follow-shortcuts__medallion" aria-hidden="true"
-          style={{ backgroundColor: slot.hue }}>{slot.initials}</span>
+        <SavedBeingPortrait
+          id={slot.key}
+          size="compact"
+          className="follow-shortcuts__portrait"
+        />
         <span className="follow-shortcuts__copy">
           <strong className="follow-shortcuts__name">{slot.name}</strong>
           <span className="follow-shortcuts__action">

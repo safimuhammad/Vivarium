@@ -10,6 +10,14 @@ import type {
   ProductionAssetManifest,
 } from "../assets/productionManifest";
 import { isProductionDiagnosticsForTestEnabled } from "../debug";
+import { DEPTH_SCENERY_ATLAS_ID, DEPTH_SCENERY_FRAMES } from "../depth/DepthSceneryAssets";
+
+const COTTAGE_RENDER_WIDTH_PX = 128;
+/** Source-space porch contact measured on the generated cottage frame. */
+const COTTAGE_SOURCE_PORCH_CONTACT = Object.freeze({ x: 266, y: 438 });
+/** Source-space windows/door used for tiny state overlays after scaling. */
+const COTTAGE_SOURCE_WINDOW = Object.freeze({ x: 264, y: 239, radius: 20 });
+const COTTAGE_SOURCE_DOOR_OPENING = Object.freeze({ x: 342, y: 218, width: 42, height: 88 });
 
 export interface PresentedHomeInput {
   readonly record: PresentedRecord<HomeSnapshot>;
@@ -424,6 +432,7 @@ export class HomeActor {
   readonly #detailLease: ProductionAssetLease;
   readonly #ruinLease: ProductionAssetLease;
   readonly #yardLease: ProductionAssetLease;
+  readonly #cottageLease: ProductionAssetLease | null;
   readonly #yardBaseFrame: NativeFrameRef;
   #plot: Vec2;
   #door: Vec2;
@@ -462,6 +471,7 @@ export class HomeActor {
     const detailLease = options.atlasLeases.get(this.#home.detailAtlasId);
     const ruinLease = options.atlasLeases.get(this.#home.ruinAtlasId);
     const yardLease = options.atlasLeases.get(this.#home.yard.atlasId);
+    const cottageLease = options.atlasLeases.get(DEPTH_SCENERY_ATLAS_ID) ?? null;
     if (!componentLease || !detailLease || !ruinLease || !yardLease) {
       const missing = [
         componentLease ? null : this.#home.atlasId,
@@ -481,6 +491,7 @@ export class HomeActor {
     this.#detailLease = detailLease;
     this.#ruinLease = ruinLease;
     this.#yardLease = yardLease;
+    this.#cottageLease = cottageLease;
     this.#yardBaseFrame = this.#home.yard.standingVariants[
       stableHash(`${options.id}\0home-yard-base`) % this.#home.yard.standingVariants.length
     ]!;
@@ -642,6 +653,7 @@ export class HomeActor {
     if (pass !== "back" && pass !== "front") throw new Error("Home draw pass must be back or front.");
     context.imageSmoothingEnabled = false;
     const visual = this.#visual();
+    const cottageVisible = this.#shouldDrawCottage();
     if (pass === "back") {
       const yardAt = {
         x: this.#plot.x + this.#home.yard.plotOffsetPx.x,
@@ -662,6 +674,12 @@ export class HomeActor {
       if (pass === "back" && visual.ruinFrameId !== null) {
         this.#drawFrame(context, this.#ruinLease.value, this.#home.ruinFrames[visual.ruinFrameId], this.#plot, 128, 128);
       }
+    } else if (cottageVisible) {
+      // The generated exterior owns the complete standing shell, so it is
+      // emitted only from the front pass. Keeping it out of the back pass
+      // lets yards remain behind the structure and lets the scene graph sort
+      // the cottage's porch contact with other feet-anchored actors.
+      if (pass === "front") this.#drawCottage(context);
     } else {
       const components = pass === "back" ? visual.backComponents : visual.frontComponents;
       for (const id of components) {
@@ -755,7 +773,8 @@ export class HomeActor {
     if (this.#disposed) return;
     this.#disposed = true;
     const released = new Set<ProductionAssetLease>();
-    for (const lease of [this.#componentLease, this.#detailLease, this.#ruinLease, this.#yardLease]) {
+    for (const lease of [this.#componentLease, this.#detailLease, this.#ruinLease, this.#yardLease, this.#cottageLease]) {
+      if (lease === null) continue;
       if (released.has(lease)) continue;
       released.add(lease);
       lease.release();
@@ -764,6 +783,71 @@ export class HomeActor {
 
   #assertMonotonic(nowMs: number): void {
     if (this.#lastNowMs !== null && nowMs < this.#lastNowMs) throw new Error("Home time cannot move backwards.");
+  }
+
+  #shouldDrawCottage(): boolean {
+    return this.#cottageLease !== null
+      && !this.#provisional
+      && !this.#unknown
+      && this.#durable.status === "standing"
+      && this.#durable.integrityRatio !== null
+      && this.#durable.integrityRatio >= 0.67
+      && this.#active === null
+      // Door/hearth are persistent presentation state. Their small overlays
+      // are applied after the shell in #drawCottage rather than swapping the
+      // complete exterior back to the legacy component art.
+      ;
+  }
+
+  #drawCottage(context: CanvasRenderingContext2D): void {
+    if (this.#cottageLease === null) return;
+    const source = DEPTH_SCENERY_FRAMES.cottage;
+    const scale = COTTAGE_RENDER_WIDTH_PX / source.width;
+    const height = Math.round(source.height * scale);
+    const at = {
+      x: Math.round(this.#door.x - COTTAGE_SOURCE_PORCH_CONTACT.x * scale),
+      y: Math.round(this.#door.y - COTTAGE_SOURCE_PORCH_CONTACT.y * scale),
+    };
+    context.drawImage(
+      this.#cottageLease.value,
+      source.x,
+      source.y,
+      source.width,
+      source.height,
+      at.x,
+      at.y,
+      COTTAGE_RENDER_WIDTH_PX,
+      height,
+    );
+    this.#drawCottageStateOverlays(context, at, scale);
+  }
+
+  #drawCottageStateOverlays(
+    context: CanvasRenderingContext2D,
+    at: Vec2,
+    scale: number,
+  ): void {
+    const windowX = Math.round(at.x + COTTAGE_SOURCE_WINDOW.x * scale);
+    const windowY = Math.round(at.y + COTTAGE_SOURCE_WINDOW.y * scale);
+    const windowRadius = Math.max(1, Math.round(COTTAGE_SOURCE_WINDOW.radius * scale));
+    context.save();
+    context.fillStyle = this.#hearthState === "warm"
+      ? "rgba(255, 181, 72, 0.42)"
+      : "rgba(20, 22, 20, 0.48)";
+    context.beginPath();
+    context.arc(windowX, windowY, windowRadius, 0, Math.PI * 2);
+    context.fill();
+    if (this.#doorState === "open") {
+      const opening = COTTAGE_SOURCE_DOOR_OPENING;
+      context.fillStyle = "rgba(14, 17, 15, 0.82)";
+      context.fillRect(
+        Math.round(at.x + opening.x * scale),
+        Math.round(at.y + opening.y * scale),
+        Math.max(1, Math.round(opening.width * scale)),
+        Math.max(1, Math.round(opening.height * scale)),
+      );
+    }
+    context.restore();
   }
 
   #visual(): { backComponents: string[]; frontComponents: string[]; ruinFrameId: string | null } {

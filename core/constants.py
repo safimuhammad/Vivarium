@@ -42,6 +42,10 @@ from typing import Final
 
 from memory.models import Importance
 
+# Physical Nirvana pilot: local senses and the lower bound between event-woken breaths.
+SPATIAL_SENSE_RADIUS_TILES: Final[float] = 12.0
+SPATIAL_ACTIVITY_MIN_PAUSE_SECONDS: Final[float] = 1.0
+
 # ---------------------------------------------------------------------------
 # Action energy costs
 # ---------------------------------------------------------------------------

@@ -51,6 +51,7 @@ import {
   type ProductionStaticScenePlan,
   type ProductionStaticScenePreparation,
 } from "../staticScene/ProductionStaticScene";
+import { createGroundingAccentOperation } from "../staticScene/StaticPainterAccents";
 import {
   createNirvanaEastAtlasAssets,
   requireNirvanaEastFrame,
@@ -114,6 +115,7 @@ interface SortableDraw {
   readonly operation: ProductionStaticDrawOperation;
   readonly pivotX: number;
   readonly pivotY: number;
+  readonly sortPriority: number;
   readonly stableId: string;
 }
 
@@ -234,6 +236,21 @@ function* nirvanaEastPaintOperations(
     const worldX = footX - frame.pivot.x;
     const worldY = footY - frame.pivot.y;
     const stableId = `authored:${placement.id}`;
+    if (isGroundingAccentScenery(frame.id)) {
+      const accent = createGroundingAccentOperation(
+        `grounding:${stableId}`,
+        frame,
+        footX,
+        footY,
+      );
+      sorted.push({
+        operation: accent,
+        pivotX: footX,
+        pivotY: footY,
+        sortPriority: 0,
+        stableId: accent.stableId,
+      });
+    }
     sorted.push({
       operation: frameOperation(
         stableId,
@@ -247,6 +264,7 @@ function* nirvanaEastPaintOperations(
       ),
       pivotX: footX,
       pivotY: footY,
+      sortPriority: 1,
       stableId,
     });
   }
@@ -258,6 +276,21 @@ function* nirvanaEastPaintOperations(
     // Landform props (`s.mesa.0` / `s.butte.0` / `s.outcrop.0`) arrive with `x`/`y`
     // already offset by their authored pivot (see the module docstring) — draw them at
     // their own coordinates unmodified, exactly like every other prop.
+    if (isGroundingAccentScenery(prop.frameId)) {
+      const accent = createGroundingAccentOperation(
+        `grounding:${stableId}`,
+        frame,
+        prop.footX,
+        prop.footY,
+      );
+      sorted.push({
+        operation: accent,
+        pivotX: prop.footX,
+        pivotY: prop.footY,
+        sortPriority: 0,
+        stableId: accent.stableId,
+      });
+    }
     sorted.push({
       operation: frameOperation(
         stableId,
@@ -271,6 +304,7 @@ function* nirvanaEastPaintOperations(
       ),
       pivotX: prop.footX,
       pivotY: prop.footY,
+      sortPriority: 1,
       stableId,
     });
   }
@@ -278,6 +312,7 @@ function* nirvanaEastPaintOperations(
   sorted.sort((left, right) => (
     left.pivotY - right.pivotY
     || left.pivotX - right.pivotX
+    || left.sortPriority - right.sortPriority
     || left.stableId.localeCompare(right.stableId)
   ));
   for (const { operation } of sorted) yield operation;
@@ -311,6 +346,20 @@ function* nirvanaEastPaintOperations(
       );
     }
   }
+}
+
+/** Existing large/structural East frames that benefit from a small grounded edge. */
+function isGroundingAccentScenery(frameId: string): boolean {
+  return [
+    "s.mesa.",
+    "s.butte.",
+    "s.outcrop.",
+    "s.hoodoo.",
+    "s.mesquite.",
+    "s.boulder.",
+    "s.deadwood.",
+    "s.plank.",
+  ].some((prefix) => frameId.startsWith(prefix));
 }
 
 function continuationVariant(column: number, row: number): number {

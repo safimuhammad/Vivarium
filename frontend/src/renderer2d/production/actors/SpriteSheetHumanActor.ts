@@ -31,8 +31,12 @@ import { decideAssetFallback } from "../failurePolicy";
 import { deriveHumanAppearance, type HumanAppearance } from "./appearance";
 import {
   createPaletteVariantSource,
+  createVisualPaletteVariantSource,
+  drawBeingAccessory,
   resolveBeingPaletteVariant,
+  type BeingAccessory,
   type BeingPaletteVariant,
+  type BeingVisualPaletteVariant,
 } from "./beingPalette";
 import {
   BEING_CHIBI_ATLAS_ID,
@@ -53,7 +57,8 @@ import type {
   LayeredHumanSnapshot,
   ProductionActorSignal,
 } from "./LayeredHumanActor";
-import type { ProductionHumanActor } from "./ProductionHumanActor";
+import type { AuthoritativeMotionSample, ProductionHumanActor } from "./ProductionHumanActor";
+import type { BeingVisualIdentity } from "./visualIdentity";
 
 /**
  * `HumanBodyAction` minus the locomotion/orientation-internal states, plus
@@ -352,6 +357,13 @@ export interface SpriteSheetHumanActorOptions extends LayeredHumanActorOptions {
    * it explicitly; this actor never resolves it on its own.
    */
   readonly characterId?: BeingCharacterId;
+  /**
+   * Stable v2 visual choices resolved from the being id. When supplied, the
+   * actor uses this identity's roster frame, garment family, and accessory;
+   * persona is intentionally absent from the resolver so newborn projections
+   * stay visually stable when their exact record arrives.
+   */
+  readonly visualIdentity?: BeingVisualIdentity;
 }
 
 /**
@@ -369,8 +381,12 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
   readonly #leases: ReadonlyMap<string, ProductionAssetLease>;
   readonly #reducedMotion: boolean;
   readonly #artFallback: "person-marker" | null;
-  /** This being's deterministic garment palette family, resolved once from its appearance (see `beingPalette.ts`). */
-  readonly #paletteVariant: BeingPaletteVariant;
+  /** This being's deterministic garment palette family, resolved once at construction. */
+  readonly #paletteVariant: BeingVisualPaletteVariant;
+  /** One small pixel-grid garment detail, drawn in the same transformed frame space as the body. */
+  readonly #accessory: BeingAccessory;
+  /** Whether the v2 palette source/cache should be used instead of the legacy resolver path. */
+  readonly #visualIdentity: BeingVisualIdentity | null;
   /** Which packed roster character this being's sprite frames are read from (see `SpriteSheetHumanActorOptions.characterId`). */
   readonly #characterId: BeingCharacterId;
 
@@ -386,6 +402,8 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
   #route: Vec2[] = [];
   #routeIndex = 0;
   #speedPixelsPerSecond = 0;
+  /** True while an exact backend route sample owns the feet. */
+  #authoritativeMotion = false;
   #gait: "walk" | "run" = "walk";
   #distanceTravelled = 0;
   /** Remaining hold time (ms) before locomotion may resume after a facing change. */
@@ -418,9 +436,12 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
     this.#position = copyMutablePoint(options.position);
     this.#facing = (options.facing ?? "south") as ProductionFacing;
     this.#nextBlinkMs = blinkDeadlineAfter(this.#id, 0, 0);
-    this.#characterId = options.characterId ?? DEFAULT_BEING_CHARACTER_ID;
+    this.#visualIdentity = options.visualIdentity ?? null;
+    this.#characterId = options.visualIdentity?.characterId ?? options.characterId ?? DEFAULT_BEING_CHARACTER_ID;
     this.#artFallback = this.#resolveArtFallback();
-    this.#paletteVariant = resolveBeingPaletteVariant(this.#appearance, this.#characterId);
+    this.#paletteVariant = options.visualIdentity?.paletteVariant
+      ?? resolveBeingPaletteVariant(this.#appearance, this.#characterId);
+    this.#accessory = options.visualIdentity?.accessory ?? "none";
   }
 
   /**
@@ -445,6 +466,37 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
       : null;
   }
 
+  /**
+   * Sample backend-authoritative feet directly, without manufacturing a local
+   * route, stop, arrival, fallback fade, or pose reset.
+   */
+  sampleAuthoritativeMotion(sample: AuthoritativeMotionSample, nowMs: number): void {
+    if (this.#disposed || this.#terminal) return;
+    if (!finitePoint(sample.position) || typeof sample.traveling !== "boolean") {
+      throw new TypeError("Authoritative sprite motion sample must contain finite feet and a traveling flag.");
+    }
+    if (!Number.isFinite(nowMs) || nowMs < this.#lastNowMs) {
+      throw new RangeError("Authoritative sprite motion time must be finite and monotonic.");
+    }
+    const prior = copyMutablePoint(this.#position);
+    this.#lastNowMs = nowMs;
+    this.#settleBlinkSchedule();
+    this.#supersedeFallbackReposition();
+    this.#position = copyMutablePoint(sample.position);
+    this.#visualOffset = { x: 0, y: 0 };
+    this.#route = [];
+    this.#routeIndex = 0;
+    this.#speedPixelsPerSecond = 0;
+    this.#turnHoldRemainingMs = 0;
+    const travelled = Math.hypot(sample.position.x - prior.x, sample.position.y - prior.y);
+    if (travelled > EPSILON) {
+      this.#distanceTravelled += travelled;
+      if (sample.traveling) this.#facing = directionFor(prior, sample.position, this.#facing);
+    }
+    this.#queuedSignals = this.#queuedSignals.filter(({ kind }) => kind !== "arrived" && kind !== "repositioned");
+    this.#authoritativeMotion = sample.traveling && this.#status === "alive";
+  }
+
   /** Atomically adopt a prepared scene position and return an idempotent transient-state rollback. */
   stagePosition(position: Vec2): (() => void) | null {
     if (this.#disposed || this.#terminal) return null;
@@ -456,6 +508,7 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
       route: this.#route.map(copyMutablePoint),
       routeIndex: this.#routeIndex,
       speedPixelsPerSecond: this.#speedPixelsPerSecond,
+      authoritativeMotion: this.#authoritativeMotion,
       poseAction: this.#poseAction,
       recovering: this.#recovering,
       turnHoldRemainingMs: this.#turnHoldRemainingMs,
@@ -469,6 +522,7 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
     this.#route = [];
     this.#routeIndex = 0;
     this.#speedPixelsPerSecond = 0;
+    this.#authoritativeMotion = false;
     this.#clearPose();
     let available = true;
     return () => {
@@ -480,6 +534,7 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
       this.#route = checkpoint.route;
       this.#routeIndex = checkpoint.routeIndex;
       this.#speedPixelsPerSecond = checkpoint.speedPixelsPerSecond;
+      this.#authoritativeMotion = checkpoint.authoritativeMotion;
       this.#poseAction = checkpoint.poseAction;
       this.#recovering = checkpoint.recovering;
       this.#turnHoldRemainingMs = checkpoint.turnHoldRemainingMs;
@@ -547,6 +602,7 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
       route: this.#route.map(copyMutablePoint),
       routeIndex: this.#routeIndex,
       speedPixelsPerSecond: this.#speedPixelsPerSecond,
+      authoritativeMotion: this.#authoritativeMotion,
       gait: this.#gait,
       distanceTravelled: this.#distanceTravelled,
       turnHoldRemainingMs: this.#turnHoldRemainingMs,
@@ -577,6 +633,7 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
       this.#route = checkpoint.route;
       this.#routeIndex = checkpoint.routeIndex;
       this.#speedPixelsPerSecond = checkpoint.speedPixelsPerSecond;
+      this.#authoritativeMotion = checkpoint.authoritativeMotion;
       this.#gait = checkpoint.gait;
       this.#distanceTravelled = checkpoint.distanceTravelled;
       this.#turnHoldRemainingMs = checkpoint.turnHoldRemainingMs;
@@ -607,6 +664,8 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
     }
     this.#lastNowMs = nowMs;
     this.#settleBlinkSchedule();
+    if (command.kind === "move" || command.kind === "orient" || command.kind === "reposition"
+      || command.kind === "set-offset") this.#authoritativeMotion = false;
     if (this.#status === "paralyzed"
       && (command.kind === "move" || command.kind === "orient" || command.kind === "play-body")) {
       return;
@@ -825,6 +884,13 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
       BEING_CHIBI_GEOMETRY.frameWidth,
       BEING_CHIBI_GEOMETRY.frameHeight,
     );
+    drawBeingAccessory(
+      context,
+      this.#accessory,
+      this.#paletteVariant,
+      -BEING_CHIBI_GEOMETRY.feet.x,
+      -BEING_CHIBI_GEOMETRY.feet.y,
+    );
     context.restore();
     context.imageSmoothingEnabled = false;
   }
@@ -955,8 +1021,8 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
   #routeActive(): boolean {
     return !this.#terminal
       && this.#status === "alive"
-      && this.#speedPixelsPerSecond > 0
-      && this.#routeIndex < this.#route.length;
+      && (this.#authoritativeMotion || (this.#speedPixelsPerSecond > 0
+        && this.#routeIndex < this.#route.length));
   }
 
   #currentStrideIndex(): number {
@@ -1007,8 +1073,15 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
     }
   }
 
-  /** `pose-talk` alternating with the idle stance at a per-agent deterministic cadence while speaking. */
+  /**
+   * `pose-talk` alternating with the idle stance at a per-agent deterministic
+   * cadence while stationary speaking. A speech expression is face-only and
+   * deliberately does not cancel an already active route; the atlas's
+   * `pose-talk` art faces front, so it cannot replace the directional walking
+   * row while the actor is still moving or committing a turn.
+   */
   #talkFrame(): string {
+    if (this.#routeActive() || this.#isTurning()) return this.#locomotionFrame();
     const phase = hashAgentId(this.#id) % TALK_ALTERNATE_MS;
     const toggle = Math.floor((this.#lastNowMs + phase) / TALK_ALTERNATE_MS) % 2;
     return toggle === 0 ? this.#locomotionFrame() : "pose-talk";
@@ -1099,7 +1172,10 @@ export class SpriteSheetHumanActor implements ProductionHumanActor {
    */
   #recoloredSource(base: CanvasImageSource): CanvasImageSource {
     try {
-      return createPaletteVariantSource(base, this.#paletteVariant, this.#characterId);
+      if (this.#visualIdentity !== null) {
+        return createVisualPaletteVariantSource(base, this.#paletteVariant, this.#characterId);
+      }
+      return createPaletteVariantSource(base, this.#paletteVariant as BeingPaletteVariant, this.#characterId);
     } catch {
       return base;
     }

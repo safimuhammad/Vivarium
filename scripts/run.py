@@ -26,9 +26,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import json
 import signal
+import subprocess
 from collections.abc import Callable, Coroutine, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
 
@@ -40,6 +42,7 @@ from agents.runtime import Agent
 from bus.event_bus import EventBus
 from bus.events import Event, ScopeType
 from config.loader import load_config
+from core.constants import MOVE_ENERGY_COST
 from core.logging import configure_rich_logging, get_logger
 from core.run_knobs import PROVIDER_CHOICES
 from memory.embedding import default_embedding_function
@@ -50,11 +53,19 @@ from observability.checkpoints import JsonlSnapshotCheckpointLog, SnapshotCheckp
 from observability.event_log import CompositeEventLog, FeedEventLog
 from observability.replay_archive import ReplayArchive
 from observability.run_context import RunContext, build_run_context
+from observability.snapshot import serialize_region
 from observability.usage import JsonlUsageLog
 from server.recordings import update_recording_sidecar, write_recording_sidecar
 from tools.builtin import register_builtins
 from tools.registry import ToolRegistry
 from world.agents import AgentState, AgentStatus
+from world.spatial import (
+    SpatialNavigationError,
+    SpatialNavigationEvent,
+    SpatialWorld,
+    SpatialWorldBundle,
+    spatial_travel_event_payload,
+)
 from world.tick import run_world_tick
 from world.world import WorldState
 
@@ -88,6 +99,13 @@ DEFAULT_WORLD_TICK_INTERVAL: float = 5.0
 DEFAULT_REFRESH_INTERVAL: float = 2.0
 DEFAULT_MEMORY_ROOT: str = "runs/memory"
 DEFAULT_RUN_DIR: str = "runs"
+SPATIAL_NAVIGATOR_INTERVAL: float = 0.25
+"""Seconds between navigation transition checks; independent from ecology ticks."""
+SPATIAL_EXPORT_TIMEOUT_SECONDS: float = 30.0
+"""Maximum wall time for the local production-map export during assembly."""
+_SPATIAL_EXPORTER_PATH: Final[Path] = (
+    Path(__file__).resolve().parents[1] / "frontend" / "scripts" / "export-navigation.mjs"
+)
 
 _PROVIDER_DEFAULT_MODELS: Final[dict[str, str]] = {
     "mlx": DEFAULT_MLX_MODEL,
@@ -129,6 +147,124 @@ def resolve_context_window(provider: str, override: int | None = None) -> int | 
     if override is not None:
         return override
     return _PROVIDER_CONTEXT_WINDOWS.get(provider)
+
+
+def _spatial_export_input(world: WorldState, *, seed: int) -> dict[str, object] | None:
+    """Return the exact production-map exporter input for every configured region.
+
+    Region order follows the authoritative snapshot serializer so the backend and
+    browser hand the recipe factory the same normalized topology.  Pressure is
+    captured at assembly time, before the first ecology tick, and is retained in
+    the generated artifact as the recipe's concrete input.
+
+    Args:
+        world: Fully assembled world before any run tasks begin.
+        seed: Run seed used by the production map identity.
+
+    Returns:
+        Exporter input, or ``None`` for a world without regions.
+    """
+    regions = [
+        serialize_region(region)
+        for region in sorted(world.get_all_regions(), key=lambda item: item.name)
+    ]
+    if not regions:
+        return None
+    pressures = {item.region: item for item in world.get_region_pressure()}
+    return {
+        "seed": seed,
+        "regions": regions,
+        "initial_pressures": {
+            region["name"]: {
+                "populationHighWater": pressures[str(region["name"])].population_high_water,
+                "builtFootprintHighWater": pressures[
+                    str(region["name"])
+                ].built_footprint_high_water,
+            }
+            for region in regions
+        },
+    }
+
+
+def _attach_exported_spatial_navigation(
+    world: WorldState,
+    run_context: RunContext,
+    *,
+    seed: int,
+) -> Path | None:
+    """Export and attach all concrete regional maps for this run.
+
+    The exporter runs locally through Vite SSR and is the sole bridge to the
+    production map recipe.  Python never recreates frontend map generation or
+    substitutes a static seed artifact.  The frozen input and output remain in
+    the run directory for replay inspection and reconnecting observers receive
+    the same identity through snapshots.
+
+    Args:
+        world: Live world to attach after a successful export.
+        run_context: Run artifact directory and metadata.
+        seed: Concrete run seed.
+
+    Returns:
+        Generated navigation artifact path, or ``None`` for empty worlds or
+        test/reconnect worlds with explicitly attached maps.
+
+    Raises:
+        RuntimeError: If the local exporter is absent, fails, or emits invalid map
+            data. Failing loudly prevents backend/render map divergence.
+    """
+    if world.spatial_by_region:
+        return None
+    export_input = _spatial_export_input(world, seed=seed)
+    if export_input is None:
+        return None
+    if not _SPATIAL_EXPORTER_PATH.is_file():
+        raise RuntimeError(f"Spatial navigation exporter is missing: {_SPATIAL_EXPORTER_PATH}")
+    input_path = run_context.run_dir / "spatial-navigation-input.json"
+    output_path = run_context.run_dir / "spatial-navigation-v2.json"
+    input_path.write_text(
+        json.dumps(export_input, allow_nan=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    command = [
+        "node",
+        str(_SPATIAL_EXPORTER_PATH),
+        "--input",
+        str(input_path),
+        "--output",
+        str(output_path),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=_SPATIAL_EXPORTER_PATH.parents[2],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=SPATIAL_EXPORT_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("Spatial navigation export requires local Node.js on PATH.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Spatial navigation export timed out after {SPATIAL_EXPORT_TIMEOUT_SECONDS:g} seconds."
+        ) from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "no exporter output"
+        raise RuntimeError(f"Spatial navigation export failed: {detail}")
+    try:
+        bundle = SpatialWorldBundle.from_path(output_path)
+    except Exception as exc:
+        raise RuntimeError(f"Spatial navigation export was invalid: {exc}") from exc
+    expected_regions = set(world.regions)
+    actual_regions = {spatial.region_id for spatial in bundle.regions}
+    if actual_regions != expected_regions:
+        raise RuntimeError(
+            f"Spatial navigation regions {sorted(actual_regions)!r} do not match "
+            f"the world regions {sorted(expected_regions)!r}."
+        )
+    world.attach_spatials(bundle.regions)
+    return output_path
 
 
 @dataclass(slots=True)
@@ -247,6 +383,7 @@ def build_simulation(
 
     feed = FeedEventLog(maxlen=feed_maxlen)
     replay_archive = ReplayArchive(run_context.run_dir, run_context.run_id)
+    _attach_exported_spatial_navigation(world, run_context, seed=seed)
     write_recording_sidecar(
         run_context,
         region_name=_recording_region_name(world),
@@ -398,6 +535,193 @@ def _recording_region_name(world: WorldState) -> str | None:
     """Return the first deterministic region label for automatic run naming."""
     regions = sorted(world.get_all_regions(), key=lambda region: region.name)
     return regions[0].name if regions else None
+
+
+async def _publish_spatial_navigation_transition(
+    world: WorldState,
+    bus: EventBus,
+    transition: SpatialNavigationEvent,
+    *,
+    spatial: SpatialWorld,
+) -> None:
+    """Publish one queued cancellation or completed arrival from the navigator.
+
+    Args:
+        world: Live world whose optional map finalized the transition.
+        bus: Shared event bus for durable logging and local delivery.
+        transition: Finalized movement transition returned by ``SpatialWorld.tick``.
+        spatial: Map that finalized the transition, retained through any handoff.
+
+    Returns:
+        None.
+    """
+    event_type = (
+        "spatial_travel_cancelled"
+        if transition.kind == "travel_cancelled"
+        else "spatial_travel_arrived"
+    )
+    destination = spatial.get_landmark(transition.travel.destination_id)
+    agent = world.get_agent(transition.agent_id)
+    name = agent.name if agent is not None else transition.agent_id
+    message = (
+        f"{name} came to rest."
+        if transition.kind == "travel_cancelled"
+        else (
+            f"{name} arrived at "
+            f"{destination.name if destination is not None else transition.travel.destination_id}."
+        )
+    )
+    spatial_state = spatial.snapshot_at_position(
+        transition.position,
+        transition.timestamp,
+        travel=None,
+    )
+    await bus.publish(
+        Event(
+            event_type,
+            transition.agent_id,
+            spatial_travel_event_payload(
+                spatial,
+                transition.travel,
+                position=transition.position,
+                spatial_state=spatial_state,
+                message=message,
+                reason=transition.reason,
+            ),
+            scope=ScopeType.LOCAL,
+            region=spatial.region_id,
+            timestamp=transition.timestamp,
+        )
+    )
+    if transition.kind == "travel_arrived" and transition.travel.destination_region is not None:
+        try:
+            handoff = world.complete_region_travel(spatial, transition)
+        except SpatialNavigationError as exc:
+            logger.warning("Regional entrance unavailable for %s: %s", transition.agent_id, exc)
+            await _publish_spatial_navigation_transition(
+                world,
+                bus,
+                replace(transition, kind="travel_cancelled", reason="region_entry_unavailable"),
+                spatial=spatial,
+            )
+            return
+        energy = agent.current_energy if agent is not None else 0.0
+        common = {
+            "agent_id": handoff.agent_id,
+            "from_region": handoff.source_region,
+            "to_region": handoff.destination_region,
+            "move_energy_cost": MOVE_ENERGY_COST,
+            "agent_energy": energy,
+            "authoritative_spatial": True,
+            "travel_id": handoff.travel_id,
+        }
+        await bus.publish(
+            Event(
+                "agent_left_region",
+                handoff.agent_id,
+                {
+                    **common,
+                    "source_position": handoff.source_position.to_json(),
+                    "message": (
+                        f"{name} left {handoff.source_region} for {handoff.destination_region}."
+                    ),
+                },
+                scope=ScopeType.LOCAL,
+                region=handoff.source_region,
+                timestamp=transition.timestamp,
+            )
+        )
+        await bus.publish(
+            Event(
+                "agent_entered_region",
+                handoff.agent_id,
+                {
+                    **common,
+                    "message": f"{name} entered {handoff.destination_region} at its entrance.",
+                },
+                scope=ScopeType.LOCAL,
+                region=handoff.destination_region,
+                timestamp=transition.timestamp,
+            )
+        )
+
+
+async def _advance_spatial_navigator(world: WorldState, bus: EventBus) -> None:
+    """Finalize due spatial routes once and publish their durable transitions.
+
+    Args:
+        world: Live world whose current clock is sampled exactly once.
+        bus: Shared event bus receiving transition events.
+
+    Returns:
+        None.
+    """
+    now = world.now()
+    for spatial in world.spatial_worlds():
+        for transition in spatial.tick(now):
+            await _publish_spatial_navigation_transition(world, bus, transition, spatial=spatial)
+
+
+async def _finalize_spatial_navigation(
+    world: WorldState,
+    bus: EventBus,
+    *,
+    now: float,
+) -> None:
+    """Freeze every regional journey at one terminal world-clock sample.
+
+    Routes due at the terminal sample become arrivals first.  Every remaining
+    route then becomes a durable cancellation at that exact coordinate, so a
+    stopped run cannot appear to keep walking when an observer later reads it.
+
+    Args:
+        world: Live world whose optional map is being stopped.
+        bus: Shared event bus for durable terminal navigation transitions.
+        now: Single final world-clock sample shared by every route.
+
+    Returns:
+        None.
+    """
+    for spatial in world.spatial_worlds():
+        for transition in spatial.tick(now):
+            await _publish_spatial_navigation_transition(world, bus, transition, spatial=spatial)
+        for agent in world.get_all_agents():
+            cancellation = spatial.cancel_travel(agent.id, now, reason="simulation_stopped")
+            if cancellation is not None:
+                await _publish_spatial_navigation_transition(
+                    world, bus, cancellation, spatial=spatial
+                )
+
+
+async def _run_spatial_navigator(
+    world: WorldState,
+    bus: EventBus,
+    stop: asyncio.Event,
+    *,
+    interval: float = SPATIAL_NAVIGATOR_INTERVAL,
+) -> None:
+    """Poll persistent journeys independently of the five-second ecology tick.
+
+    Args:
+        world: Live world whose optional map is read on each cadence.
+        bus: Shared event bus receiving completed route transitions.
+        stop: Shared lifecycle stop signal.
+        interval: Navigation polling cadence in seconds.
+
+    Returns:
+        None.
+
+    Raises:
+        ValueError: If ``interval`` is not positive.
+    """
+    if interval <= 0:
+        raise ValueError("spatial navigator interval must be positive")
+    while not stop.is_set():
+        await _advance_spatial_navigator(world, bus)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except TimeoutError:
+            continue
 
 
 async def _liveness_watch(
@@ -692,6 +1016,13 @@ async def run_simulation(
             name="world-tick",
         ),
     ]
+    if world.spatial_by_region:
+        background_tasks.append(
+            asyncio.create_task(
+                _run_spatial_navigator(world, bus, stop),
+                name="spatial-navigator",
+            )
+        )
     if terminal_ui:
         assert console is not None
         background_tasks.append(
@@ -750,6 +1081,14 @@ async def run_simulation(
         for task in (*agent_tasks, *background_tasks):
             task.cancel()
         await asyncio.gather(*agent_tasks, *background_tasks, return_exceptions=True)
+        if world.spatial_by_region:
+            await _finalize_spatial_navigation(world, bus, now=world.now())
+            sim.snapshot_log.write_snapshot(
+                world,
+                sim.run_context,
+                event_cursor=sim.feed_log.current_cursor,
+                reason="simulation_stopped",
+            )
         for agent in sim.agents:
             bus.unsubscribe(agent.agent_id)
         if isinstance(sim.decider, AsyncCloseable):

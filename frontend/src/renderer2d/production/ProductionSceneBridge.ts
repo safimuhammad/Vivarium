@@ -122,6 +122,7 @@ export type ProductionSceneCommandRejectionReason =
   | "unknown-actor"
   | "terminal-actor"
   | "paralyzed"
+  | "authoritative-spatial-motion"
   | "reserved-reposition-reason"
   | "object-exclusion"
   | "blocked-ground"

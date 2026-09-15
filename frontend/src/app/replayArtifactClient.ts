@@ -65,6 +65,18 @@ export interface ReplayPresentationWindow {
   readonly lastCursor: number;
   readonly snapshot: WorldSnapshot;
   readonly entries: readonly EventEnvelopeEntry[];
+  /**
+   * A historical card replay establishes the prefix synchronously, then releases
+   * this suffix only when its independently sampled replay clock reaches each
+   * recorded event timestamp. Ordinary archive checkpoint windows omit it.
+   */
+  readonly historical?: Readonly<{
+    /** Cursor and recorded simulation time represented by the established prefix. */
+    readonly targetCursor: number;
+    readonly targetWorldTime: number;
+    /** Contiguous evidence after `targetCursor`, kept out of the initial world. */
+    readonly continuation: readonly EventEnvelopeEntry[];
+  }>;
 }
 
 export interface ReplayArtifactClient {

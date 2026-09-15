@@ -250,6 +250,36 @@ describe("Camera2D", () => {
     expect(targetScreen.y).toBeLessThanOrEqual(followDeadZone.y + followDeadZone.height);
   });
 
+  it("keeps moving Follow targets near the dead-zone edge at different frame rates", () => {
+    const peakLags = [30, 60, 120].map((frameRate) => {
+      const camera = createCamera({ width: 512, height: 288 });
+      camera.apply({ type: "follow", entityId: "agent_walker" });
+      camera.setEntityBounds("agent_walker", { x: 240, y: 120, width: 32, height: 32 });
+      camera.update(1_000);
+
+      let peakLag = 0;
+      for (let frame = 1; frame <= frameRate * 4; frame += 1) {
+        const bounds = {
+          x: 240 + 32 * frame / frameRate,
+          y: 120 + 16 * frame / frameRate,
+          width: 32,
+          height: 32,
+        };
+        camera.setEntityBounds("agent_walker", bounds);
+        camera.update(1_000 / frameRate);
+        const screen = camera.worldToScreen({ x: bounds.x + 16, y: bounds.y + 16 });
+        const zone = camera.snapshot().followDeadZone;
+        peakLag = Math.max(peakLag,
+          screen.x - zone.x - zone.width,
+          screen.y - zone.y - zone.height);
+      }
+      // At walking speed, easing may briefly trail by a fraction of one 32px tile.
+      expect(peakLag).toBeLessThan(8);
+      return peakLag;
+    });
+    expect(Math.max(...peakLags) - Math.min(...peakLags)).toBeLessThan(3);
+  });
+
   it("centers story targets in the unobscured safe frame", () => {
     const camera = createCamera({
       width: 512,
